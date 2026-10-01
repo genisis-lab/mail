@@ -4,7 +4,7 @@ import { decryptJson } from '../lib/crypto.js';
 import { domainOf, parseAddresses } from '../lib/addr.js';
 import { logger } from '../lib/log.js';
 import { getSettings } from '../settings.js';
-import { availableOnThisPlatform, getProviderDef } from '../providers/registry.js';
+import { getProviderDef } from '../providers/registry.js';
 import { ProviderError, type OutboundEmail, type ProviderContext } from '../providers/types.js';
 import { isHostedDomain } from '../services/routing.js';
 import { getBlob } from './blobs.js';
@@ -65,14 +65,14 @@ export function providersForDomain(domain: string): { primary: number | null; fa
     if (!id) return null;
     const p = get<{ type: string; enabled: number }>('SELECT type, enabled FROM providers WHERE id = ?', [id]);
     const def = p && getProviderDef(p.type);
-    return p && p.enabled && def?.send && availableOnThisPlatform(def) ? id : null;
+    return p && p.enabled && def?.send ? id : null;
   };
   let primary = usable(d?.provider_id);
   if (!primary) {
     const def = all<{ id: number; type: string }>('SELECT id, type FROM providers WHERE enabled = 1 AND is_default = 1 ORDER BY id');
     primary = def.find((p) => {
       const d = getProviderDef(p.type);
-      return d?.send && availableOnThisPlatform(d);
+      return !!d?.send;
     })?.id ?? null;
   }
   const fallback = usable(d?.fallback_provider_id);

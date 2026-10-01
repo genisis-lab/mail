@@ -7,34 +7,34 @@ one as the default.
 
 Every provider gets a secret **inbound URL** (`/api/inbound/<token>`). Providers that
 can deliver incoming mail to a webhook post to that URL. Credentials are encrypted at
-rest with `WREN_SECRET`.
+rest. Mail that arrives through Cloudflare Email Routing needs no provider at all.
 
-| Provider | Send | Receive | Runs on | Notes |
-|---|:-:|:-:|---|---|
-| Cloudflare Email Service | ✅ REST `send_raw` | ✅ Email Routing | Workers, Node | On Workers, inbound needs no webhook (the Worker's `email()` handler). On Node, use `integrations/cloudflare-email-worker`. |
-| Cloudflare Email (Workers binding) | ✅ | — | Workers | `[[send_email]]` binding, no token. |
-| Resend | ✅ | ✅ `email.received` | Workers, Node | Verifies Svix signatures and downloads the original raw message. |
-| Amazon SES (v2) | ✅ raw MIME, SigV4 | ✅ SNS / S3 | Workers, Node | Auto-confirms SNS subscriptions and can restrict to one topic ARN. |
-| Postmark | ✅ | ✅ inbound webhook | Workers, Node | Enable "include raw email" for full fidelity. |
-| SendGrid | ✅ | ✅ Inbound Parse | Workers, Node | Tick "POST the raw, full MIME message". |
-| Mailgun (US/EU) | ✅ raw MIME | ✅ Routes | Workers, Node | Use `forward("<url>/mime")`; verifies the signing key. |
-| SparkPost (US/EU) | ✅ raw RFC 822 | ✅ relay webhooks | Workers, Node | Checks the relay auth token. |
-| Brevo | ✅ | ✅ inbound parsing | Workers, Node | Downloads attachments with the API key. |
-| Mailjet | ✅ | ✅ Parse API | Workers, Node | |
-| MailerSend | ✅ | — | Workers, Node | |
-| MailChannels | ✅ | — | Workers, Node | Optional DKIM signing with your own key. |
-| SMTP2GO | ✅ raw MIME | — | Workers, Node | |
-| ZeptoMail (Zoho) | ✅ | — | Workers, Node | All data centres. |
-| Elastic Email | ✅ | — | Workers, Node | |
-| Mailtrap | ✅ | — | Workers, Node | Transactional or bulk stream. |
-| Scaleway TEM | ✅ | — | Workers, Node | |
-| Postal (self-hosted) | ✅ raw MIME | ✅ HTTP endpoint | Workers, Node | |
-| Custom HTTP webhook | ✅ signed JSON | ✅ generic JSON | Workers, Node | `X-Wren-Signature: sha256=HMAC(body)`. |
-| Raw MIME (HTTP) | — | ✅ | Workers, Node | For MTA pipes and scripts. |
-| ForwardEmail | — | ✅ | Workers, Node | |
-| CloudMailin | — | ✅ | Workers, Node | JSON-normalized or raw format. |
-| SMTP relay (Gmail, M365, Fastmail, Zoho, iCloud, Postfix…) | ✅ | — | Workers, Node | Presets for common hosts. On Workers use port 587 or 465 (port 25 is blocked). |
-| Log only (testing) | ✅ | — | Workers, Node | Records the message in the log without delivering it. |
+| Provider | Send | Receive | Notes |
+|---|:-:|:-:|---|
+| **Cloudflare Email Service** (recommended) | ✅ `send_email` binding | ✅ Email Routing | Built into Workers: no API key. Onboard the domain in Email Sending. Email Routing delivers to the Worker's `email()` handler, so no webhook is needed. |
+| **Resend** | ✅ | ✅ `email.received` | Paste the API key in the setup wizard. Inbound verifies Svix signatures and downloads the original raw message. Or receive with Email Routing. |
+| Cloudflare Email Service (API token) | ✅ REST `send_raw` | — | For sending through another Cloudflare account. |
+| Amazon SES (v2) | ✅ raw MIME, SigV4 | ✅ SNS / S3 | Auto-confirms SNS subscriptions and can restrict to one topic ARN. |
+| Postmark | ✅ | ✅ inbound webhook | Enable "include raw email" for full fidelity. |
+| SendGrid | ✅ | ✅ Inbound Parse | Tick "POST the raw, full MIME message". |
+| Mailgun (US/EU) | ✅ raw MIME | ✅ Routes | Use `forward("<url>/mime")`; verifies the signing key. |
+| SparkPost (US/EU) | ✅ raw RFC 822 | ✅ relay webhooks | Checks the relay auth token. |
+| Brevo | ✅ | ✅ inbound parsing | Downloads attachments with the API key. |
+| Mailjet | ✅ | ✅ Parse API | |
+| MailerSend | ✅ | — | |
+| MailChannels | ✅ | — | Optional DKIM signing with your own key. |
+| SMTP2GO | ✅ raw MIME | — | |
+| ZeptoMail (Zoho) | ✅ | — | All data centres. |
+| Elastic Email | ✅ | — | |
+| Mailtrap | ✅ | — | Transactional or bulk stream. |
+| Scaleway TEM | ✅ | — | |
+| Postal (self-hosted) | ✅ raw MIME | ✅ HTTP endpoint | |
+| SMTP relay (Gmail, Microsoft 365, Fastmail, Zoho, iCloud, provider SMTP…) | ✅ | — | Workers TCP sockets on port 587 (STARTTLS) or 465 (TLS); Cloudflare blocks port 25. Presets for common hosts. |
+| Custom HTTP webhook | ✅ signed JSON | ✅ generic JSON | `X-Wren-Signature: sha256=HMAC(body)`. |
+| Raw MIME (HTTP) | — | ✅ | For MTA pipes and scripts. |
+| ForwardEmail | — | ✅ | |
+| CloudMailin | — | ✅ | JSON-normalized or raw format. |
+| Log only (testing) | ✅ | — | Records the message in the log without delivering it. |
 
 ## Delivery behaviour
 

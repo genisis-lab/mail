@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Globe, KeyRound, Mail, ShieldCheck, Sparkles } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowRight, Globe, KeyRound, Mail, Send, ShieldCheck, Sparkles } from 'lucide-react';
 import { APP_NAME, APP_TAGLINE } from '../../shared/brand';
 import { api } from '../lib/api';
 import type { Instance } from '../lib/session';
@@ -237,10 +237,16 @@ export function SetupPage({ instance }: { instance: Instance }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const setupInfo = useQuery({ queryKey: ['setup'], queryFn: () => api.get<{ needed: boolean; cloudflareEmail: boolean }>('/api/setup') });
+  const cloudflareEmail = !!setupInfo.data?.cloudflareEmail;
+  const [provider, setProvider] = useState<'cloudflare' | 'resend' | 'later' | null>(null);
+  const [resendKey, setResendKey] = useState('');
+  const chosen = provider ?? (cloudflareEmail ? 'cloudflare' : 'resend');
 
   const steps = [
     { icon: <Sparkles className="size-4" />, label: 'Welcome' },
     { icon: <Globe className="size-4" />, label: 'Domain' },
+    { icon: <Send className="size-4" />, label: 'Email' },
     { icon: <KeyRound className="size-4" />, label: 'Admin account' },
   ];
 
@@ -266,8 +272,8 @@ export function SetupPage({ instance }: { instance: Instance }) {
         <div className="space-y-4">
           <h1 className="text-2xl font-semibold tracking-tight">Welcome to {APP_NAME}</h1>
           <p className="text-sm leading-relaxed text-muted">
-            Let’s set up your mail server. You’ll add your first domain and create the owner account. Next, in the admin panel, you’ll connect an email
-            provider (Cloudflare, Resend, SES, Postmark, SMTP and more) for sending and receiving.
+            Let’s set up your mail. You’ll add your first domain, pick how mail is sent (Cloudflare Email Service needs no API key) and create the owner
+            account.
           </p>
           <Field label="Name this instance" help="Shown on the sign-in page and in the browser tab.">
             <Input value={instanceName} onChange={(e) => setInstanceName(e.target.value)} placeholder="Fernhill Mail" autoFocus />
@@ -302,6 +308,51 @@ export function SetupPage({ instance }: { instance: Instance }) {
       )}
 
       {step === 2 && (
+        <div className="space-y-4">
+          <h1 className="text-2xl font-semibold tracking-tight">Sending and receiving</h1>
+          <p className="text-sm text-muted">Choose how {domain} sends mail. You can add more providers, or switch, in the admin panel.</p>
+          <div className="space-y-2" role="radiogroup" aria-label="Email provider">
+            <ProviderChoice
+              selected={chosen === 'cloudflare'}
+              disabled={!cloudflareEmail}
+              onSelect={() => setProvider('cloudflare')}
+              title="Cloudflare Email Service"
+              badge={cloudflareEmail ? 'Recommended' : 'Only on Cloudflare'}
+              description={
+                cloudflareEmail
+                  ? 'Built into Workers, so there’s no API key. Email Routing delivers incoming mail straight to this Worker.'
+                  : 'Available when Wren is deployed to Cloudflare Workers.'
+              }
+            />
+            <ProviderChoice
+              selected={chosen === 'resend'}
+              onSelect={() => setProvider('resend')}
+              title="Resend"
+              description="Send with the Resend API. Receive with Cloudflare Email Routing, or with Resend’s inbound webhook."
+            >
+              {chosen === 'resend' && (
+                <Input className="mt-3" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="Resend API key (re_…)" autoComplete="off" />
+              )}
+            </ProviderChoice>
+            <ProviderChoice
+              selected={chosen === 'later'}
+              onSelect={() => setProvider('later')}
+              title="Choose later"
+              description="Pick from 20+ providers (Amazon SES, Postmark, SendGrid, Mailgun, SMTP relays…) in Admin → Providers."
+            />
+          </div>
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              Back
+            </Button>
+            <Button variant="primary" onClick={() => setStep(3)} disabled={chosen === 'resend' && !resendKey.trim()}>
+              Continue <ArrowRight className="size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
         <form
           className="space-y-4"
           onSubmit={async (e) => {
@@ -309,7 +360,7 @@ export function SetupPage({ instance }: { instance: Instance }) {
             setBusy(true);
             setError(null);
             try {
-              await api.post('/api/setup', { instanceName, domain, localPart, name, password });
+              await api.post('/api/setup', { instanceName, domain, localPart, name, password, email: { provider: chosen, apiKey: chosen === 'resend' ? resendKey : undefined } });
               await qc.invalidateQueries({ queryKey: ['me'] });
             } catch (err) {
               setError((err as Error).message);
@@ -333,7 +384,7 @@ export function SetupPage({ instance }: { instance: Instance }) {
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="new-password" />
           </Field>
           <div className="flex justify-between">
-            <Button variant="ghost" type="button" onClick={() => setStep(1)}>
+            <Button variant="ghost" type="button" onClick={() => setStep(2)}>
               Back
             </Button>
             <Button variant="primary" type="submit" loading={busy}>
@@ -343,6 +394,49 @@ export function SetupPage({ instance }: { instance: Instance }) {
         </form>
       )}
     </AuthShell>
+  );
+}
+
+function ProviderChoice(props: {
+  selected: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+  title: string;
+  badge?: string;
+  description: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      role="radio"
+      aria-checked={props.selected}
+      aria-disabled={props.disabled}
+      tabIndex={props.disabled ? -1 : 0}
+      onClick={() => !props.disabled && props.onSelect()}
+      onKeyDown={(e) => {
+        if (!props.disabled && (e.key === ' ' || e.key === 'Enter') && e.target === e.currentTarget) {
+          e.preventDefault();
+          props.onSelect();
+        }
+      }}
+      className={`block w-full rounded-xl border p-3.5 text-left transition-colors ${
+        props.disabled ? 'cursor-not-allowed border-line opacity-60' : props.selected ? 'cursor-pointer border-accent bg-accent-soft' : 'cursor-pointer border-line hover:bg-hover'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border ${props.selected ? 'border-accent' : 'border-line'}`}>
+          {props.selected && <span className="size-2 rounded-full bg-accent" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            {props.title}
+            {props.badge && <span className="rounded-full bg-panel2 px-2 py-0.5 text-[11px] font-medium text-muted">{props.badge}</span>}
+          </div>
+          <p className="mt-0.5 text-[13px] text-muted">{props.description}</p>
+          {props.children}
+        </div>
+      </div>
+    </div>
   );
 }
 

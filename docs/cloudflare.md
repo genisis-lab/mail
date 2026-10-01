@@ -1,9 +1,10 @@
 # Deploy Wren on Cloudflare Workers
 
-This is the recommended way to run Wren, and it needs no Docker or server. One Worker
+Wren is built for Cloudflare Workers, and it needs no Docker or server. One Worker
 serves the web app and API. It receives mail through **Email Routing** and sends it
-through **Email Service**, any other API provider, or an SMTP relay. There are no
-servers, ports or TLS certificates to manage.
+through **Email Service** using the Worker's own binding, so there's no API key.
+Resend or any other provider works too. There are no servers, ports or TLS certificates
+to manage.
 
 ```
 Browser ─► Worker ─► Static assets (the Gmail-style app)
@@ -11,6 +12,7 @@ Browser ─► Worker ─► Static assets (the Gmail-style app)
                                       │           └► R2 (raw messages, attachments)
                                       └► alarms ─► send queue, snoozes, retention
 Email Routing ─► Worker email() handler ─► WrenDurableObject.receiveEmail()
+send queue ─► send_email binding (Email Service) · Resend / other provider APIs
 ```
 
 ## What you need
@@ -19,26 +21,32 @@ Email Routing ─► Worker email() handler ─► WrenDurableObject.receiveEmai
 - **Workers Paid** ($5/month). Password hashing needs more than the free plan's 10 ms of
   CPU per request, and Durable Object alarms do the background sending.
 - R2 enabled on the account. The free tier covers 10 GB.
-- Node.js 22+ locally.
+- Node.js 22+ on your computer (only to run `npm run setup` or `npm run deploy`).
 
 ## 1. Deploy
 
 **One click:** use the *Deploy to Cloudflare* button in the README. Cloudflare copies the
 repository to your GitHub account, creates the R2 bucket and Durable Object, and deploys.
 
-**From the command line:**
+**From a terminal:**
 
 ```bash
 git clone https://github.com/genisis-lab/mail wren && cd wren
 npm install
-npx wrangler login
+npm run setup      # signs in, creates the R2 bucket, builds and deploys
+```
 
+`npm run setup` runs these steps for you, so you can also do them by hand:
+
+```bash
+npx wrangler login
 npx wrangler r2 bucket create wren-mail           # message bodies & attachments
 npm run deploy                                     # builds the web app and deploys
 ```
 
 Open the `*.workers.dev` URL that wrangler prints. The **setup wizard** asks for an
-instance name, your first domain and the owner account.
+instance name, your first domain, how to send mail (**Cloudflare Email Service**,
+**Resend**, or later) and the owner account.
 
 ### Encryption key (optional)
 
@@ -76,14 +84,25 @@ you set a catch-all mailbox for the domain under **Admin → Domains**.
 
 ## 3. Send mail
 
-Choose one provider in **Admin → Providers → Add provider**, then assign it to your
-domain or make it the default.
+If you picked a provider in the setup wizard, it's already the default. You can add
+others (or a fallback) in **Admin → Providers → Add provider**.
+
+**Cloudflare Email Service (recommended).** `wrangler.toml` already declares the
+`send_email` binding named `EMAIL`, so nothing needs a key. Open **Email Service → Email
+Sending** in the dashboard and onboard your domain; Cloudflare adds the SPF and DKIM
+records. Then use **Send test email** in Admin → Providers.
+
+**Resend.** Verify your domain in Resend, create an API key, and paste it into the wizard
+(or Admin → Providers). Incoming mail can still arrive through Email Routing. If your
+domain's MX points at Resend instead, add the inbound webhook URL from Admin → Providers →
+Resend in the Resend dashboard (`email.received` event).
+
+Other options:
 
 | Option | Setup |
 |---|---|
-| **Cloudflare Email Service (REST API)**, recommended | In the dashboard, open **Email Service → Email Sending** and onboard the domain (Cloudflare adds the DKIM/SPF records). Create an API token with *Email Sending: Send* permission. In Wren, enter the account ID and token, then **Send test email**. |
-| **Cloudflare Email (Workers binding)** | Uncomment the `[[send_email]]` block in `wrangler.toml` and redeploy. Then add the *Cloudflare Email (Workers binding)* provider. No token is needed. |
-| Resend, Amazon SES, Postmark, SendGrid, Mailgun, Brevo, Mailjet, SparkPost, MailerSend, MailChannels, SMTP2GO, ZeptoMail, Elastic Email, Mailtrap, Scaleway, Postal, custom webhook | HTTP APIs. Follow the setup notes shown in Wren for each one. |
+| **Cloudflare Email Service (API token)** | For sending through another account's Email Service. Create an API token with *Email Sending: Send* permission and enter the account ID and token. |
+| Amazon SES, Postmark, SendGrid, Mailgun, Brevo, Mailjet, SparkPost, MailerSend, MailChannels, SMTP2GO, ZeptoMail, Elastic Email, Mailtrap, Scaleway, Postal, custom webhook | HTTP APIs. Follow the setup notes shown in Wren for each one. |
 | **SMTP relay** (Gmail / Google Workspace, Microsoft 365, Fastmail, Zoho, iCloud, SES/SendGrid/Mailgun SMTP…) | Uses Workers TCP sockets. Choose port **587** (STARTTLS) or **465** (TLS); Cloudflare blocks outbound port 25. Certificates are always verified. |
 
 Mail between users on your own domains never leaves the Durable Object, so it's
@@ -101,15 +120,16 @@ instant and free.
 ## Local development
 
 ```bash
-npm run cf:dev                   # http://localhost:8787 on the real Workers runtime (workerd)
+npm run dev                      # http://localhost:8787 on the real Workers runtime (workerd)
 
 # Deliver a test message through the email() handler:
 curl -X POST 'http://localhost:8787/cdn-cgi/handler/email?from=alice@example.org&to=you@example.com' \
   --data-binary @message.eml
 ```
 
-Durable Object, R2 and alarm state persist locally under `.wrangler/`. Point-in-time
-recovery is only available once deployed.
+Durable Object, R2 and alarm state persist locally under `.wrangler/`. Email Service
+sends are simulated (each message is written to `.wrangler/tmp/email/`), and point-in-time
+recovery only works once deployed.
 
 ## Backups
 
@@ -119,24 +139,24 @@ recovery is only available once deployed.
   days, for example after an accidental bulk delete. Message files that were deleted in
   that window are kept for 30 days, so restored messages still open.
 - **Download export.** A portable, streamed copy of the database (newline-delimited
-  JSON). It works the same on Docker, so you can also use it to move between the two.
+  JSON). You can restore it here, on another deployment, or on a self-hosted install.
 - **Restore from export.** Replaces all data with an export, then signs everyone out.
   If the restore fails part-way, the database is rolled back automatically.
 
 Message files stay in R2 in every case.
 
-## Feature parity with Docker
+## What needs a Cloudflare deployment
 
-Everything in the Docker build works on Workers, with the same code, except one feature
-that would need a listening TCP port:
+Everything runs in the Worker. Two features are part of Cloudflare's network, so a
+self-hosted copy ([self-hosting.md](self-hosting.md)) uses a provider such as Resend
+instead:
 
-| Docker / Node.js | On Workers |
-|---|---|
-| Built-in SMTP server (MX → Wren) | Email Routing delivers to the Worker's `email()` handler. Domains outside Cloudflare DNS can use a provider's inbound webhook. |
-| SMTP relay providers | ✅ Supported on ports 587 and 465. |
-| SQLite snapshot download | Export + 30-day point-in-time recovery. |
-| `data/.secret` auto-generated key | Generated automatically and stored in the Durable Object. |
-| SMTP submission for desktop mail clients | Not possible: Workers can't accept inbound TCP connections. Use the web app (it works on mobile too). |
+- **Email Routing** (incoming mail to the `email()` handler) and **Email Service**
+  (the `send_email` binding).
+- **Point-in-time recovery** of the Durable Object.
+
+Desktop mail apps (Outlook, Apple Mail) can't connect: Workers can't accept incoming SMTP
+or IMAP connections. Use the web app, which works on phones too.
 
 ## How it works / limits
 

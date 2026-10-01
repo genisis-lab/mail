@@ -12,7 +12,6 @@ export interface Instance {
   setupComplete: boolean;
   version: string;
   retention: { trashDays: number; spamDays: number };
-  platform: 'node' | 'workers';
 }
 
 export interface MeResponse {

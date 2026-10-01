@@ -9,7 +9,6 @@ interface SmtpConfig {
   security: SmtpSecurity;
   username?: string;
   password?: string;
-  allowSelfSigned?: boolean;
 }
 
 const options = (cfg: SmtpConfig) => ({
@@ -18,8 +17,7 @@ const options = (cfg: SmtpConfig) => ({
   security: cfg.security ?? 'starttls',
   username: cfg.username || undefined,
   password: cfg.password,
-  allowSelfSigned: !!cfg.allowSelfSigned,
-  clientName: config.smtp.hostname || new URL(config.publicUrl).hostname,
+  clientName: new URL(config.publicUrl).hostname,
 });
 
 /** Queue id from the final DATA reply: "Ok: queued as 4F1Z2…" (Postfix), "Ok 0100018…" (SES), "id=…". */
@@ -57,7 +55,6 @@ export const smtp: ProviderDefinition<SmtpConfig> = {
     },
     { key: 'username', label: 'Username', type: 'text' },
     { key: 'password', label: 'Password / app password', type: 'password' },
-    { key: 'allowSelfSigned', label: 'Allow self-signed certificates', type: 'boolean', default: false, help: 'Docker / Node.js only. Cloudflare Workers always verifies certificates.' },
   ],
   presets: [
     { label: 'Gmail / Google Workspace', values: { host: 'smtp.gmail.com', port: 587, security: 'starttls' } },
@@ -66,14 +63,12 @@ export const smtp: ProviderDefinition<SmtpConfig> = {
     { label: 'Fastmail', values: { host: 'smtp.fastmail.com', port: 465, security: 'tls' } },
     { label: 'Zoho Mail', values: { host: 'smtp.zoho.com', port: 465, security: 'tls' } },
     { label: 'iCloud Mail', values: { host: 'smtp.mail.me.com', port: 587, security: 'starttls' } },
-    { label: 'Proton Mail Bridge', values: { host: '127.0.0.1', port: 1025, security: 'starttls', allowSelfSigned: true }, platforms: ['node'] },
     { label: 'Amazon SES SMTP (us-east-1)', values: { host: 'email-smtp.us-east-1.amazonaws.com', port: 587, security: 'starttls' } },
     { label: 'SendGrid SMTP', values: { host: 'smtp.sendgrid.net', port: 587, security: 'starttls', username: 'apikey' } },
     { label: 'Mailgun SMTP', values: { host: 'smtp.mailgun.org', port: 587, security: 'starttls' } },
     { label: 'Postmark SMTP', values: { host: 'smtp.postmarkapp.com', port: 587, security: 'starttls' } },
     { label: 'Brevo SMTP', values: { host: 'smtp-relay.brevo.com', port: 587, security: 'starttls' } },
     { label: 'Resend SMTP', values: { host: 'smtp.resend.com', port: 465, security: 'tls', username: 'resend' } },
-    { label: 'Local Postfix (port 25)', values: { host: '127.0.0.1', port: 25, security: 'none' }, platforms: ['node'] },
   ],
   outboundSetup:
     'Use an app password where your provider requires one (Gmail, iCloud, Fastmail). The From address must be allowed by the SMTP account.',

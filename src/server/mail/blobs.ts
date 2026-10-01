@@ -4,7 +4,7 @@ import { platform } from '../platform.js';
 
 /**
  * Content-addressed storage for raw messages and attachments.
- * Backed by the filesystem on Node and by R2 on Cloudflare Workers.
+ * Backed by R2 (or the Durable Object itself when no bucket is bound).
  */
 export async function putBlob(data: Uint8Array): Promise<string> {
   const hash = sha256(Buffer.from(data.buffer, data.byteOffset, data.byteLength));

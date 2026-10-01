@@ -2,12 +2,13 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { APP_NAME, APP_VERSION } from '../../shared/brand.js';
 import { get, insert, now, run } from '../db/index.js';
-import { config } from '../config.js';
 import { decrypt, randomToken, sha256, verifyPassword, verifyTotp } from '../lib/crypto.js';
 import { badRequest, conflict, forbidden, unauthorized } from '../lib/http.js';
 import { normalizeEmail } from '../lib/addr.js';
 import { getSettings, setSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
+import { createProvider } from '../services/providers.js';
+import { platform } from '../platform.js';
 import { createUser, getUserByEmail, sessionUser, getUser } from '../services/users.js';
 import { body, clearRateLimit, clientIp, createSession, destroySession, getPendingSession, rateLimit, SESSION_COOKIE, type AppEnv } from '../http/context.js';
 import { getCookie } from 'hono/cookie';
@@ -30,7 +31,6 @@ function instanceInfo() {
     setupComplete: s['instance.setupComplete'] || !!get('SELECT 1 FROM users LIMIT 1'),
     retention: { trashDays: s['retention.trashDays'], spamDays: s['retention.spamDays'] },
     version: APP_VERSION,
-    platform: config.platform,
   };
 }
 
@@ -158,7 +158,13 @@ authRoutes.post('/register', async (c) => {
 
 export const setupRoutes = new Hono<AppEnv>();
 
-setupRoutes.get('/', (c) => c.json({ needed: !get('SELECT 1 FROM users LIMIT 1') }));
+/** The Cloudflare Email Service binding (when deployed on Cloudflare), offered as the zero-config sender. */
+function cloudflareEmailBinding(): string | null {
+  const names = platform().emailBindings?.() ?? [];
+  return names.includes('EMAIL') ? 'EMAIL' : (names[0] ?? null);
+}
+
+setupRoutes.get('/', (c) => c.json({ needed: !get('SELECT 1 FROM users LIMIT 1'), cloudflareEmail: !!cloudflareEmailBinding() }));
 
 setupRoutes.post('/', async (c) => {
   if (get('SELECT 1 FROM users LIMIT 1')) throw forbidden('Setup has already been completed');
@@ -174,12 +180,23 @@ setupRoutes.post('/', async (c) => {
       localPart: z.string().min(1).max(64),
       name: z.string().min(1).max(100),
       password: z.string().min(1).max(256),
+      email: z
+        .object({ provider: z.enum(['cloudflare', 'resend', 'later']), apiKey: z.string().max(300).optional() })
+        .default({ provider: 'later' }),
     }),
   );
+  const binding = cloudflareEmailBinding();
+  if (input.email.provider === 'cloudflare' && !binding) throw badRequest('This Worker has no Cloudflare email binding. Choose another provider or set it up later.');
+  if (input.email.provider === 'resend' && !input.email.apiKey?.trim()) throw badRequest('Enter your Resend API key');
   const domain = input.domain.toLowerCase();
   insert('INSERT INTO domains (name, verify_token, created_at) VALUES (?, ?, ?)', [domain, randomToken(12), now()]);
   const id = await createUser({ email: `${input.localPart}@${domain}`, name: input.name, password: input.password, role: 'owner' });
   setSettings({ 'instance.name': input.instanceName, 'instance.setupComplete': true });
+  if (input.email.provider === 'cloudflare') {
+    createProvider({ name: 'Cloudflare Email Service', type: 'cloudflare-binding', config: { binding }, isDefault: true });
+  } else if (input.email.provider === 'resend') {
+    createProvider({ name: 'Resend', type: 'resend', config: { apiKey: input.email.apiKey }, isDefault: true });
+  }
   audit(id, 'setup.complete', domain, undefined, clientIp(c));
   createSession(c, id);
   return c.json({ user: sessionUser(getUser(id)!) });

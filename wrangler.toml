@@ -1,4 +1,4 @@
-# Wren on Cloudflare Workers — see docs/cloudflare.md
+# Wren on Cloudflare Workers. See docs/cloudflare.md.
 name = "wren"
 main = "src/worker/index.ts"
 compatibility_date = "2026-09-01"
@@ -35,9 +35,11 @@ bucket_name = "wren-mail"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Optional: send through Cloudflare Email Service without an API token.
-# [[send_email]]
-# name = "EMAIL"
+# Cloudflare Email Service: Wren sends through this binding, with no API key.
+# Onboard your domain under Email Service → Email Sending in the dashboard.
+# (In `npm run dev` sends are simulated and written to disk, not delivered.)
+[[send_email]]
+name = "EMAIL"
 
 [vars]
 # Set if your public hostname differs from the Worker URL (used for inbound webhook URLs).

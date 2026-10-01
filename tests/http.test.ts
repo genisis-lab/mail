@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { openDb } from '../src/server/db/index';
-import { nodeSqlDriver } from '../src/server/db/node';
+import { nodeSqlDriver } from './sqlite';
 import { withDurableObjectLimits } from './do-limits';
 import { invalidateSettings } from '../src/server/settings';
 import { createApp } from '../src/server/app';
@@ -28,10 +28,19 @@ beforeAll(() => {
 
 describe('HTTP API', () => {
   it('runs first-time setup once', async () => {
-    expect((await call('GET', '/api/setup')).body.needed).toBe(true);
-    const r = await call('POST', '/api/setup', { instanceName: 'Test Mail', domain: 'wren.test', localPart: 'admin', name: 'Admin', password: 'a very long password' });
+    const info = (await call('GET', '/api/setup')).body;
+    expect(info).toEqual({ needed: true, cloudflareEmail: false });
+    const base = { instanceName: 'Test Mail', domain: 'wren.test', localPart: 'admin', name: 'Admin', password: 'a very long password' };
+    // No send_email binding in this environment, and Resend needs a key.
+    expect((await call('POST', '/api/setup', { ...base, email: { provider: 'cloudflare' } })).body.error).toMatch(/no Cloudflare email binding/);
+    expect((await call('POST', '/api/setup', { ...base, email: { provider: 'resend' } })).body.error).toMatch(/Resend API key/);
+    const r = await call('POST', '/api/setup', { ...base, email: { provider: 'resend', apiKey: 're_test_123' } });
     expect(r.status).toBe(200);
     expect(r.body.user.role).toBe('owner');
+    const providers = (await call('GET', '/api/admin/providers')).body.providers;
+    expect(providers).toMatchObject([{ type: 'resend', name: 'Resend', isDefault: true }]);
+    const detail = (await call('GET', `/api/admin/providers/${providers[0].id}`)).body.provider;
+    expect(detail.config.apiKey).toBe('••••••••'); // stored encrypted, never sent back
     expect((await call('POST', '/api/setup', { instanceName: 'x', domain: 'x.test', localPart: 'a', name: 'a', password: 'a very long password' })).status).toBe(403);
   });
 
@@ -62,7 +71,7 @@ describe('HTTP API', () => {
     const p = await call('POST', '/api/admin/providers', { name: 'Pipe', type: 'raw', config: {} });
     expect(p.status).toBe(200);
     const list = await call('GET', '/api/admin/providers');
-    const url = new URL(list.body.providers[0].inboundUrl);
+    const url = new URL(list.body.providers.find((x: { id: number }) => x.id === p.body.id).inboundUrl);
     const raw = 'From: Carol <carol@example.org>\r\nTo: u@wren.test\r\nSubject: Webhook test\r\nMessage-ID: <wh1@example.org>\r\n\r\nHello!\r\n';
     const res = await app.request(url.pathname, { method: 'POST', headers: { 'Content-Type': 'message/rfc822', 'X-Rcpt-To': 'u@wren.test' }, body: raw });
     expect(res.status).toBe(200);

@@ -1,8 +1,7 @@
-// Initialise config + the Node platform for every test file.
-import path from 'node:path';
+// Initialise config and an in-process stand-in for the Worker platform for every test file.
 import { initConfig } from '../src/server/config';
 import { setPlatform } from '../src/server/platform';
-import { nodePlatform } from '../src/server/node-platform';
+import { testPlatform } from './test-platform';
 
-initConfig(process.env, { platform: 'node', resolvePath: (p) => path.resolve(p) });
-setPlatform(nodePlatform(null));
+initConfig({}, { secret: 'test-secret-0123456789abcdef' });
+setPlatform(testPlatform());

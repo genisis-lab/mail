@@ -1,6 +1,5 @@
 import { ProviderError, type ProviderDefinition } from '../types.js';
 import { request, requireFields } from '../http.js';
-import { rawInbound } from '../inbound/raw.js';
 
 interface CloudflareConfig {
   accountId: string;
@@ -23,12 +22,12 @@ interface CfSendResult {
 
 export const cloudflare: ProviderDefinition<CloudflareConfig> = {
   type: 'cloudflare',
-  name: 'Cloudflare Email Service',
-  description: 'Send with Cloudflare Email Sending (REST API) and receive with Email Routing + a tiny Worker.',
+  name: 'Cloudflare Email Service (API token)',
+  description: 'Send through the Email Sending REST API, for example from another Cloudflare account. Most setups should use the built-in Cloudflare Email Service instead.',
   website: 'https://developers.cloudflare.com/email-service/',
   category: 'api',
   outbound: true,
-  inbound: true,
+  inbound: false,
   rawMime: true,
   dkimSelectors: ['cf2024-1'],
   fields: [
@@ -42,8 +41,6 @@ export const cloudflare: ProviderDefinition<CloudflareConfig> = {
     },
   ],
   outboundSetup: 'Onboard your domain under Email Service → Email Sending in the Cloudflare dashboard, then create an API token that can send email.',
-  inboundSetup:
-    'Enable Email Routing for the domain, then deploy the Worker in integrations/cloudflare-email-worker with WREN_INBOUND_URL={{url}}. Add a catch-all (or per-address) routing rule that sends to the Worker.',
 
   async send(cfg, email, ctx) {
     requireFields(cfg, ['accountId', 'apiToken']);
@@ -89,5 +86,4 @@ export const cloudflare: ProviderDefinition<CloudflareConfig> = {
     throw lastErr;
   },
 
-  receive: (_cfg, req) => rawInbound(req),
 };

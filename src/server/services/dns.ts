@@ -30,10 +30,6 @@ async function txt(name: string): Promise<string[]> {
   }
 }
 
-export function smtpHostname(): string {
-  return config.smtp.hostname || new URL(config.publicUrl).hostname;
-}
-
 /** DNS records an admin should create for this domain. */
 export function recommendedRecords(domain: { name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }): DnsRecordHint[] {
   const records: DnsRecordHint[] = [
@@ -41,24 +37,13 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
   ];
   const provider = domain.provider_id ? get<{ type: string }>('SELECT type FROM providers WHERE id = ?', [domain.provider_id]) : undefined;
   const def = provider ? getProviderDef(provider.type) : undefined;
-  if (config.platform === 'workers') {
-    records.push({
-      type: 'MX',
-      host: domain.name,
-      value: 'route1.mx.cloudflare.net (+ route2, route3)',
-      priority: 10,
-      purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker.',
-    });
-  } else if (config.smtp.enabled) {
-    records.push({
-      type: 'MX',
-      host: domain.name,
-      value: smtpHostname(),
-      priority: 10,
-      purpose: `Receive mail directly with Wren’s SMTP server (port 25 must reach port ${config.smtp.port}). Skip if a provider receives for you.`,
-      optional: true,
-    });
-  }
+  records.push({
+    type: 'MX',
+    host: domain.name,
+    value: 'route1.mx.cloudflare.net (+ route2, route3)',
+    priority: 10,
+    purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker. (Receiving through a provider webhook such as Resend instead? Use that provider’s MX records.)',
+  });
   records.push({
     type: 'TXT',
     host: domain.name,
@@ -102,16 +87,12 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
   } catch (err: any) {
     if (err?.code !== 'ENODATA' && err?.code !== 'ENOTFOUND') errors.push(`MX lookup failed: ${err.code ?? err.message}`);
   }
-  const host = smtpHostname().toLowerCase();
-  const pointsHere = mxRecords.some((m) => m.exchange.toLowerCase().replace(/\.$/, '') === host);
   const cfRouting = mxRecords.some((m) => /\.mx\.cloudflare\.net\.?$/i.test(m.exchange));
   const mxHint = !mxRecords.length
-    ? 'No MX records — this domain cannot receive mail yet.'
+    ? 'No MX records: this domain cannot receive mail yet. Enable Cloudflare Email Routing for it.'
     : cfRouting
-      ? 'MX points to Cloudflare Email Routing.' + (config.platform === 'workers' ? ' Make sure the routing rule sends mail to this Worker.' : '')
-      : pointsHere
-      ? 'MX points at this Wren server.'
-      : `MX points to ${mxRecords.map((m) => m.exchange).join(', ')} — fine if that provider forwards to Wren via webhook.`;
+      ? 'MX points to Cloudflare Email Routing. Make sure the catch-all rule sends mail to this Worker.'
+      : `MX points to ${mxRecords.map((m) => m.exchange).join(', ')}. That's fine if that provider (for example Resend) forwards mail to Wren with a webhook.`;
 
   const rootTxt = await txt(d.name);
   const spfRecord = rootTxt.find((t) => t.toLowerCase().startsWith('v=spf1')) ?? null;

@@ -13,6 +13,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: { '/api': `http://localhost:${process.env.PORT || 3000}` },
+    // `npm run dev` (wrangler) serves the API on 8787; this adds hot reload for the UI.
+    proxy: { '/api': 'http://localhost:8787' },
   },
 });

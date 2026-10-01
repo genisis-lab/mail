@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { config } from '../src/server/config';
 import { get, insert, now, openDb, run } from '../src/server/db/index';
-import { nodeSqlDriver } from '../src/server/db/node';
+import { nodeSqlDriver } from './sqlite';
 import { encrypt, encryptJson, randomToken } from '../src/server/lib/crypto';
 import { platform, setPlatform } from '../src/server/platform';
 import { createUser } from '../src/server/services/users';
@@ -39,7 +39,7 @@ describe('export and restore', () => {
   it('round-trips the database', async () => {
     const text = await exportText();
     const [header, ...rows] = text.trim().split('\n').map((l) => JSON.parse(l));
-    expect(header).toMatchObject({ format: 'wren-export', runtime: 'node' });
+    expect(header).toMatchObject({ format: 'wren-export', app: expect.any(String) });
     expect(rows.some((r) => r.t === 'users' && r.r.email === 'alice@wren.test')).toBe(true);
     expect(rows.some((r) => r.t === 'sessions')).toBe(false);
 

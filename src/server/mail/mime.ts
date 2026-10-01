@@ -1,6 +1,6 @@
 /**
  * Minimal, dependency-free RFC 5322 / MIME message builder that runs on
- * Node.js and Cloudflare Workers alike.
+ * Cloudflare Workers and in tests on Node.js alike.
  *
  * Structure: mixed[ alternative[ text, related[ html, inline images ] ], attachments ]
  * (each level is only added when needed). Bcc is never written to headers.

@@ -1,4 +1,4 @@
-# Optional for local development (`npm run cf:dev`).
+# Optional for local development (`npm run dev`).
 # Wren generates its encryption key automatically and stores it in the Durable Object.
 # To manage the key yourself, copy this file to .dev.vars and set a value
 # (production: `npx wrangler secret put WREN_SECRET` before the first start).

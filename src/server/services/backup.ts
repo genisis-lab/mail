@@ -1,6 +1,6 @@
 /**
  * Portable backups: a newline-delimited JSON export of the database that works
- * the same on Cloudflare Workers and Node.js, and can be restored on either.
+ * the same on Cloudflare and on a self-hosted copy, and can be restored on either.
  *
  *   {"format":"wren-export","schema":2,…}        ← header
  *   {"t":"users","r":{"id":1,"email":…}}          ← one line per row
@@ -26,7 +26,6 @@ export interface ExportHeader {
   app: string;
   schema: number;
   exportedAt: number;
-  runtime: string;
   /** Identifies the encryption key (not the key itself). */
   keyFingerprint: string;
 }
@@ -58,7 +57,6 @@ export function exportStream(): ReadableStream<Uint8Array> {
           app: APP_VERSION,
           schema: migrations.length,
           exportedAt: Date.now(),
-          runtime: platform().name,
           keyFingerprint: secretFingerprint(),
         };
         controller.enqueue(enc.encode(JSON.stringify(header) + '\n'));
@@ -122,7 +120,7 @@ export interface RestoreResult {
 /**
  * Replace all data with the contents of an export. On Workers the import is
  * applied in batches with a point-in-time bookmark taken first, so a failure
- * rolls the whole database back; on Node it runs in a single transaction.
+ * rolls the whole database back; elsewhere it runs in a single transaction.
  */
 export async function restoreExport(body: ReadableStream<Uint8Array>, opts: { allowKeyMismatch?: boolean } = {}): Promise<RestoreResult> {
   const it = lines(body);

@@ -206,8 +206,10 @@ export interface ProviderTypeInfo {
   inboundSetup?: string;
   outboundSetup?: string;
   category: 'api' | 'smtp' | 'self-hosted' | 'inbound' | 'other';
-  /** Runtimes the provider works on (default: all). */
-  platforms?: ('node' | 'workers')[];
+  /** Shown first and marked as recommended. */
+  recommended?: boolean;
+  /** Receiving happens outside the provider (e.g. "Email Routing"). */
+  inboundVia?: string;
   /** Quick-fill values (e.g. SMTP host presets). */
-  presets?: { label: string; values: Record<string, string | number | boolean>; platforms?: ('node' | 'workers')[] }[];
+  presets?: { label: string; values: Record<string, string | number | boolean> }[];
 }

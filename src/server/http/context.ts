@@ -2,7 +2,6 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { ZodType } from 'zod';
 import { config } from '../config.js';
-import { platform } from '../platform.js';
 import { get, now, run } from '../db/index.js';
 import { randomToken, sha256 } from '../lib/crypto.js';
 import { badRequest, forbidden, HttpError, tooMany, unauthorized } from '../lib/http.js';
@@ -32,20 +31,9 @@ export type Ctx = Context<AppEnv>;
 
 export const SESSION_COOKIE = 'wren_sid';
 
+/** Cloudflare sets this header on every request that reaches the Worker. */
 export function clientIp(c: Context): string {
-  if (config.trustProxy) {
-    const cf = c.req.header('cf-connecting-ip');
-    if (cf) return cf;
-    const xff = c.req.header('x-forwarded-for');
-    if (xff) return xff.split(',')[0].trim();
-    const real = c.req.header('x-real-ip');
-    if (real) return real;
-  }
-  try {
-    return platform().clientIp(c);
-  } catch {
-    return '';
-  }
+  return c.req.header('cf-connecting-ip') ?? '';
 }
 
 export function createSession(c: Context, userId: number, mfaPending = false): string {

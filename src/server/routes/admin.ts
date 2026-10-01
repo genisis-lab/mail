@@ -9,9 +9,10 @@ import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
 import { audit } from '../services/audit.js';
+import { cleanConfig, createProvider, MASK } from '../services/providers.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
-import { checkDomainDns, recommendedRecords, smtpHostname } from '../services/dns.js';
+import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
 import { ProviderError } from '../providers/types.js';
 import { blobStoreSize, putBlob } from '../mail/blobs.js';
@@ -23,7 +24,6 @@ import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
 export const adminRoutes = new Hono<AppEnv>();
 // Set by createApp(): Workers freeze Date.now() at module load.
 export const runtimeInfo = { startedAt: 0 };
-const MASK = '••••••••';
 
 function act(c: any, action: string, target: string, details?: unknown) {
   audit(c.get('user').id, action, target, details, clientIp(c));
@@ -80,7 +80,6 @@ adminRoutes.get('/overview', async (c) => {
       message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials and two-factor secrets cannot be read. Restore the previous key, or re-enter provider settings and reset 2FA for affected users.',
       link: '/admin/providers',
     });
-  if (config.platform === 'node' && typeof process !== 'undefined' && !process.env.WREN_SECRET) warnings.push({ level: 'info', message: 'WREN_SECRET is auto-generated in the data directory. Back it up, or set it explicitly.' });
   if (config.publicUrl.includes('localhost')) warnings.push({ level: 'info', message: 'PUBLIC_URL is localhost — inbound webhook URLs will not be reachable by providers.' });
 
   return c.json({
@@ -100,12 +99,10 @@ adminRoutes.get('/overview', async (c) => {
 adminRoutes.get('/system', async (c) =>
   c.json({
     version: APP_VERSION,
-    runtime: config.platform,
     uptime: Date.now() - runtimeInfo.startedAt,
     publicUrl: config.publicUrl,
-    smtp: { enabled: config.smtp.enabled, port: config.smtp.port, hostname: smtpHostname(), tls: !!(config.smtp.tlsKey && config.smtp.tlsCert), submissionPort: config.smtp.submissionPort || null },
     storage: storage(),
-    backup: { snapshot: !!platform().snapshot, pointInTime: !!platform().pointInTime, searchRebuilding: searchRebuildPending() },
+    backup: { pointInTime: !!platform().pointInTime, searchRebuilding: searchRebuildPending() },
     keyMismatch: config.keyMismatch,
     ...platform().systemInfo(),
   }),
@@ -533,39 +530,9 @@ const providerSchema = z.object({
   config: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
 });
 
-function cleanConfig(type: string, input: Record<string, unknown>, previous: Record<string, unknown> = {}) {
-  const def = getProviderDef(type);
-  if (!def) throw badRequest('Unknown provider type');
-  const out: Record<string, unknown> = {};
-  for (const f of def.fields) {
-    let v = input[f.key];
-    if (v === MASK) v = previous[f.key];
-    if (v === undefined || v === null || v === '') v = f.default ?? (f.type === 'boolean' ? false : '');
-    if (f.type === 'number' && v !== '') v = Number(v);
-    if (f.type === 'boolean') v = v === true || v === 'true';
-    if (typeof v === 'string') v = v.trim();
-    if (f.required && (v === '' || v === undefined)) throw badRequest(`${f.label} is required`);
-    if (f.type === 'select' && f.options && v !== '' && !f.options.some((o) => o.value === v)) throw badRequest(`Invalid value for ${f.label}`);
-    out[f.key] = v;
-  }
-  return out;
-}
-
 adminRoutes.post('/providers', async (c) => {
   const input = await body(c, providerSchema);
-  const cfg = cleanConfig(input.type, input.config);
-  const id = tx(() => {
-    if (input.isDefault) run('UPDATE providers SET is_default = 0');
-    return insert('INSERT INTO providers (name, type, config, enabled, is_default, inbound_token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
-      input.name,
-      input.type,
-      encryptJson(cfg),
-      input.enabled ? 1 : 0,
-      input.isDefault ? 1 : 0,
-      randomToken(24),
-      now(),
-    ]);
-  });
+  const id = createProvider(input);
   act(c, 'admin.provider_created', input.name, { type: input.type });
   return c.json({ id });
 });
@@ -795,20 +762,6 @@ adminRoutes.get('/export', (c) => {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Content-Disposition': `attachment; filename="${exportFilename()}"`,
       'Cache-Control': 'no-store',
-    },
-  });
-});
-
-/** SQLite file snapshot (Node.js only). */
-adminRoutes.get('/backup', async (c) => {
-  const p = platform();
-  if (!p.snapshot) throw notFound('Database snapshots are not available on this runtime. Use the export instead.');
-  const snap = await p.snapshot();
-  act(c, 'admin.backup_downloaded', `${snap.data.length} bytes`);
-  return new Response(new Uint8Array(snap.data), {
-    headers: {
-      'Content-Type': snap.contentType,
-      'Content-Disposition': `attachment; filename="${snap.filename}"`,
     },
   });
 });

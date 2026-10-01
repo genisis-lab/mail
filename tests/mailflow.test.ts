@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { config } from '../src/server/config';
 import { all, get, insert, now, openDb, run } from '../src/server/db/index';
-import { nodeSqlDriver } from '../src/server/db/node';
+import { nodeSqlDriver } from './sqlite';
 import { withDurableObjectLimits } from './do-limits';
 import { encryptJson, randomToken } from '../src/server/lib/crypto';
 import { createUser, savePrefs, getPrefs } from '../src/server/services/users';
@@ -28,7 +27,6 @@ beforeAll(async () => {
   insert('INSERT INTO domains (name, verify_token, created_at) VALUES (?, ?, ?)', ['wren.test', 'tok', ts]);
   alice = await createUser({ email: 'alice@wren.test', name: 'Alice', password: 'correct horse battery', role: 'owner' });
   bob = await createUser({ email: 'bob@wren.test', name: 'Bob', password: 'another long password' });
-  expect(config.dataDir).toContain('wren-test');
 });
 
 describe('routing', () => {

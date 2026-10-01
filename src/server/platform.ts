@@ -1,12 +1,10 @@
-import type { Context } from 'hono';
-
 /**
- * Everything that differs between runtimes lives behind this interface.
- * The Node entry (src/server/index.ts) and the Cloudflare Workers entry
- * (src/worker/index.ts) each provide an implementation.
+ * Storage, DNS, sockets and other runtime services. The Cloudflare Workers
+ * entry (src/worker/index.ts) provides the implementation; tests provide an
+ * in-process one (tests/node-platform.ts).
  */
 
-/** Synchronous SQLite access — better-sqlite3 on Node, Durable Object SQL on Workers. */
+/** Synchronous SQLite access (Durable Object SQL storage). */
 export interface SqlDriver {
   all(sql: string, params: unknown[]): any[];
   run(sql: string, params: unknown[]): { changes: number; lastInsertRowid: number };
@@ -30,7 +28,7 @@ export interface DnsResolver {
   cname(name: string): Promise<string[]>;
 }
 
-/** A plain or TLS TCP connection (used by the SMTP client). */
+/** A plain or TLS TCP connection (used by the SMTP relay client). */
 export interface TcpSocket {
   /** Next chunk of data, or null once the peer closed the connection. */
   read(): Promise<Uint8Array | null>;
@@ -45,21 +43,15 @@ export interface TcpConnector {
 }
 
 export interface Platform {
-  name: 'node' | 'workers';
   blobs: BlobStore;
   dns: DnsResolver;
-  clientIp(c: Context): string;
   /** Size of the database in bytes. */
   databaseSize(): number;
   /** Runtime details for the admin "System" page. */
   systemInfo(): Record<string, unknown>;
-  /** Raw SQLite file snapshot (Node only; every runtime also has the portable export). */
-  snapshot?(): Promise<{ data: Uint8Array; filename: string; contentType: string }>;
-  /** Ask the runtime to run background work no later than `at` (Workers alarms). */
+  /** Ask the runtime to run background work no later than `at` (Durable Object alarm). */
   wake?(at: number): void;
-  /** Send raw MIME through a Workers `send_email` binding (Workers only). */
-  sendViaBinding?(binding: string, from: string, to: string, raw: Uint8Array): Promise<void>;
-  /** Durable Object point-in-time recovery (Workers only). */
+  /** Durable Object point-in-time recovery. */
   pointInTime?: {
     /** Bookmark for the current state. */
     current(): Promise<string>;
@@ -68,9 +60,13 @@ export interface Platform {
     /** Restore the whole database to a bookmark. The object restarts shortly after. */
     restore(bookmark: string): Promise<void>;
   };
-  /** Outbound TCP (SMTP relays): net/tls on Node, cloudflare:sockets on Workers. */
+  /** Outbound TCP for SMTP relays (`cloudflare:sockets`). */
   tcp?: TcpConnector;
-  /** Runtime bindings / environment (Workers env). */
+  /** Send raw MIME through a `send_email` binding (Cloudflare Email Service). Returns the message id. */
+  sendViaBinding?(binding: string, from: string, to: string, raw: Uint8Array): Promise<string | null>;
+  /** Names of the configured send_email bindings. */
+  emailBindings?(): string[];
+  /** Worker env bindings. */
   env: Record<string, unknown>;
 }
 

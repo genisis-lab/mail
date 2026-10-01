@@ -1,6 +1,6 @@
 import net from 'node:net';
 import tls from 'node:tls';
-import type { TcpConnector, TcpSocket } from './platform.js';
+import type { TcpConnector, TcpSocket } from '../src/server/platform';
 
 /** Wrap a Node socket in the pull-based TcpSocket interface. */
 function wrap(sock: net.Socket, host: string, allowSelfSigned: boolean): TcpSocket {

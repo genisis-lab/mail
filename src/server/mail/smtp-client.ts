@@ -1,10 +1,9 @@
 /**
  * A small SMTP submission client (RFC 5321) used by the "SMTP relay" provider.
  *
- * It talks to the network through `platform().tcp`, so the same code runs on
- * Node.js (net/tls) and on Cloudflare Workers (`connect()` from
- * cloudflare:sockets). Supports implicit TLS (465), STARTTLS (587), AUTH PLAIN
- * and LOGIN, SIZE, 8BITMIME and SMTPUTF8.
+ * It talks to the network through `platform().tcp`: `connect()` from
+ * cloudflare:sockets on Workers (node:net/tls in tests). Supports implicit TLS
+ * (465), STARTTLS (587), AUTH PLAIN and LOGIN, SIZE, 8BITMIME and SMTPUTF8.
  */
 import { platform, type TcpSocket } from '../platform.js';
 

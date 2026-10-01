@@ -13,10 +13,8 @@ import { mailjet } from './outbound/mailjet.js';
 import { mailersend, mailchannels, smtp2go, zeptomail, elasticemail, mailtrap, scaleway } from './outbound/more.js';
 import { postal, webhook, logOnly, rawMime, forwardemail, cloudmailin } from './outbound/selfhosted.js';
 import { cloudflareBinding } from './outbound/cloudflare-binding.js';
-import { config } from '../config.js';
 
 const definitions: ProviderDefinition<any>[] = [
-  cloudflare,
   cloudflareBinding,
   resend,
   ses,
@@ -34,6 +32,7 @@ const definitions: ProviderDefinition<any>[] = [
   mailtrap,
   scaleway,
   smtp,
+  cloudflare,
   postal,
   webhook,
   rawMime,
@@ -48,32 +47,23 @@ export function getProviderDef(type: string): ProviderDefinition<any> | undefine
   return byType.get(type);
 }
 
-export function availableOnThisPlatform(d: { platforms?: ('node' | 'workers')[] }): boolean {
-  return !d.platforms || d.platforms.includes(config.platform);
-}
-
 export function listProviderTypes(): ProviderTypeInfo[] {
-  return definitions.filter(availableOnThisPlatform).map((d) => ({
+  return definitions.map((d) => ({
     type: d.type,
     name: d.name,
     description: d.description,
     website: d.website,
     category: d.category,
+    recommended: d.recommended,
+    inboundVia: d.inboundVia,
     outbound: d.outbound,
     inbound: d.inbound,
     rawMime: d.rawMime,
     fields: d.fields,
     spfInclude: d.spfInclude,
     dkimSelectors: d.dkimSelectors,
-    inboundSetup:
-      d.type === 'cloudflare' && config.platform === 'workers'
-        ? 'Wren is running on Cloudflare Workers, so no extra Worker or webhook is needed: in the dashboard enable Email Routing for the domain and set the catch-all (or specific addresses) to “Send to a Worker” → this Wren Worker.'
-        : d.inboundSetup,
-    outboundSetup:
-      d.type === 'smtp' && config.platform === 'workers'
-        ? `${d.outboundSetup} On Cloudflare Workers use port 587 (STARTTLS) or 465 (TLS); Cloudflare blocks outbound port 25.`
-        : d.outboundSetup,
-    presets: d.presets?.filter(availableOnThisPlatform),
-    platforms: d.platforms,
+    inboundSetup: d.inboundSetup,
+    outboundSetup: d.outboundSetup,
+    presets: d.presets,
   }));
 }

@@ -35,40 +35,61 @@ export interface Env {
   EMAIL?: SendEmail;
   WREN_SECRET?: string;
   PUBLIC_URL?: string;
+  WREN_SELF_HOSTED?: string;
   [key: string]: unknown;
 }
 
 const log = logger('worker');
 
+/** Running the Worker outside Cloudflare (the optional Docker image sets this). */
+export const isSelfHosted = (env: Env) => env.WREN_SELF_HOSTED === '1' || env.WREN_SELF_HOSTED === 'true';
+
 function workersPlatform(ctx: DurableObjectState, env: Env, schedule: (at: number) => void): Platform {
+  const selfHosted = isSelfHosted(env);
+  // Outside Cloudflare the send_email binding is only a local simulation, so don't offer it.
+  const emailBindings = () =>
+    selfHosted
+      ? []
+      : Object.entries(env)
+          // send_email bindings expose send(). ASSETS is an RPC-capable Fetcher, where any property looks callable.
+          .filter(([k, v]) => k !== 'ASSETS' && typeof (v as SendEmail | undefined)?.send === 'function')
+          .map(([k]) => k);
   return {
-    name: 'workers',
     blobs: env.BLOBS ? r2BlobStore(env.BLOBS) : sqlBlobStore(ctx.storage),
     dns: dohResolver(),
     tcp: workersTcp,
     env,
-    clientIp: (c) => c.req.header('cf-connecting-ip') ?? '',
     databaseSize: () => ctx.storage.sql.databaseSize,
     systemInfo: () => ({
-      platform: 'Cloudflare Workers · SQLite Durable Object',
-      blobStorage: env.BLOBS ? 'R2 bucket' : 'Durable Object storage (bind an R2 bucket as BLOBS for large mailboxes)',
-      emailBinding: !!env.EMAIL,
+      platform: selfHosted ? 'Self-hosted (workerd, Cloudflare’s open-source Workers runtime)' : 'Cloudflare Workers · SQLite Durable Object',
+      selfHosted,
+      blobStorage: selfHosted ? 'Local disk (/data)' : env.BLOBS ? 'R2 bucket' : 'Durable Object storage (bind an R2 bucket as BLOBS for large mailboxes)',
+      emailBindings: emailBindings(),
       secretFromEnv: !!env.WREN_SECRET,
     }),
-    pointInTime: {
-      current: () => ctx.storage.getCurrentBookmark(),
-      at: (ts) => ctx.storage.getBookmarkForTime(ts),
-      async restore(bookmark) {
-        await ctx.storage.onNextSessionRestoreBookmark(bookmark);
-        // Restart the object so the restore takes effect; let the response go out first.
-        setTimeout(() => ctx.abort('Restoring database'), 250);
-      },
-    },
+    pointInTime: selfHosted
+      ? undefined
+      : {
+          current: () => ctx.storage.getCurrentBookmark(),
+          at: (ts) => ctx.storage.getBookmarkForTime(ts),
+          async restore(bookmark) {
+            await ctx.storage.onNextSessionRestoreBookmark(bookmark);
+            // Restart the object so the restore takes effect; let the response go out first.
+            setTimeout(() => ctx.abort('Restoring database'), 250);
+          },
+        },
     wake: schedule,
+    emailBindings,
     async sendViaBinding(binding, from, to, raw) {
-      const b = env[binding] as SendEmail | undefined;
-      if (!b?.send) throw new Error(`No send_email binding named ${binding}`);
-      await b.send(new EmailMessage(from, to, new TextDecoder().decode(raw)));
+      if (!emailBindings().includes(binding)) {
+        throw new Error(
+          selfHosted
+            ? 'Cloudflare Email Service only works when Wren is deployed to Cloudflare. Use Resend or another provider when self-hosting.'
+            : `No email binding named ${binding}`,
+        );
+      }
+      const result = (await (env[binding] as SendEmail).send(new EmailMessage(from, to, new TextDecoder().decode(raw)))) as { messageId?: string } | undefined;
+      return result?.messageId ?? null;
     },
   };
 }
@@ -97,7 +118,7 @@ export class WrenDurableObject extends DurableObject<Env> {
       try {
         setPlatform(workersPlatform(ctx, env, (at) => void this.schedule(at)));
         openDb(doSqlDriver(ctx.storage));
-        initConfig(env, { platform: 'workers', secret: (env.WREN_SECRET as string | undefined) || storedSecret() });
+        initConfig(env, { secret: (env.WREN_SECRET as string | undefined) || storedSecret() });
         config.keyMismatch = !verifyEncryptionKey();
         recoverQueue();
         this.app = createApp();
@@ -120,7 +141,7 @@ export class WrenDurableObject extends DurableObject<Env> {
       return Response.json({ error: `Wren failed to start: ${this.setupError}` }, { status: 500 });
     }
     // Zero-config public URL: unless PUBLIC_URL is set, use the origin users reach us at.
-    if (!this.env.PUBLIC_URL) config.publicUrl = new URL(request.url).origin;
+    if (!config.publicUrlPinned) config.publicUrl = new URL(request.url).origin;
     const res = await this.app.fetch(request);
     this.ctx.waitUntil(this.schedule());
     return res;

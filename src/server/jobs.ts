@@ -2,7 +2,7 @@ import { all, get, getMeta, now, run, setMeta } from './db/index.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
 import { collectGarbage } from './mail/blobs.js';
-import { processQueue, recoverQueue } from './mail/outbound.js';
+import { processQueue } from './mail/outbound.js';
 import { purgeMessages } from './mail/store.js';
 import { wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
@@ -32,7 +32,7 @@ export function runMaintenance() {
 
 /**
  * Run whatever background work is due: the outbound queue, snooze wake-ups,
- * hourly maintenance and daily blob GC. Called by the Node timers and by the
+ * hourly maintenance and daily blob GC. Called by the
  * Durable Object alarm on Workers.
  */
 export async function runDueWork(opts: { gc?: boolean } = {}) {
@@ -59,31 +59,4 @@ export function nextWakeAt(): number {
   const maintenance = (lastRun('maintenance') || ts) + HOUR;
   const rebuild = searchRebuildPending() ? ts : Infinity;
   return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild));
-}
-
-// ── Node.js timers ──────────────────────────────────────────────────────────
-
-const timers: ReturnType<typeof setInterval>[] = [];
-
-export function startNodeJobs(queueIntervalMs: number) {
-  recoverQueue();
-  let busy = false;
-  const t = setInterval(async () => {
-    if (busy) return;
-    busy = true;
-    try {
-      await runDueWork();
-    } catch (err) {
-      log.error('Background work failed', err);
-    } finally {
-      busy = false;
-    }
-  }, queueIntervalMs);
-  (t as any).unref?.();
-  timers.push(t);
-}
-
-export function stopJobs() {
-  for (const t of timers) clearInterval(t);
-  timers.length = 0;
 }

@@ -10,19 +10,19 @@
 
 ## Goal
 
-One Cloudflare Worker (or, alternatively, one container) that a person or a small
-organization can run to:
+One Cloudflare Worker, with no server and no Docker, that a person or a small
+organization can deploy to:
 
 1. **Host mail on any number of custom domains**: users, aliases, catch-alls,
    groups, and forwarding.
-2. **Send through any major provider**: Cloudflare Email Service, Resend,
-   Amazon SES, Postmark, SendGrid, Mailgun, and more. You can set it per domain
-   and add a fallback.
-3. **Receive mail** with the built-in SMTP server (MX → Wren), or through
-   inbound webhooks from the providers that offer them (Cloudflare Email
-   Routing, Resend Inbound, Postmark, SendGrid Inbound Parse, Mailgun Routes,
-   SES via SNS, SparkPost relay, Postal, ForwardEmail, CloudMailin, Brevo,
-   Mailjet Parse, plus raw MIME and generic JSON).
+2. **Send** with Cloudflare Email Service through the Worker's own `send_email`
+   binding (no API key), or with Resend, Amazon SES, Postmark, SendGrid, Mailgun,
+   SMTP relays and more. You can set a provider per domain and add a fallback.
+3. **Receive mail** with Cloudflare Email Routing (straight into the Worker's
+   `email()` handler), or through inbound webhooks from the providers that offer
+   them (Resend Inbound, Postmark, SendGrid Inbound Parse, Mailgun Routes, SES via
+   SNS, SparkPost relay, Postal, ForwardEmail, CloudMailin, Brevo, Mailjet Parse,
+   plus raw MIME and generic JSON).
 4. **Feel like Gmail**: threaded conversations, labels, stars, snooze,
    search operators, keyboard shortcuts, a floating compose window, undo send,
    scheduled send, and dark mode.
@@ -32,43 +32,38 @@ organization can run to:
 
 ## Architecture
 
-Wren has two runtimes that share all application code. **Cloudflare Workers** is the
-primary target; **Docker/Node.js** is the alternative.
+Wren is one Cloudflare Worker. The same Worker can optionally run self-hosted on
+workerd (Cloudflare's open-source runtime) with `npm run serve` or Docker.
 
 ```
               ┌──────────── Browser (React SPA) ────────────┐
               │  Mail UI  ·  Settings  ·  Admin panel       │
               └──────────────────┬──────────────────────────┘
-                                 │ JSON API (cookie session)
+                                 │ Workers static assets + JSON API (cookie session)
 ┌────────────────────────────────▼─────────────────────────────────┐
-│ Hono app + mail engine (src/server, runtime-agnostic)            │
+│ Worker  →  WrenDurableObject (Hono app + mail engine)            │
 │  Auth/2FA · Mail API · Admin API · Inbound webhooks /api/inbound │
 │  Outbound queue (retry/backoff) · Ingest pipeline (route → spam  │
 │  → filters → store → auto-reply/forward) · 20+ provider adapters │
-└──────────────┬──────────────────────────────────┬────────────────┘
-     platform.ts (SQL, blobs, DNS, scheduling)    │
-┌──────────────▼──────────────┐   ┌───────────────▼────────────────┐
-│ Cloudflare Workers          │   │ Node.js / Docker               │
-│ SQLite Durable Object       │   │ better-sqlite3 (WAL + FTS5)    │
-│ R2 for raw mail & files     │   │ filesystem blob store          │
-│ Email Routing email()       │   │ built-in SMTP (MX + submission)│
-│ DO alarms + cron            │   │ timers                         │
-│ DNS over HTTPS              │   │ node:dns                       │
-│ Workers static assets       │   │ static file server             │
-└─────────────────────────────┘   └────────────────────────────────┘
+├──────────────────────────────────────────────────────────────────┤
+│ SQLite (Durable Object) · R2 (raw mail, attachments, big bodies) │
+│ Email Routing → email() · Email Service → send_email binding     │
+│ DO alarms + cron · DNS over HTTPS · TCP sockets (SMTP relays)    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 * **Why a Durable Object rather than D1.** Its SQLite API is synchronous and
   transactional, it supports FTS5, it sits next to the code, and its alarms drive the
   send queue. The whole database lives in one object (up to 10 GB); raw messages and
   attachments live in R2.
-* **Portable mail stack:** a dependency-free MIME builder (`mail/mime.ts`) and
-  `postal-mime` for parsing. Both run unchanged on Workers and Node.
+* **Small mail stack:** a dependency-free MIME builder (`mail/mime.ts`), an SMTP
+  client on `cloudflare:sockets`, and `postal-mime` for parsing. The Worker's only
+  runtime dependencies are `hono`, `postal-mime` and `zod`.
 * **Web:** React 19, Vite, Tailwind CSS v4, TanStack Query, React Router, and lucide
   icons. Message HTML renders in a sandboxed iframe with DOMPurify, and remote images
   are blocked by default.
 * **Secrets:** provider credentials are encrypted at rest with AES-256-GCM, using a key
-  derived from `WREN_SECRET`.
+  derived from `WREN_SECRET`, which is generated on first start if you don't set it.
 
 ## Feature scope (v1)
 
@@ -112,7 +107,7 @@ sessions, appearance, and personal API keys.
   (built-in heuristics, optional rspamd).
 - **Branding:** instance name, accent colour, and login message.
 - **Audit log, backups** (portable export and restore, point-in-time recovery on
-  Workers, SQLite snapshot on Node), and system info.
+  Cloudflare), and system info.
 
 ### Providers
 | Provider | Outbound | Inbound |
@@ -153,13 +148,16 @@ sessions, appearance, and personal API keys.
    Email Routing handler, alarms and cron, wrangler config.
 7. ✅ **Ops:** Dockerfile, compose, docs (Cloudflare, self-hosting, providers), tests,
    and a smoke test in a real browser on both runtimes.
-8. ✅ **Workers parity:** shared SMTP client (`cloudflare:sockets` on Workers), large
-   bodies moved to R2, a single JSON parameter per IN-list (Durable Object limit of 100),
-   a generated encryption key, streamed export and restore, point-in-time recovery, and
-   a 30-day grace period for deleted files.
+8. ✅ **Workers parity:** SMTP client on `cloudflare:sockets`, large bodies moved to
+   R2, a single JSON parameter per IN-list (Durable Object limit of 100), a generated
+   encryption key, streamed export and restore, point-in-time recovery, and a 30-day
+   grace period for deleted files.
+9. ✅ **Workers only:** removed the separate Node.js server and built-in SMTP server.
+   Cloudflare Email Service (`send_email` binding) and Resend are first-class in the
+   setup wizard, `npm run setup` deploys from the terminal, and optional self-hosting
+   runs the same Worker on workerd (`npm run serve` / Docker).
 
 ## Later (post-v1)
-IMAP server for desktop clients, JMAP, and calendar and contacts sync
-(CalDAV/CardDAV). Also planned: delivery/bounce webhooks per provider, DKIM
-signing for the direct-SMTP path, Postgres support, S3 blob storage,
-multi-tenant billing, and mobile PWA push notifications.
+JMAP over HTTP for desktop and mobile clients (Workers can't accept IMAP connections),
+calendar and contacts sync over HTTP (CalDAV/CardDAV), delivery/bounce webhooks per
+provider, multi-tenant billing, and mobile PWA push notifications.

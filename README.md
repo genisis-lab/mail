@@ -4,8 +4,8 @@
 
 <h1 align="center">Wren</h1>
 <p align="center"><b>Your mail, on your domains.</b><br>
-A clean, Gmail-style webmail that runs entirely on <b>Cloudflare Workers</b>, with no servers or Docker needed.<br>
-It sends and receives through the email provider you already use.</p>
+A clean, Gmail-style webmail that runs entirely on <b>Cloudflare Workers</b>, with no servers and no Docker.<br>
+Send with Cloudflare Email Service (no API key) or Resend, and receive with Email Routing.</p>
 
 <p align="center"><a href="https://deploy.workers.cloudflare.com/?url=https://github.com/genisis-lab/mail"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"></a></p>
 
@@ -15,13 +15,13 @@ It sends and receives through the email provider you already use.</p>
 
 - **Custom domains, any number.** Mailboxes, aliases, distribution groups, catch-alls,
   plus-addressing (`you+tag@`), and external forwarding.
-- **Bring your own provider.** Send and receive through Cloudflare Email Service, Resend,
-  Amazon SES, Postmark, SendGrid, Mailgun, Brevo, Mailjet, SparkPost, MailerSend,
-  MailChannels, SMTP2GO, ZeptoMail, Elastic Email, Mailtrap, Scaleway, Postal, plain SMTP
-  and more, with a fallback provider per domain. See [docs/providers.md](docs/providers.md).
-- **Serverless, no Docker.** One Worker plus a SQLite Durable Object, R2 and Email Routing.
-  There's no VM, no open ports, no TLS certificates and no secrets to set up. Every feature works
-  on Workers (see [what runs where](#cloudflare-workers-or-docker)).
+- **Built around Cloudflare.** One Worker plus a SQLite Durable Object, R2, Email Routing
+  (incoming mail) and Email Service (outgoing mail through the Worker's own binding, with no API key).
+  There's no VM, no open ports, no TLS certificates and no secrets to set up.
+- **Or bring your provider.** Resend, Amazon SES, Postmark, SendGrid, Mailgun, Brevo, Mailjet,
+  SparkPost, MailerSend, MailChannels, SMTP2GO, ZeptoMail, Elastic Email, Mailtrap, Scaleway,
+  Postal, SMTP relays (Gmail, Microsoft 365, Fastmail…) and more, with a fallback provider per
+  domain. See [docs/providers.md](docs/providers.md).
 - **Feels like Gmail.** Conversations, labels, stars, snooze, undo send, scheduled send,
   search operators, keyboard shortcuts, a floating compose window, inline replies, and dark mode.
 - **A real admin panel.** Users, quotas, domains with DNS health checks, providers with
@@ -33,39 +33,45 @@ It sends and receives through the email provider you already use.</p>
 | **Admin overview** | **20+ providers** |
 | ![Admin](docs/screenshots/admin.png) | ![Providers](docs/screenshots/providers.png) |
 
-## Quick start: Cloudflare Workers
+## Quick start
 
-Click **Deploy to Cloudflare** above, or run:
+Click **Deploy to Cloudflare** above, or from a terminal:
 
 ```bash
 git clone https://github.com/genisis-lab/mail wren && cd wren
-npm install && npx wrangler login
-npx wrangler r2 bucket create wren-mail
-npm run deploy
+npm install
+npm run setup        # signs in to Cloudflare, creates the R2 bucket, deploys
 ```
 
-Open the printed URL and finish the setup wizard. Next, set Email Routing's catch-all to
-*Send to Worker → wren* and add a sending provider in **Admin → Providers**.
+Then:
+
+1. Open the printed URL and finish the setup wizard. Choose **Cloudflare Email Service** (no
+   API key) or **Resend** (paste your key).
+2. In the Cloudflare dashboard, open your domain → **Email → Email Routing**, enable it, and
+   set the catch-all rule to **Send to a Worker → wren**. That's how mail comes in.
+3. Using Cloudflare Email Service? Open **Email Service → Email Sending** and onboard your
+   domain so Wren can send from it.
+
 Full guide: **[docs/cloudflare.md](docs/cloudflare.md)**.
 
-## Cloudflare Workers or Docker
+### How mail flows
 
-Workers is the main target and needs nothing else. A Docker/Node.js build is also included
-for people who want to run their own server ([docs/self-hosting.md](docs/self-hosting.md)).
-Both run the same code:
-
-| Feature | Cloudflare Workers | Docker / Node.js |
+| | Cloudflare Email Service | Resend |
 |---|---|---|
-| Web app, admin panel, API, search, filters, labels, snooze, undo/scheduled send | ✅ | ✅ |
-| Receive mail | Email Routing (`email()` handler) or provider webhooks | Built-in SMTP server (MX) or provider webhooks |
-| Send through API providers (Cloudflare, Resend, SES, Postmark…) | ✅ | ✅ |
-| Send through SMTP relays (Gmail, Microsoft 365, Fastmail…) | ✅ on ports 587/465 (`cloudflare:sockets`) | ✅ any port |
-| Background queue, retries, snooze wake-ups, retention | Durable Object alarms + cron | Timers |
-| Encryption key | Generated automatically (or set `WREN_SECRET`) | Generated automatically (or set `WREN_SECRET`) |
-| Backups | Export/restore + 30-day point-in-time recovery | Export/restore + SQLite snapshot |
-| Desktop mail clients (SMTP submission) | — Workers can't accept inbound TCP | ✅ `SUBMISSION_PORT` |
+| **Sending** | The Worker's `send_email` binding, no API key | Resend API key |
+| **Receiving** | Email Routing → the Worker's `email()` handler | Email Routing, or Resend's inbound webhook |
+| **Setup** | Onboard the domain in Email Sending | Verify the domain in Resend |
 
-Exports are portable, so you can move between the two at any time.
+Everything runs inside the Worker: the web app, the API, the send queue (Durable Object
+alarms), search, and storage (SQLite in a Durable Object, files in R2).
+
+### Optional: self-hosting
+
+You don't need Docker. If you'd rather run Wren on your own server, the same Worker runs
+locally on workerd, Cloudflare's open-source Workers runtime: `npm run serve`, or
+`docker compose up -d`. Send and receive through a provider such as Resend, because Email
+Routing and Email Service need a Cloudflare deployment. See
+[docs/self-hosting.md](docs/self-hosting.md).
 
 ## Features
 
@@ -109,16 +115,19 @@ TOTP 2FA with recovery codes, active sessions, and API keys.
 
 **Developer API.** `POST /api/v1/send` with `Authorization: Bearer wren_…`.
 
+**Desktop mail apps.** Wren is a web app (it works on phones too). Workers can't accept
+incoming SMTP or IMAP connections, so Outlook and Apple Mail can't connect to it directly.
+
 ## Architecture
 
 ```
 src/
-  web/        React 19 + Vite + Tailwind SPA (shared by both runtimes)
-  server/     Hono API, mail engine, providers — runtime-agnostic
-    platform.ts   SQL, blob storage, DNS and scheduling interfaces
-    index.ts      Node.js entry (better-sqlite3, filesystem, SMTP server; for Docker)
-  worker/     Cloudflare entry (Durable Object SQLite, R2, Email Routing, alarms, sockets)
-integrations/ Cloudflare Email Routing worker for the Node build
+  web/        React 19 + Vite + Tailwind single-page app (Workers static assets)
+  server/     Hono API, mail engine and provider adapters
+    platform.ts   storage, DNS, sockets and scheduling interfaces
+  worker/     Worker entry: Durable Object (SQLite), R2, Email Routing, Email Service,
+              alarms, cron, TCP sockets
+scripts/      setup.mjs (terminal setup), serve.mjs (optional self-hosting on workerd)
 ```
 
 The design notes are in [docs/PLAN.md](docs/PLAN.md).
@@ -127,10 +136,18 @@ The design notes are in [docs/PLAN.md](docs/PLAN.md).
 
 ```bash
 npm install
-npm run cf:dev      # Workers runtime locally (workerd) at http://localhost:8787
-npm run dev         # or: Node API + Vite dev server at http://localhost:5173
+npm run dev         # the Worker on the real Workers runtime (workerd) at http://localhost:8787
+npm run dev:web     # optional: hot-reloading UI at http://localhost:5173 (API proxied to 8787)
 npm test            # vitest: MIME, SMTP client, providers, mail flow, backups, HTTP API
 npm run typecheck
+```
+
+In `npm run dev`, Cloudflare Email Service sends are simulated (written to `.wrangler/tmp`),
+and you can deliver a test message to the `email()` handler:
+
+```bash
+curl -X POST 'http://localhost:8787/cdn-cgi/handler/email?from=alice@example.org&to=you@example.com' \
+  --data-binary @message.eml
 ```
 
 ## License

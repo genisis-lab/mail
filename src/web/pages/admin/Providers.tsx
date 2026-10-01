@@ -160,9 +160,10 @@ function TypePicker({ open, types, onClose, onPick }: { open: boolean; types: Pr
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">{t.name}</p>
                     <p className="line-clamp-2 text-xs text-muted">{t.description}</p>
-                    <div className="mt-1.5 flex gap-1">
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {t.recommended && <Badge tone="ok">recommended</Badge>}
                       {t.outbound && <Badge>send</Badge>}
-                      {t.inbound && <Badge>receive</Badge>}
+                      {t.inbound ? <Badge>receive</Badge> : t.inboundVia ? <Badge>receive via {t.inboundVia}</Badge> : null}
                     </div>
                   </div>
                 </button>

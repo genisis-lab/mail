@@ -26,7 +26,7 @@ export const CSP = [
   "frame-ancestors 'self'",
 ].join('; ');
 
-export function createApp(opts: { mountStatic?: (app: Hono<AppEnv>) => void } = {}) {
+export function createApp() {
   runtimeInfo.startedAt = Date.now();
   const app = new Hono<AppEnv>();
 
@@ -85,8 +85,6 @@ export function createApp(opts: { mountStatic?: (app: Hono<AppEnv>) => void } = 
 
   app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 
-  // The single-page app is served by the runtime entry (Node static files or Workers assets).
-  opts.mountStatic?.(app);
-
+  // Everything outside /api/* is the single-page app, served by Workers static assets.
   return app;
 }

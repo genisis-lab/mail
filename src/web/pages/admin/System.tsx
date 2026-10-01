@@ -49,32 +49,22 @@ export function SystemPage() {
   const [busy, setBusy] = useState(false);
   if (q.isLoading || !q.data) return <Spinner />;
   const s = q.data;
-  const workers = s.runtime === 'workers';
+  const selfHosted = !!s.selfHosted;
   const rows: [string, React.ReactNode][] = [
     ['Version', `Wren ${s.version}`],
     ['Runtime', s.platform],
-    ...(workers
-      ? ([
-          ['Message storage', s.blobStorage],
-          ['Email Routing', 'Inbound mail arrives through this Worker’s email() handler'],
-          ['send_email binding', s.emailBinding ? <Badge tone="ok">bound as EMAIL</Badge> : <Badge>not bound</Badge>],
-        ] as [string, React.ReactNode][])
-      : ([
-          ['Node.js', s.node],
-          ['Memory', fileSize(s.memory)],
-          ['Data directory', <code className="text-xs">{s.dataDir}</code>],
-          [
-            'SMTP (MX)',
-            s.smtp.enabled ? (
-              <>
-                Listening on port {s.smtp.port} as <b>{s.smtp.hostname}</b> {s.smtp.tls ? <Badge tone="ok">STARTTLS</Badge> : <Badge tone="warn">no TLS</Badge>}
-              </>
-            ) : (
-              'Disabled'
-            ),
-          ],
-          ['SMTP submission', s.smtp.submissionPort ? `Port ${s.smtp.submissionPort} (auth with password or API key)` : 'Disabled (set SUBMISSION_PORT)'],
-        ] as [string, React.ReactNode][])),
+    ['Message storage', s.blobStorage],
+    ['Incoming mail', selfHosted ? 'Provider webhooks (for example Resend inbound)' : 'Cloudflare Email Routing → this Worker, plus any provider webhooks'],
+    [
+      'Cloudflare Email Service',
+      s.emailBindings?.length ? (
+        <Badge tone="ok">binding {s.emailBindings.join(', ')} available</Badge>
+      ) : selfHosted ? (
+        'Only available when deployed to Cloudflare'
+      ) : (
+        <Badge tone="warn">no send_email binding in wrangler.toml</Badge>
+      ),
+    ],
     ['Uptime', relativeTime(Date.now() - s.uptime).replace(' ago', '')],
     ['Public URL', s.publicUrl],
     [
@@ -83,10 +73,8 @@ export function SystemPage() {
         <Badge tone="danger">WREN_SECRET changed — encrypted settings can’t be read</Badge>
       ) : s.secretFromEnv ? (
         <Badge tone="ok">from WREN_SECRET</Badge>
-      ) : workers ? (
-        <Badge>generated automatically, stored in the Durable Object</Badge>
       ) : (
-        <Badge tone="warn">auto-generated in data dir</Badge>
+        <Badge>generated automatically, stored with the database</Badge>
       ),
     ],
     ['Database size', fileSize(s.storage.database)],
@@ -105,7 +93,7 @@ export function SystemPage() {
           ))}
         </dl>
       </Card>
-      <BackupCard workers={workers} pointInTime={s.backup.pointInTime} snapshot={s.backup.snapshot} rebuilding={s.backup.searchRebuilding} />
+      <BackupCard selfHosted={selfHosted} pointInTime={s.backup.pointInTime} rebuilding={s.backup.searchRebuilding} />
       <Card title="Announcement" description="Email every active user, e.g. about planned maintenance.">
         <div className="grid max-w-xl gap-3">
           <Field label="Subject">
@@ -164,7 +152,7 @@ function toLocalInput(ts: number) {
   return d.toISOString().slice(0, 16);
 }
 
-function BackupCard({ workers, pointInTime, snapshot, rebuilding }: { workers: boolean; pointInTime: boolean; snapshot: boolean; rebuilding: boolean }) {
+function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boolean; pointInTime: boolean; rebuilding: boolean }) {
   const toast = useToast();
   const [busy, setBusy] = useState<'restore' | 'pit' | null>(null);
   const [at, setAt] = useState(() => toLocalInput(Date.now() - 3_600_000));
@@ -199,9 +187,9 @@ function BackupCard({ workers, pointInTime, snapshot, rebuilding }: { workers: b
     <Card
       title="Backup & restore"
       description={
-        workers
-          ? 'Cloudflare keeps 30 days of point-in-time history for the database automatically. Exports are portable copies you can keep anywhere and restore here or on a Docker install. Message files stay in R2.'
-          : 'Exports are portable copies you can restore here or on a Cloudflare deployment. Also back up the data directory’s blobs/ folder, which holds message contents and attachments.'
+        selfHosted
+          ? 'Exports are portable copies of the database you can restore here or on Cloudflare. Message files live in the /data volume, so back that up too.'
+          : 'Cloudflare keeps 30 days of point-in-time history for the database automatically. Exports are portable copies you can keep anywhere and restore here. Message files stay in R2.'
       }
     >
       <div className="space-y-5">
@@ -209,13 +197,6 @@ function BackupCard({ workers, pointInTime, snapshot, rebuilding }: { workers: b
           <a href="/api/admin/export">
             <Button icon={<Download className="size-4" />}>Download export</Button>
           </a>
-          {snapshot && (
-            <a href="/api/admin/backup">
-              <Button variant="ghost" icon={<Download className="size-4" />}>
-                SQLite snapshot
-              </Button>
-            </a>
-          )}
           <input
             ref={fileRef}
             type="file"

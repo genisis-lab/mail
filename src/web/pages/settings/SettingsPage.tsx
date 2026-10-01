@@ -592,7 +592,7 @@ function AccountsTab() {
 }
 
 function SecurityTab() {
-  const { user, refresh, instance } = useSession();
+  const { user, refresh } = useSession();
   const toast = useToast();
   const qc = useQueryClient();
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
@@ -709,12 +709,8 @@ function SecurityTab() {
       </Card>
 
       <Card
-        title={instance.platform === 'workers' ? 'API keys' : 'API keys & app passwords'}
-        description={
-          instance.platform === 'workers'
-            ? 'Use a key to send mail from scripts and apps over the HTTP API.'
-            : 'Use a key to send mail over the HTTP API, or as the password for SMTP submission from desktop and mobile mail apps.'
-        }
+        title="API keys"
+        description="Use a key to send mail from scripts and apps over the HTTP API."
       >
         <form
           className="mb-4 flex gap-2"

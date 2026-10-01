@@ -1,7 +1,10 @@
 node_modules
 dist
 data
+.wrangler
+.dev.vars
+.env
 .git
-*.log
 coverage
 test-results
+*.log

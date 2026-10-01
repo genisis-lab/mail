@@ -1,81 +1,78 @@
-# Self-hosting Wren with Docker or Node.js
+# Self-hosting (optional)
 
-Prefer Cloudflare? See [cloudflare.md](cloudflare.md). It's the recommended setup and
-needs no Docker or server.
+You don't need any of this: the recommended setup is a Cloudflare deployment
+([cloudflare.md](cloudflare.md)), with no server and no Docker.
 
-Run the Node.js build when you want your own server. It has everything the Workers build
-has, plus a built-in **SMTP server** (point your MX straight at Wren) and **SMTP
-submission** for desktop mail clients. Workers can't listen on TCP ports, so these two
-are the only Docker-only features. Data is stored in SQLite plus a directory of files.
+If you'd rather keep Wren on your own machine or server, run the **same Worker** locally
+on [workerd](https://github.com/cloudflare/workerd), Cloudflare's open-source Workers
+runtime. There's no separate server codebase: the database is the same SQLite Durable
+Object, background work runs on the same alarms, and the web app is identical.
 
-## Docker Compose
+## Setup from the terminal
 
 ```bash
-cp .env.example .env        # set PUBLIC_URL, WREN_SECRET, SMTP_HOSTNAME
-docker compose up -d --build
+git clone https://github.com/genisis-lab/mail wren && cd wren
+npm install
+npm run setup          # choose "Docker" or "your own machine"
 ```
 
-Open `http://your-server:3000` and complete the setup wizard. Put a TLS reverse proxy
-in front of port 3000. Example `Caddyfile`:
+### With Docker
+
+```bash
+docker compose up -d --build       # http://localhost:8787, data in ./data
+```
+
+Set `PUBLIC_URL` (the address people and providers use) and, behind a reverse proxy,
+`TRUST_PROXY=1` in `.env`. `npm run setup -- docker` writes the file for you.
+
+### Without Docker
+
+```bash
+npm run serve                      # http://localhost:8787, data in ./data
+PORT=80 DATA_DIR=/srv/wren PUBLIC_URL=https://mail.example.com npm run serve
+```
+
+Put a TLS reverse proxy in front for HTTPS, for example Caddy:
 
 ```
 mail.example.com {
-  reverse_proxy localhost:3000
+  reverse_proxy localhost:8787
 }
 ```
 
-Set `TRUST_PROXY=true` when running behind a proxy.
+## Sending and receiving
 
-### Volumes
+Email Routing and Email Service are part of Cloudflare's network, so a self-hosted copy uses
+a provider instead. In the setup wizard choose **Resend** and paste your API key.
 
-Everything lives in `/data`:
+- **Sending:** Resend, or any provider in Admin → Providers (SES, Postmark, SendGrid,
+  Mailgun, SMTP relays such as Gmail or Microsoft 365…).
+- **Receiving:** the provider's inbound webhook. For Resend, add the URL shown in
+  Admin → Providers → Resend to Resend's `email.received` webhook. `PUBLIC_URL` must be
+  reachable from the internet for that.
 
-- `wren.db`: the SQLite database.
-- `blobs/`: raw messages and attachments.
-- `.secret`: the generated `WREN_SECRET`, if you didn't set one.
+## Data and backups
 
-Back up the whole directory. **Admin → System & backup** also downloads a hot SQLite
-snapshot or a portable export. You can restore an export here or on a Cloudflare
-deployment. To keep provider credentials and 2FA when you move, set `WREN_SECRET` on
-the new instance to the old instance's key (from `data/.secret`).
+Everything lives in `DATA_DIR` (`./data`, or the `/data` volume in Docker): the SQLite
+database, message files, and the encryption key Wren generates on first start. Back up
+that directory. **Admin → System & backup** also downloads a portable export, which you
+can restore on a Cloudflare deployment if you move later.
 
-## Receiving mail
-
-Pick one approach per domain:
-
-1. **Built-in SMTP.** Point `MX 10 mx.example.com` at the server and expose port 25.
-   The compose file maps host port 25 to the container's port 2525. Set `SMTP_HOSTNAME`,
-   and set `SMTP_TLS_KEY`/`SMTP_TLS_CERT` to enable STARTTLS. Many residential ISPs and
-   clouds block port 25.
-2. **A provider's inbound webhook.** Cloudflare Email Routing (with
-   `integrations/cloudflare-email-worker`), Resend, Postmark, SendGrid, Mailgun, SES,
-   SparkPost, Postal, Brevo, Mailjet, ForwardEmail or CloudMailin. Add the provider in
-   **Admin → Providers**, copy its inbound URL, and follow the steps shown.
-3. **Raw MIME pipe.** Any MTA can POST messages to a *Raw MIME* provider URL:
-   `curl --data-binary @- -H 'Content-Type: message/rfc822' -H "X-Rcpt-To: $RECIPIENT" $URL`.
-
-## Sending mail
-
-Add any provider under **Admin → Providers** (all API providers, plus SMTP relays) and
-assign it per domain, with an optional fallback provider.
-
-## Desktop and mobile clients
-
-Set `SUBMISSION_PORT=2587` and map host port 587 to it. Clients authenticate with the
-account password, or with an API key (**Settings → Security**) when 2FA is enabled.
-Wren stores sent messages in the Sent folder and delivers them through your provider.
+Provider credentials and 2FA secrets in an export can only be read by an install with the
+same `WREN_SECRET`. If you might move, choose your own `WREN_SECRET` from the start and use
+it on both. Otherwise, after a restore you re-enter provider settings and users set up 2FA
+again (Wren walks you through it).
 
 ## Environment variables
 
-See `.env.example` for the full list: `PUBLIC_URL`, `WREN_SECRET`, `PORT`,
-`TRUST_PROXY`, `DATA_DIR`, `SMTP_*`, `SUBMISSION_PORT`, `LOG_LEVEL`, `DNS_SERVERS`.
+| Variable | Default | |
+|---|---|---|
+| `PORT` | `8787` | Port to listen on |
+| `HOST` | `0.0.0.0` | Interface to listen on |
+| `DATA_DIR` | `./data` | Database, message files and key |
+| `PUBLIC_URL` | request origin | Public address, used in webhook URLs |
+| `TRUST_PROXY` | off | Use `X-Forwarded-For` for client IPs behind a reverse proxy |
+| `WREN_SECRET` | generated | Encryption key (16+ characters) |
 
-## Running without Docker
-
-```bash
-npm install
-npm run build
-NODE_ENV=production PUBLIC_URL=https://mail.example.com npm start
-```
-
-During development, `npm run dev` runs the API with reload alongside the Vite dev server.
+The launcher (`scripts/serve.mjs`) never exposes Wrangler's local `/cdn-cgi/` test
+endpoints, so nobody can inject mail through them.
