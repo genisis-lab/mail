@@ -1,0 +1,3 @@
+# Secret used to encrypt provider credentials and sign tokens.
+# Generate one with: openssl rand -base64 32
+WREN_SECRET=

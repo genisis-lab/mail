@@ -1,0 +1,51 @@
+# Wren on Cloudflare Workers — see docs/cloudflare.md
+name = "wren"
+main = "src/worker/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Build the web app before bundling/deploying the Worker.
+[build]
+command = "npx vite build"
+watch_dir = "src/web"
+
+# The Gmail-style web app. /api/* goes to the Worker, everything else is static.
+[assets]
+directory = "./dist/web"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# The whole database lives in one SQLite-backed Durable Object.
+[[durable_objects.bindings]]
+name = "WREN"
+class_name = "WrenDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WrenDurableObject"]
+
+# Raw messages and attachments. Create once: npx wrangler r2 bucket create wren-mail
+# (Remove this block to keep everything inside the Durable Object instead.)
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "wren-mail"
+
+# Safety net for the send queue / snoozes / retention (Durable Object alarms do the real work).
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Optional: send through Cloudflare Email Service without an API token.
+# [[send_email]]
+# name = "EMAIL"
+
+[vars]
+# Set if your public hostname differs from the Worker URL (used for inbound webhook URLs).
+# PUBLIC_URL = "https://mail.example.com"
+
+# Node-only modules are replaced in the Workers bundle.
+[alias]
+"nodemailer" = "./src/worker/stubs/nodemailer.ts"
+
+[observability]
+enabled = true

@@ -1,0 +1,22 @@
+services:
+  wren:
+    build: .
+    image: wren-mail:latest
+    container_name: wren
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"   # web UI (put a TLS reverse proxy such as Caddy in front)
+      - "25:2525"     # inbound SMTP — only needed if your MX points at this server
+      # - "587:2587"  # SMTP submission for desktop/mobile clients (set SUBMISSION_PORT=2587)
+    volumes:
+      - wren-data:/data
+      # - ./certs:/certs:ro   # TLS for SMTP STARTTLS (SMTP_TLS_KEY / SMTP_TLS_CERT)
+
+  # Optional: stronger spam filtering. Set "rspamd URL" to http://rspamd:11333 in Admin → Settings → Spam.
+  # rspamd:
+  #   image: rspamd/rspamd:latest
+  #   restart: unless-stopped
+
+volumes:
+  wren-data:
