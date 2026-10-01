@@ -270,7 +270,7 @@ export function SetupPage({ instance }: { instance: Instance }) {
             provider (Cloudflare, Resend, SES, Postmark, SMTP and more) for sending and receiving.
           </p>
           <Field label="Name this instance" help="Shown on the sign-in page and in the browser tab.">
-            <Input value={instanceName} onChange={(e) => setInstanceName(e.target.value)} placeholder="Acme Mail" autoFocus />
+            <Input value={instanceName} onChange={(e) => setInstanceName(e.target.value)} placeholder="Fernhill Mail" autoFocus />
           </Field>
           <div className="flex justify-end">
             <Button variant="primary" onClick={() => setStep(1)} disabled={!instanceName.trim()}>

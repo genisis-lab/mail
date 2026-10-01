@@ -1,6 +1,7 @@
 import type { Addr, Folder } from '../../shared/types.js';
-import { all, get, insert, now, placeholders, run, tx } from '../db/index.js';
+import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
 import { putBlob } from './blobs.js';
+import { bodyColumns } from './body.js';
 import { makeSnippet, htmlToText, type ParsedAttachment } from './parse.js';
 
 /** Strip reply/forward prefixes so "Re: Fwd: Hello" threads with "Hello". */
@@ -29,8 +30,8 @@ export function findThread(
   const ids = [...new Set([opts.inReplyTo, ...opts.references].filter((x): x is string => !!x))];
   if (ids.length) {
     const row = get<{ thread_id: number }>(
-      `SELECT thread_id FROM messages WHERE user_id = ? AND message_id IN (${placeholders(ids.length)}) ORDER BY date DESC LIMIT 1`,
-      [userId, ...ids],
+      `SELECT thread_id FROM messages WHERE user_id = ? AND message_id IN ${IN_LIST} ORDER BY date DESC LIMIT 1`,
+      [userId, listParam(ids)],
     );
     if (row) return row.thread_id;
   }
@@ -101,6 +102,7 @@ export async function storeMessage(input: StoreInput): Promise<number> {
   // Write attachment blobs before the transaction (storage I/O is async).
   const att: (ParsedAttachment & { blob: string })[] = [];
   for (const a of input.attachments) att.push({ ...a, blob: await putBlob(a.content) });
+  const body = await bodyColumns(input.text, input.html);
   return tx(() => {
     // Participants other than the mailbox owner, used for subject-based threading.
     const own = new Set(
@@ -132,9 +134,9 @@ export async function storeMessage(input: StoreInput): Promise<number> {
     const snippet = makeSnippet(input.text, input.html);
     const id = insert(
       `INSERT INTO messages (user_id, thread_id, folder, direction, message_id, in_reply_to, refs, from_addr, from_name,
-        to_json, cc_json, bcc_json, reply_to, subject, snippet, text_body, html_body, date, size, raw_blob, has_attachments,
+        to_json, cc_json, bcc_json, reply_to, subject, snippet, text_body, html_body, body_blob, date, size, raw_blob, has_attachments,
         is_read, is_starred, is_important, status, identity, source, spam_score, auth_results, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId,
         threadId,
@@ -151,8 +153,9 @@ export async function storeMessage(input: StoreInput): Promise<number> {
         input.replyTo,
         input.subject,
         snippet,
-        input.text,
-        input.html,
+        body.text_body,
+        body.html_body,
+        body.body_blob,
         input.date,
         input.size,
         input.rawBlob,
@@ -212,14 +215,14 @@ export function purgeMessages(ids: number[]) {
   tx(() => {
     for (const chunk of chunks(ids, 500)) {
       const rows = all<{ id: number; user_id: number; size: number; thread_id: number }>(
-        `SELECT id, user_id, size, thread_id FROM messages WHERE id IN (${placeholders(chunk.length)})`,
-        chunk,
+        `SELECT id, user_id, size, thread_id FROM messages WHERE id IN ${IN_LIST}`,
+        [listParam(chunk)],
       );
       for (const r of rows) {
         run('DELETE FROM messages_fts WHERE rowid = ?', [r.id]);
         run('UPDATE users SET used_bytes = MAX(0, used_bytes - ?) WHERE id = ?', [r.size, r.user_id]);
       }
-      run(`DELETE FROM messages WHERE id IN (${placeholders(chunk.length)})`, chunk);
+      run(`DELETE FROM messages WHERE id IN ${IN_LIST}`, [listParam(chunk)]);
       const threads = [...new Set(rows.map((r) => r.thread_id))];
       for (const t of threads) {
         const left = get<{ c: number; d: number | null }>('SELECT COUNT(*) AS c, MAX(date) AS d FROM messages WHERE thread_id = ?', [t]);

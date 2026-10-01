@@ -33,7 +33,7 @@ rest with `WREN_SECRET`.
 | Raw MIME (HTTP) | — | ✅ | Workers, Node | For MTA pipes and scripts. |
 | ForwardEmail | — | ✅ | Workers, Node | |
 | CloudMailin | — | ✅ | Workers, Node | JSON-normalized or raw format. |
-| SMTP relay (Gmail, M365, Fastmail, Zoho, iCloud, Postfix…) | ✅ | — | Node only | Includes presets for common hosts. |
+| SMTP relay (Gmail, M365, Fastmail, Zoho, iCloud, Postfix…) | ✅ | — | Workers, Node | Presets for common hosts. On Workers use port 587 or 465 (port 25 is blocked). |
 | Log only (testing) | ✅ | — | Workers, Node | Records the message in the log without delivering it. |
 
 ## Delivery behaviour

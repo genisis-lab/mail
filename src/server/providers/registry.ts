@@ -69,8 +69,11 @@ export function listProviderTypes(): ProviderTypeInfo[] {
       d.type === 'cloudflare' && config.platform === 'workers'
         ? 'Wren is running on Cloudflare Workers, so no extra Worker or webhook is needed: in the dashboard enable Email Routing for the domain and set the catch-all (or specific addresses) to “Send to a Worker” → this Wren Worker.'
         : d.inboundSetup,
-    outboundSetup: d.outboundSetup,
-    presets: d.presets,
+    outboundSetup:
+      d.type === 'smtp' && config.platform === 'workers'
+        ? `${d.outboundSetup} On Cloudflare Workers use port 587 (STARTTLS) or 465 (TLS); Cloudflare blocks outbound port 25.`
+        : d.outboundSetup,
+    presets: d.presets?.filter(availableOnThisPlatform),
     platforms: d.platforms,
   }));
 }

@@ -209,5 +209,5 @@ export interface ProviderTypeInfo {
   /** Runtimes the provider works on (default: all). */
   platforms?: ('node' | 'workers')[];
   /** Quick-fill values (e.g. SMTP host presets). */
-  presets?: { label: string; values: Record<string, string | number | boolean> }[];
+  presets?: { label: string; values: Record<string, string | number | boolean>; platforms?: ('node' | 'workers')[] }[];
 }

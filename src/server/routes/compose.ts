@@ -22,22 +22,22 @@ const draftSchema = z.object({
   forwardOfId: z.number().int().positive().nullable().optional(),
 });
 
-function draftResponse(userId: number, id: number) {
-  const m = getMessage(userId, id);
+async function draftResponse(userId: number, id: number) {
+  const m = await getMessage(userId, id);
   return { id, threadId: m?.threadId, attachments: m?.attachments ?? [] };
 }
 
-composeRoutes.get('/template', (c) => {
+composeRoutes.get('/template', async (c) => {
   const user = c.get('user');
   const id = Number(c.req.query('messageId'));
   const mode = c.req.query('mode') as 'reply' | 'replyAll' | 'forward';
   if (!id || !['reply', 'replyAll', 'forward'].includes(mode)) throw badRequest('messageId and mode are required');
-  return c.json(composeTemplate(user.id, id, mode));
+  return c.json(await composeTemplate(user.id, id, mode));
 });
 
-composeRoutes.get('/drafts/:id', (c) => {
+composeRoutes.get('/drafts/:id', async (c) => {
   const user = c.get('user');
-  const m = getMessage(user.id, intParam(c, 'id'));
+  const m = await getMessage(user.id, intParam(c, 'id'));
   if (!m || m.folder !== 'drafts') throw notFound('Draft not found');
   return c.json(m);
 });
@@ -45,15 +45,15 @@ composeRoutes.get('/drafts/:id', (c) => {
 composeRoutes.post('/drafts', async (c) => {
   const user = c.get('user');
   const input = await body(c, draftSchema);
-  const id = saveDraft(user.id, input);
-  return c.json(draftResponse(user.id, id));
+  const id = await saveDraft(user.id, input);
+  return c.json(await draftResponse(user.id, id));
 });
 
 composeRoutes.put('/drafts/:id', async (c) => {
   const user = c.get('user');
   const input = await body(c, draftSchema);
-  const id = saveDraft(user.id, { ...input, id: intParam(c, 'id') });
-  return c.json(draftResponse(user.id, id));
+  const id = await saveDraft(user.id, { ...input, id: intParam(c, 'id') });
+  return c.json(await draftResponse(user.id, id));
 });
 
 composeRoutes.delete('/drafts/:id', (c) => {
@@ -72,7 +72,7 @@ composeRoutes.post('/drafts/:id/send', async (c) => {
 composeRoutes.post('/send', async (c) => {
   const user = c.get('user');
   const input = await body(c, draftSchema.extend({ draftId: z.number().int().positive().nullable().optional(), sendAt: z.number().int().nullable().optional() }));
-  const id = saveDraft(user.id, { ...input, id: input.draftId ?? null });
+  const id = await saveDraft(user.id, { ...input, id: input.draftId ?? null });
   const res = await sendDraft(user.id, id, { sendAt: input.sendAt ?? null });
   return c.json(res);
 });

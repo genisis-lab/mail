@@ -6,6 +6,7 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import type Database from 'better-sqlite3';
 import { config } from './config.js';
 import type { BlobStore, DnsResolver, Platform } from './platform.js';
+import { nodeTcp } from './node-tcp.js';
 
 /** Content-addressed files: blobs/ab/cd/abcdef… */
 export function fsBlobStore(root: string): BlobStore {
@@ -26,8 +27,8 @@ export function fsBlobStore(root: string): BlobStore {
         return null;
       }
     },
-    async delete(key) {
-      await fs.promises.rm(file(key), { force: true });
+    async delete(keys) {
+      for (const key of keys) await fs.promises.rm(file(key), { force: true });
     },
     async *list() {
       if (!fs.existsSync(root)) return;
@@ -67,6 +68,7 @@ export function nodePlatform(db: Database.Database | null): Platform {
     name: 'node',
     blobs: fsBlobStore(config.blobDir),
     dns: nodeDnsResolver(),
+    tcp: nodeTcp,
     env: process.env as Record<string, unknown>,
     clientIp(c) {
       try {
@@ -93,7 +95,7 @@ export function nodePlatform(db: Database.Database | null): Platform {
         secretFromEnv: !!process.env.WREN_SECRET,
       };
     },
-    async backup() {
+    async snapshot() {
       if (!db) throw new Error('No database');
       const tmp = path.join(os.tmpdir(), `wren-backup-${Date.now()}.db`);
       await db.backup(tmp);

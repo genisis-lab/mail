@@ -196,7 +196,7 @@ function AddressDialog({ value, onClose }: { value: Partial<AddressRow> | null; 
           </Field>
         )}
         <Field label="Display name" help="Used as the sender name when sending from this address.">
-          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={form.kind === 'group' ? 'Acme Team' : ''} />
+          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={form.kind === 'group' ? 'Design Team' : ''} />
         </Field>
         {form.kind === 'alias' ? (
           <Field label="Delivers to">

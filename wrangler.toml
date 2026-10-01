@@ -43,9 +43,5 @@ crons = ["*/5 * * * *"]
 # Set if your public hostname differs from the Worker URL (used for inbound webhook URLs).
 # PUBLIC_URL = "https://mail.example.com"
 
-# Node-only modules are replaced in the Workers bundle.
-[alias]
-"nodemailer" = "./src/worker/stubs/nodemailer.ts"
-
 [observability]
 enabled = true

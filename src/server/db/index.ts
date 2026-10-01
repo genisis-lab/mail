@@ -47,6 +47,15 @@ export function migrate() {
   }
 }
 
+/** Small key/value state that must survive restarts (Durable Objects are evicted when idle). */
+export function getMeta(key: string): string | null {
+  return (drv().all('SELECT value FROM _meta WHERE key = ?', [key])[0]?.value as string | undefined) ?? null;
+}
+
+export function setMeta(key: string, value: string | number) {
+  drv().run('INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, String(value)]);
+}
+
 function norm(params?: Params | Record<string, unknown>): unknown[] {
   if (params === undefined) return [];
   const list = Array.isArray(params) ? params : [params];
@@ -84,9 +93,12 @@ export function tx<T>(fn: () => T): T {
   }
 }
 
-/** Build "?, ?, ?" for IN clauses. */
-export function placeholders(n: number): string {
-  return Array.from({ length: n }, () => '?').join(', ');
-}
+/**
+ * `col IN ${IN_LIST}` matches against a JSON array passed as ONE parameter
+ * (`listParam(ids)`). Durable Object SQLite allows only 100 bound parameters per
+ * query, so variable-length lists must never expand into "?, ?, ?…".
+ */
+export const IN_LIST = '(SELECT value FROM json_each(?))';
+export const listParam = (values: readonly (number | string)[]) => JSON.stringify(values);
 
 export const now = () => Date.now();

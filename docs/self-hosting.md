@@ -1,11 +1,12 @@
 # Self-hosting Wren with Docker or Node.js
 
-Prefer Cloudflare? See [cloudflare.md](cloudflare.md). It's the recommended setup.
+Prefer Cloudflare? See [cloudflare.md](cloudflare.md). It's the recommended setup and
+needs no Docker or server.
 
-The Node.js build adds two things the Workers build can't offer: a built-in
-**SMTP server** (point your MX straight at Wren) and **SMTP relay** providers (send
-through Gmail, Fastmail, Zoho, your own Postfix…). Data is stored in SQLite plus a
-directory of files.
+Run the Node.js build when you want your own server. It has everything the Workers build
+has, plus a built-in **SMTP server** (point your MX straight at Wren) and **SMTP
+submission** for desktop mail clients. Workers can't listen on TCP ports, so these two
+are the only Docker-only features. Data is stored in SQLite plus a directory of files.
 
 ## Docker Compose
 
@@ -33,8 +34,10 @@ Everything lives in `/data`:
 - `blobs/`: raw messages and attachments.
 - `.secret`: the generated `WREN_SECRET`, if you didn't set one.
 
-Back up the whole directory. **Admin → System & backup** also downloads a hot
-SQLite snapshot.
+Back up the whole directory. **Admin → System & backup** also downloads a hot SQLite
+snapshot or a portable export. You can restore an export here or on a Cloudflare
+deployment. To keep provider credentials and 2FA when you move, set `WREN_SECRET` on
+the new instance to the old instance's key (from `data/.secret`).
 
 ## Receiving mail
 

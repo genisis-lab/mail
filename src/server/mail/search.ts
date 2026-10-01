@@ -79,7 +79,8 @@ export function buildSearch(q: string, userId: number, now = Date.now()): SqlFra
     params.push(...p);
   };
 
-  for (const t of tokenize(q)) {
+  // Bounded so a query stays well under SQLite's bound-parameter limit (100 on Durable Objects).
+  for (const t of tokenize(q).slice(0, 24)) {
     const v = t.value;
     switch (t.key) {
       case 'from':

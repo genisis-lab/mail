@@ -1,14 +1,15 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { APP_VERSION } from '../../shared/brand.js';
 import { config } from '../config.js';
-import { all, get, insert, now, placeholders, run, tx } from '../db/index.js';
+import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
 import { platform } from '../platform.js';
 import { encryptJson, hashPassword, randomToken, sha256 } from '../lib/crypto.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
 import { audit } from '../services/audit.js';
+import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords, smtpHostname } from '../services/dns.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -30,12 +31,8 @@ function act(c: any, action: string, target: string, details?: unknown) {
 
 // ── Overview ────────────────────────────────────────────────────────────────
 
-let storageCache: { at: number; blobs: number } | null = null;
-async function storage() {
-  if (!storageCache || Date.now() - storageCache.at > 5 * 60_000) {
-    storageCache = { at: Date.now(), blobs: await blobStoreSize().catch(() => 0) };
-  }
-  return { database: platform().databaseSize(), blobs: storageCache.blobs };
+function storage() {
+  return { database: platform().databaseSize(), blobs: blobStoreSize() };
 }
 
 adminRoutes.get('/overview', async (c) => {
@@ -77,6 +74,12 @@ adminRoutes.get('/overview', async (c) => {
   if (!hasOutbound) warnings.push({ level: 'warn', message: 'No outbound provider is configured — mail to external addresses cannot be sent.', link: '/admin/providers' });
   else if (!providers.some((p) => p.is_default) && all('SELECT 1 FROM domains WHERE provider_id IS NULL').length)
     warnings.push({ level: 'info', message: 'Some domains have no provider and there is no default provider.', link: '/admin/domains' });
+  if (config.keyMismatch)
+    warnings.push({
+      level: 'warn',
+      message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials and two-factor secrets cannot be read. Restore the previous key, or re-enter provider settings and reset 2FA for affected users.',
+      link: '/admin/providers',
+    });
   if (config.platform === 'node' && typeof process !== 'undefined' && !process.env.WREN_SECRET) warnings.push({ level: 'info', message: 'WREN_SECRET is auto-generated in the data directory. Back it up, or set it explicitly.' });
   if (config.publicUrl.includes('localhost')) warnings.push({ level: 'info', message: 'PUBLIC_URL is localhost — inbound webhook URLs will not be reachable by providers.' });
 
@@ -89,7 +92,7 @@ adminRoutes.get('/overview', async (c) => {
     queue,
     last24,
     providers: providers.map((p) => ({ ...p, typeName: getProviderDef(p.type)?.name ?? p.type })),
-    storage: await storage(),
+    storage: storage(),
     warnings,
   });
 });
@@ -101,7 +104,9 @@ adminRoutes.get('/system', async (c) =>
     uptime: Date.now() - runtimeInfo.startedAt,
     publicUrl: config.publicUrl,
     smtp: { enabled: config.smtp.enabled, port: config.smtp.port, hostname: smtpHostname(), tls: !!(config.smtp.tlsKey && config.smtp.tlsCert), submissionPort: config.smtp.submissionPort || null },
-    storage: await storage(),
+    storage: storage(),
+    backup: { snapshot: !!platform().snapshot, pointInTime: !!platform().pointInTime, searchRebuilding: searchRebuildPending() },
+    keyMismatch: config.keyMismatch,
     ...platform().systemInfo(),
   }),
 );
@@ -377,8 +382,8 @@ adminRoutes.get('/addresses', (c) => {
   const ids = rows.map((r) => r.id);
   const targets = ids.length
     ? all<any>(
-        `SELECT t.address_id, t.user_id, t.external, u.email FROM address_targets t LEFT JOIN users u ON u.id = t.user_id WHERE t.address_id IN (${placeholders(ids.length)})`,
-        ids,
+        `SELECT t.address_id, t.user_id, t.external, u.email FROM address_targets t LEFT JOIN users u ON u.id = t.user_id WHERE t.address_id IN ${IN_LIST}`,
+        [listParam(ids)],
       )
     : [];
   return c.json({
@@ -782,8 +787,23 @@ adminRoutes.delete('/invites/:id', (c) => {
 
 // ── Backup ──────────────────────────────────────────────────────────────────
 
+/** Portable export (newline-delimited JSON), streamed. Works on every runtime. */
+adminRoutes.get('/export', (c) => {
+  act(c, 'admin.export_downloaded', exportFilename());
+  return new Response(exportStream(), {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${exportFilename()}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
+/** SQLite file snapshot (Node.js only). */
 adminRoutes.get('/backup', async (c) => {
-  const snap = await platform().backup();
+  const p = platform();
+  if (!p.snapshot) throw notFound('Database snapshots are not available on this runtime. Use the export instead.');
+  const snap = await p.snapshot();
   act(c, 'admin.backup_downloaded', `${snap.data.length} bytes`);
   return new Response(new Uint8Array(snap.data), {
     headers: {
@@ -791,6 +811,48 @@ adminRoutes.get('/backup', async (c) => {
       'Content-Disposition': `attachment; filename="${snap.filename}"`,
     },
   });
+});
+
+function requireOwner(c: Context<AppEnv>) {
+  if (c.get('user').role !== 'owner') throw forbidden('Only the owner can restore backups');
+}
+
+/** Replace all data with an uploaded export. Everyone is signed out afterwards. */
+adminRoutes.post('/restore', async (c) => {
+  requireOwner(c);
+  const me = c.get('user');
+  if (!c.req.raw.body) throw badRequest('Upload an export file');
+  try {
+    const r = await restoreExport(c.req.raw.body, { allowKeyMismatch: c.req.query('allowKeyMismatch') === '1' });
+    audit(null, 'admin.backup_restored', `export from ${new Date(r.header.exportedAt).toISOString()}`, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }, clientIp(c));
+    return c.json({ ok: true, exportedAt: r.header.exportedAt, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch });
+  } catch (err) {
+    if (err instanceof RestoreError) {
+      if (err.message === 'KEY_MISMATCH') return c.json({ error: 'key_mismatch' }, 409);
+      throw badRequest(err.message);
+    }
+    throw err;
+  }
+});
+
+/** Cloudflare only: roll the whole database back to a moment in the last 30 days. */
+adminRoutes.post('/restore-point', async (c) => {
+  requireOwner(c);
+  const pit = platform().pointInTime;
+  if (!pit) throw notFound('Point-in-time recovery is only available on Cloudflare Workers');
+  const input = await body(c, z.object({ at: z.number().int() }));
+  if (input.at > now() || input.at < now() - 30 * 86_400_000) throw badRequest('Pick a time within the last 30 days');
+  try {
+    const bookmark = await pit.at(input.at);
+    await pit.restore(bookmark);
+  } catch (err) {
+    if (/does not implement point-in-time/i.test((err as Error).message)) {
+      throw badRequest('Point-in-time recovery is not available in local development (wrangler dev). It works once deployed to Cloudflare.');
+    }
+    throw err;
+  }
+  act(c, 'admin.point_in_time_restore', new Date(input.at).toISOString());
+  return c.json({ ok: true });
 });
 
 /** Send a broadcast notice to every active user's inbox (e.g. maintenance announcements). */

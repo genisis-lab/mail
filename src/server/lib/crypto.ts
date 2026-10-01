@@ -14,6 +14,11 @@ function derived() {
   return keys;
 }
 
+/** Identifies the current WREN_SECRET without revealing it (stored with backups and checked at startup). */
+export function secretFingerprint(): string {
+  return Buffer.from(crypto.hkdfSync('sha256', config.secret, 'wren', 'key-fingerprint-v1', 12)).toString('hex');
+}
+
 /** AES-256-GCM encrypt; output is "v1.<iv>.<tag>.<ciphertext>" in base64url. */
 export function encrypt(plaintext: string): string {
   const iv = crypto.randomBytes(12);

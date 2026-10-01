@@ -33,7 +33,7 @@ function fakeFetch(response: unknown = {}, status = 200, headers: Record<string,
 
 async function sampleEmail() {
   const { raw } = await buildMime({
-    from: { address: 'alice@acme.test', name: 'Alice' },
+    from: { address: 'alice@wren.test', name: 'Alice' },
     to: [{ address: 'bob@example.com', name: 'Bob' }],
     cc: [{ address: 'carol@example.com' }],
     bcc: [{ address: 'secret@example.com' }],
@@ -43,7 +43,7 @@ async function sampleEmail() {
     references: ['root@x', 'parent@x'],
     attachments: [{ filename: 'a.txt', contentType: 'text/plain', content: Buffer.from('file') }],
   });
-  return toOutboundEmail(raw, { from: 'alice@acme.test', to: ['bob@example.com', 'carol@example.com', 'secret@example.com'] });
+  return toOutboundEmail(raw, { from: 'alice@wren.test', to: ['bob@example.com', 'carol@example.com', 'secret@example.com'] });
 }
 
 function inboundReq(body: Buffer | string, contentType: string, headers: Record<string, string> = {}, url = 'https://wren.test/api/inbound/tok'): InboundRequest {
@@ -140,9 +140,9 @@ describe('outbound adapters', () => {
 
   it('Mailgun posts raw MIME as multipart', async () => {
     const { ctx, calls } = fakeFetch({ id: '<mg-1@mailgun>', message: 'Queued' });
-    const r = await getProviderDef('mailgun')!.send!({ apiKey: 'k', domain: 'mg.acme.test', region: 'eu' }, await sampleEmail(), ctx);
+    const r = await getProviderDef('mailgun')!.send!({ apiKey: 'k', domain: 'mg.wren.test', region: 'eu' }, await sampleEmail(), ctx);
     expect(r.providerMessageId).toBe('mg-1@mailgun');
-    expect(calls[0].url).toBe('https://api.eu.mailgun.net/v3/mg.acme.test/messages.mime');
+    expect(calls[0].url).toBe('https://api.eu.mailgun.net/v3/mg.wren.test/messages.mime');
     const form = calls[0].init.body as FormData;
     expect(form.getAll('to')).toHaveLength(3);
   });
@@ -188,11 +188,11 @@ describe('outbound adapters', () => {
 });
 
 describe('inbound adapters', () => {
-  const raw = 'From: Carol <carol@example.org>\r\nTo: bob@acme.test\r\nSubject: Hi\r\nMessage-ID: <m1@example.org>\r\n\r\nHello\r\n';
+  const raw = 'From: Carol <carol@example.org>\r\nTo: bob@wren.test\r\nSubject: Hi\r\nMessage-ID: <m1@example.org>\r\n\r\nHello\r\n';
 
   it('raw MIME with envelope headers', async () => {
-    const r = await getProviderDef('raw')!.receive!({}, inboundReq(raw, 'message/rfc822', { 'x-rcpt-to': 'bob@acme.test, ann@acme.test', 'x-mail-from': 'carol@example.org' }), fakeFetch().ctx);
-    expect(r.items![0].rcptTo).toEqual(['bob@acme.test', 'ann@acme.test']);
+    const r = await getProviderDef('raw')!.receive!({}, inboundReq(raw, 'message/rfc822', { 'x-rcpt-to': 'bob@wren.test, ann@wren.test', 'x-mail-from': 'carol@example.org' }), fakeFetch().ctx);
+    expect(r.items![0].rcptTo).toEqual(['bob@wren.test', 'ann@wren.test']);
     expect(r.items![0].mailFrom).toBe('carol@example.org');
     expect(r.items![0].raw.toString()).toContain('Subject: Hi');
   });
@@ -200,12 +200,12 @@ describe('inbound adapters', () => {
   it('Resend verifies the Svix signature and downloads the raw message', async () => {
     const secretBytes = crypto.randomBytes(24);
     const secret = `whsec_${secretBytes.toString('base64')}`;
-    const payload = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', to: ['bob@acme.test'] } });
+    const payload = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', to: ['bob@wren.test'] } });
     const id = 'msg_1';
     const ts = String(Math.floor(Date.now() / 1000));
     const sig = crypto.createHmac('sha256', secretBytes).update(`${id}.${ts}.${payload}`).digest('base64');
     const { ctx, calls } = fakeFetch((c: Captured) =>
-      c.url.includes('/emails/receiving/') ? { id: 'em_1', from: 'carol@example.org', to: ['bob@acme.test'], raw: { download_url: 'https://dl.test/raw' } } : raw,
+      c.url.includes('/emails/receiving/') ? { id: 'em_1', from: 'carol@example.org', to: ['bob@wren.test'], raw: { download_url: 'https://dl.test/raw' } } : raw,
     );
     const r = await getProviderDef('resend')!.receive!(
       { apiKey: 'k', webhookSecret: secret },
@@ -222,8 +222,8 @@ describe('inbound adapters', () => {
   it('Postmark JSON is rebuilt into MIME', async () => {
     const payload = {
       FromFull: { Email: 'carol@example.org', Name: 'Carol' },
-      ToFull: [{ Email: 'bob@acme.test', Name: '' }],
-      OriginalRecipient: 'bob@acme.test',
+      ToFull: [{ Email: 'bob@wren.test', Name: '' }],
+      OriginalRecipient: 'bob@wren.test',
       Subject: 'From Postmark',
       MessageID: 'pm-in-1',
       TextBody: 'plain',
@@ -235,20 +235,20 @@ describe('inbound adapters', () => {
     const text = r.items![0].raw.toString();
     expect(text).toContain('Subject: From Postmark');
     expect(text).toContain('x.txt');
-    expect(r.items![0].rcptTo).toEqual(['bob@acme.test']);
+    expect(r.items![0].rcptTo).toEqual(['bob@wren.test']);
     expect(r.items![0].verdicts?.spam).toBe('pass');
   });
 
   it('SendGrid Inbound Parse with raw MIME', async () => {
     const fd = new FormData();
     fd.set('email', raw);
-    fd.set('envelope', JSON.stringify({ to: ['bob@acme.test'], from: 'carol@example.org' }));
+    fd.set('envelope', JSON.stringify({ to: ['bob@wren.test'], from: 'carol@example.org' }));
     fd.set('SPF', 'pass');
     fd.set('spam_score', '1.2');
     const res = new Response(fd);
     const body = Buffer.from(await res.arrayBuffer());
     const r = await getProviderDef('sendgrid')!.receive!({}, inboundReq(body, res.headers.get('content-type')!), fakeFetch().ctx);
-    expect(r.items![0].rcptTo).toEqual(['bob@acme.test']);
+    expect(r.items![0].rcptTo).toEqual(['bob@wren.test']);
     expect(r.items![0].spamScore).toBe(1.2);
     expect(r.items![0].verdicts?.spf).toBe('pass');
   });
@@ -259,7 +259,7 @@ describe('inbound adapters', () => {
     const token = 'tok';
     const fd = new FormData();
     fd.set('body-mime', raw);
-    fd.set('recipient', 'bob@acme.test');
+    fd.set('recipient', 'bob@wren.test');
     fd.set('sender', 'carol@example.org');
     fd.set('timestamp', ts);
     fd.set('token', token);
@@ -267,7 +267,7 @@ describe('inbound adapters', () => {
     const res = new Response(fd);
     const body = Buffer.from(await res.arrayBuffer());
     const r = await getProviderDef('mailgun')!.receive!({ webhookSigningKey: key }, inboundReq(body, res.headers.get('content-type')!), fakeFetch().ctx);
-    expect(r.items![0].rcptTo).toEqual(['bob@acme.test']);
+    expect(r.items![0].rcptTo).toEqual(['bob@wren.test']);
     await expect(getProviderDef('mailgun')!.receive!({ webhookSigningKey: 'other' }, inboundReq(body, res.headers.get('content-type')!), fakeFetch().ctx)).rejects.toMatchObject({ status: 401 });
   });
 
@@ -285,8 +285,8 @@ describe('inbound adapters', () => {
     ).rejects.toThrow();
     const message = {
       notificationType: 'Received',
-      mail: { source: 'carol@example.org', destination: ['bob@acme.test'] },
-      receipt: { recipients: ['bob@acme.test'], spamVerdict: { status: 'PASS' }, spfVerdict: { status: 'PASS' }, action: { type: 'SNS', encoding: 'BASE64' } },
+      mail: { source: 'carol@example.org', destination: ['bob@wren.test'] },
+      receipt: { recipients: ['bob@wren.test'], spamVerdict: { status: 'PASS' }, spfVerdict: { status: 'PASS' }, action: { type: 'SNS', encoding: 'BASE64' } },
       content: Buffer.from(raw).toString('base64'),
     };
     const n = await getProviderDef('ses')!.receive!({}, inboundReq(JSON.stringify({ Type: 'Notification', Message: JSON.stringify(message) }), 'text/plain'), ctx);
@@ -295,7 +295,7 @@ describe('inbound adapters', () => {
   });
 
   it('SparkPost relay webhooks', async () => {
-    const payload = [{ msys: { relay_message: { rcpt_to: 'bob@acme.test', msg_from: 'carol@example.org', content: { email_rfc822: raw, email_rfc822_is_base64: false } } } }];
+    const payload = [{ msys: { relay_message: { rcpt_to: 'bob@wren.test', msg_from: 'carol@example.org', content: { email_rfc822: raw, email_rfc822_is_base64: false } } } }];
     const r = await getProviderDef('sparkpost')!.receive!({ relayToken: 't' }, inboundReq(JSON.stringify(payload), 'application/json', { 'x-messagesystems-webhook-token': 't' }), fakeFetch().ctx);
     expect(r.items).toHaveLength(1);
   });

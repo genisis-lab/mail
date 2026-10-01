@@ -5,6 +5,7 @@ import { badRequest, notFound, tooMany } from '../lib/http.js';
 import { getSettings } from '../settings.js';
 import { getPrefs, getUser, identities, sendLimit, sentToday, userAddresses } from '../services/users.js';
 import { getBlob, putBlob } from './blobs.js';
+import { bodyColumns, loadBody } from './body.js';
 import { buildMime, quoteHtml, escapeHtml } from './compose.js';
 import { cancelOutbox, enqueue } from './outbound.js';
 import { htmlToText, makeSnippet } from './parse.js';
@@ -66,7 +67,7 @@ function linkAttachments(userId: number, draftId: number, ids: number[]) {
 }
 
 /** Create or update a draft. Returns the draft's message id. */
-export function saveDraft(userId: number, input: DraftInput): number {
+export async function saveDraft(userId: number, input: DraftInput): Promise<number> {
   const from = pickIdentity(userId, input.from);
   const to = addrList(input.to);
   const cc = addrList(input.cc);
@@ -75,6 +76,7 @@ export function saveDraft(userId: number, input: DraftInput): number {
   const html = input.html ?? '';
   const text = htmlToText(html);
   const ts = now();
+  const body = await bodyColumns(text, html);
 
   return tx(() => {
     let draftId = input.id ?? null;
@@ -84,8 +86,8 @@ export function saveDraft(userId: number, input: DraftInput): number {
       if (d.folder !== 'drafts') throw badRequest('This message is no longer a draft');
       run(
         `UPDATE messages SET from_addr = ?, from_name = ?, identity = ?, to_json = ?, cc_json = ?, bcc_json = ?, subject = ?,
-           html_body = ?, text_body = ?, snippet = ?, date = ?, size = ? WHERE id = ?`,
-        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, html, text, makeSnippet(text, null), ts, html.length, draftId],
+           html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ? WHERE id = ?`,
+        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, html.length, draftId],
       );
     } else {
       // Thread the draft with the message it replies to / forwards.
@@ -111,9 +113,9 @@ export function saveDraft(userId: number, input: DraftInput): number {
       }
       draftId = insert(
         `INSERT INTO messages (user_id, thread_id, folder, direction, from_addr, from_name, identity, to_json, cc_json, bcc_json, subject, snippet,
-           text_body, html_body, date, size, is_read, status, in_reply_to, refs, created_at)
-         VALUES (?, ?, 'drafts', 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?)`,
-        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), text, html, ts, html.length, inReplyTo, refs, ts],
+           text_body, html_body, body_blob, date, size, is_read, status, in_reply_to, refs, created_at)
+         VALUES (?, ?, 'drafts', 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?)`,
+        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), body.text_body, body.html_body, body.body_blob, ts, html.length, inReplyTo, refs, ts],
       );
     }
     if (input.attachments) linkAttachments(userId, draftId, input.attachments);
@@ -146,6 +148,7 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   if (!user || user.status !== 'active') throw badRequest('Account is not active');
   const d = get<any>(`SELECT * FROM messages WHERE id = ? AND user_id = ? AND folder = 'drafts'`, [draftId, userId]);
   if (!d) throw notFound('Draft not found');
+  await loadBody(d);
 
   const to: Addr[] = JSON.parse(d.to_json);
   const cc: Addr[] = JSON.parse(d.cc_json);
@@ -228,8 +231,8 @@ export function cancelSend(userId: number, messageId: number): boolean {
 }
 
 /** Prefilled compose fields for reply / reply-all / forward. Nothing is saved yet. */
-export function composeTemplate(userId: number, messageId: number, mode: 'reply' | 'replyAll' | 'forward') {
-  const m = getMessage(userId, messageId);
+export async function composeTemplate(userId: number, messageId: number, mode: 'reply' | 'replyAll' | 'forward') {
+  const m = await getMessage(userId, messageId);
   if (!m) throw notFound('Message not found');
   const mine = new Set(userAddresses(userId));
   const ids = identities(userId);
@@ -310,7 +313,7 @@ export async function sendDirect(
   input: { from?: string; to: string | Addr[]; cc?: string | Addr[]; bcc?: string | Addr[]; subject: string; html?: string; text?: string },
 ) {
   const html = input.html ?? (input.text ? `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(input.text)}</pre>` : '');
-  const id = saveDraft(userId, { from: input.from, to: input.to, cc: input.cc, bcc: input.bcc, subject: input.subject, html });
+  const id = await saveDraft(userId, { from: input.from, to: input.to, cc: input.cc, bcc: input.bcc, subject: input.subject, html });
   run(`UPDATE messages SET source = 'api' WHERE id = ?`, [id]);
   return sendDraft(userId, id, { undoSeconds: 0, kind: 'api' });
 }

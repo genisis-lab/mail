@@ -1,6 +1,6 @@
 /**
- * Schema migrations, applied in order. The current version is tracked with
- * `PRAGMA user_version`. Never edit a migration that has shipped; append a
+ * Schema migrations, applied in order. The current version is tracked in the
+ * `_meta` table. Never edit a migration that has shipped; append a
  * new one instead.
  */
 export const migrations: string[] = [
@@ -326,6 +326,19 @@ export const migrations: string[] = [
     key        TEXT PRIMARY KEY,
     count      INTEGER NOT NULL,
     reset_at   INTEGER NOT NULL
+  );
+  `,
+
+  // 2: very large bodies live in blob storage (Durable Object rows max out at 2 MB).
+  `
+  ALTER TABLE messages ADD COLUMN body_blob TEXT;
+  `,
+
+  // 3: unreferenced blobs are kept for a grace period so restored backups find their files.
+  `
+  CREATE TABLE blob_tombstones (
+    key     TEXT PRIMARY KEY,
+    seen_at INTEGER NOT NULL
   );
   `,
 ];

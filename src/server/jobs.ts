@@ -1,16 +1,17 @@
-import { all, get, now, run } from './db/index.js';
+import { all, get, getMeta, now, run, setMeta } from './db/index.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
 import { collectGarbage } from './mail/blobs.js';
 import { processQueue, recoverQueue } from './mail/outbound.js';
 import { purgeMessages } from './mail/store.js';
 import { wakeSnoozed } from './mail/threads.js';
+import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
-let lastMaintenance = 0;
-let lastGc = 0;
+// Persisted, because a Durable Object loses its memory whenever it is evicted.
+const lastRun = (job: string) => Number(getMeta(`last_${job}`) ?? 0);
 
 /** Empty trash/spam past retention and drop expired sessions and old logs. */
 export function runMaintenance() {
@@ -37,13 +38,14 @@ export function runMaintenance() {
 export async function runDueWork(opts: { gc?: boolean } = {}) {
   await processQueue();
   wakeSnoozed();
+  continueSearchRebuild();
   const ts = now();
-  if (ts - lastMaintenance > HOUR) {
-    lastMaintenance = ts;
+  if (ts - lastRun('maintenance') > HOUR) {
+    setMeta('last_maintenance', ts);
     runMaintenance();
   }
-  if (opts.gc !== false && ts - lastGc > DAY) {
-    lastGc = ts;
+  if (opts.gc !== false && ts - lastRun('gc') > DAY) {
+    setMeta('last_gc', ts);
     const r = await collectGarbage();
     if (r.removed) log.info(`Blob GC removed ${r.removed} objects (${r.bytes} bytes)`);
   }
@@ -54,8 +56,9 @@ export function nextWakeAt(): number {
   const ts = now();
   const queue = get<{ t: number | null }>(`SELECT MIN(next_attempt_at) AS t FROM outbox WHERE status = 'queued'`)?.t ?? Infinity;
   const snooze = get<{ t: number | null }>(`SELECT MIN(snoozed_until) AS t FROM messages WHERE snoozed_until IS NOT NULL`)?.t ?? Infinity;
-  const maintenance = (lastMaintenance || ts) + HOUR;
-  return Math.max(ts + 500, Math.min(queue, snooze, maintenance));
+  const maintenance = (lastRun('maintenance') || ts) + HOUR;
+  const rebuild = searchRebuildPending() ? ts : Infinity;
+  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild));
 }
 
 // ── Node.js timers ──────────────────────────────────────────────────────────

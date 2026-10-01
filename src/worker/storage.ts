@@ -30,8 +30,8 @@ export function r2BlobStore(bucket: R2Bucket, prefix = 'blobs/'): BlobStore {
       const obj = await bucket.get(prefix + key);
       return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
     },
-    async delete(key) {
-      await bucket.delete(prefix + key);
+    async delete(keys) {
+      for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000).map((k) => prefix + k));
     },
     async *list() {
       let cursor: string | undefined;
@@ -73,8 +73,8 @@ export function sqlBlobStore(storage: DurableObjectStorage): BlobStore {
       }
       return out;
     },
-    async delete(key) {
-      sql.exec('DELETE FROM _blobs WHERE key = ?', key).toArray();
+    async delete(keys) {
+      for (const key of keys) sql.exec('DELETE FROM _blobs WHERE key = ?', key).toArray();
     },
     async *list() {
       const rows = sql.exec<{ key: string; size: number; uploaded: number }>('SELECT key, SUM(size) AS size, MIN(uploaded) AS uploaded FROM _blobs GROUP BY key').toArray();

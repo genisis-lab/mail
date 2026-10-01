@@ -17,6 +17,22 @@ declare module 'cloudflare:email' {
   }
 }
 
+declare module 'cloudflare:sockets' {
+  export interface SocketOptions {
+    secureTransport?: 'off' | 'on' | 'starttls';
+    allowHalfOpen?: boolean;
+  }
+  export interface Socket {
+    readonly readable: ReadableStream<Uint8Array>;
+    readonly writable: WritableStream<Uint8Array>;
+    readonly opened: Promise<unknown>;
+    readonly closed: Promise<void>;
+    close(): Promise<void>;
+    startTls(): Socket;
+  }
+  export function connect(address: { hostname: string; port: number } | string, options?: SocketOptions): Socket;
+}
+
 interface SqlStorageCursor<T = Record<string, unknown>> {
   toArray(): T[];
   one(): T;
@@ -34,12 +50,16 @@ interface DurableObjectStorage {
   transactionSync<T>(fn: () => T): T;
   getAlarm(): Promise<number | null>;
   setAlarm(time: number | Date): Promise<void>;
+  getCurrentBookmark(): Promise<string>;
+  getBookmarkForTime(timestamp: number | Date): Promise<string>;
+  onNextSessionRestoreBookmark(bookmark: string): Promise<string>;
 }
 
 interface DurableObjectState {
   storage: DurableObjectStorage;
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
   waitUntil(p: Promise<unknown>): void;
+  abort(reason?: string): void;
 }
 
 interface DurableObjectId {}

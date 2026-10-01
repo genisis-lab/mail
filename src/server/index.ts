@@ -7,6 +7,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { APP_NAME, APP_VERSION } from '../shared/brand.js';
 import { config, initConfig } from './config.js';
 import { openDb, closeDb } from './db/index.js';
+import { verifyEncryptionKey } from './services/backup.js';
 import { nodeSqlDriver } from './db/node.js';
 import { setPlatform } from './platform.js';
 import { nodePlatform } from './node-platform.js';
@@ -35,6 +36,7 @@ initConfig(process.env, { platform: 'node', resolvePath: (p) => path.resolve(p),
 const driver = nodeSqlDriver(config.dbPath);
 setPlatform(nodePlatform(driver.db));
 openDb(driver);
+config.keyMismatch = !verifyEncryptionKey();
 
 const app = createApp({
   mountStatic(app) {

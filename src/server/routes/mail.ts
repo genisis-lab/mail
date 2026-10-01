@@ -27,10 +27,10 @@ mailRoutes.get('/threads', (c) => {
   return c.json(result);
 });
 
-mailRoutes.get('/threads/:id', (c) => {
+mailRoutes.get('/threads/:id', async (c) => {
   const user = c.get('user');
   const id = intParam(c, 'id');
-  const thread = getThread(user.id, id);
+  const thread = await getThread(user.id, id);
   if (!thread) throw notFound('Conversation not found');
   // Mark read on the server, but return the pre-open state so the client can
   // expand the messages that were unread.
@@ -97,8 +97,8 @@ mailRoutes.post('/messages/:id/actions', async (c) => {
   return c.json({ ok: true });
 });
 
-mailRoutes.get('/messages/:id', (c) => {
-  const m = getMessage(c.get('user').id, intParam(c, 'id'));
+mailRoutes.get('/messages/:id', async (c) => {
+  const m = await getMessage(c.get('user').id, intParam(c, 'id'));
   if (!m) throw notFound();
   return c.json(m);
 });

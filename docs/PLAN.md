@@ -10,7 +10,8 @@
 
 ## Goal
 
-One container that a person or a small organization can run to:
+One Cloudflare Worker (or, alternatively, one container) that a person or a small
+organization can run to:
 
 1. **Host mail on any number of custom domains**: users, aliases, catch-alls,
    groups, and forwarding.
@@ -102,7 +103,7 @@ sessions, appearance, and personal API keys.
 - **Users:** create, invite, edit, suspend, delete; reset password; set
   role, quota and per-user send limits; view usage; reset 2FA.
 - **Aliases and groups:** aliases, distribution groups, and external forwards.
-- **Providers:** 18 outbound adapters, each with test send, defaults, and
+- **Providers:** 21 outbound adapters, each with test send, defaults, and
   health. Inbound endpoints come with signed URLs and per-provider setup steps.
 - **Delivery log:** outbound status with retry and cancel; inbound log with
   rejections and spam.
@@ -110,7 +111,8 @@ sessions, appearance, and personal API keys.
   enforcement, rate limits, attachment size, retention, and spam settings
   (built-in heuristics, optional rspamd).
 - **Branding:** instance name, accent colour, and login message.
-- **Audit log, backups** (hot SQLite snapshot download), and system info.
+- **Audit log, backups** (portable export and restore, point-in-time recovery on
+  Workers, SQLite snapshot on Node), and system info.
 
 ### Providers
 | Provider | Outbound | Inbound |
@@ -151,6 +153,10 @@ sessions, appearance, and personal API keys.
    Email Routing handler, alarms and cron, wrangler config.
 7. ✅ **Ops:** Dockerfile, compose, docs (Cloudflare, self-hosting, providers), tests,
    and a smoke test in a real browser on both runtimes.
+8. ✅ **Workers parity:** shared SMTP client (`cloudflare:sockets` on Workers), large
+   bodies moved to R2, a single JSON parameter per IN-list (Durable Object limit of 100),
+   a generated encryption key, streamed export and restore, point-in-time recovery, and
+   a 30-day grace period for deleted files.
 
 ## Later (post-v1)
 IMAP server for desktop clients, JMAP, and calendar and contacts sync

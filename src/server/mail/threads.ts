@@ -1,6 +1,7 @@
 import type { Addr, AttachmentInfo, Folder, MessageDetail, ThreadDetail, ThreadSummary, View } from '../../shared/types.js';
-import { all, get, now, placeholders, run, tx } from '../db/index.js';
+import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
+import { loadBody } from './body.js';
 import { buildSearch } from './search.js';
 import { purgeMessages } from './store.js';
 
@@ -94,9 +95,9 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
   const threadIds = pageRows.map((r) => r.thread_id);
   // Messages of these threads that match the view (for unread/date/snippet)…
   const inView = new Set(
-    all<{ id: number }>(`SELECT m.id FROM messages m WHERE ${whereSql} AND m.thread_id IN (${placeholders(threadIds.length)})`, [
+    all<{ id: number }>(`SELECT m.id FROM messages m WHERE ${whereSql} AND m.thread_id IN ${IN_LIST}`, [
       ...params,
-      ...threadIds,
+      listParam(threadIds),
     ]).map((r) => r.id),
   );
   // …and every visible message of the threads (for counts/participants).
@@ -106,10 +107,10 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
             m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until,
             (SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS labels
        FROM messages m
-      WHERE m.thread_id IN (${placeholders(threadIds.length)})
-        ${hideFolders.length ? `AND (m.folder NOT IN ('spam','trash') OR m.id IN (${[...inView].join(',') || 0}))` : ''}
+      WHERE m.thread_id IN ${IN_LIST}
+        ${hideFolders.length ? `AND (m.folder NOT IN ('spam','trash') OR m.id IN ${IN_LIST})` : ''}
       ORDER BY m.date ASC`,
-    threadIds,
+    hideFolders.length ? [listParam(threadIds), listParam([...inView])] : [listParam(threadIds)],
   );
   const mine = new Set(userAddresses(userId));
   const byThread = new Map<number, SummaryRow[]>();
@@ -170,8 +171,8 @@ function attachmentsFor(messageIds: number[]): Map<number, AttachmentInfo[]> {
   const map = new Map<number, AttachmentInfo[]>();
   if (!messageIds.length) return map;
   for (const a of all<any>(
-    `SELECT id, message_id, filename, content_type, size, content_id, inline FROM attachments WHERE message_id IN (${placeholders(messageIds.length)}) ORDER BY id`,
-    messageIds,
+    `SELECT id, message_id, filename, content_type, size, content_id, inline FROM attachments WHERE message_id IN ${IN_LIST} ORDER BY id`,
+    [listParam(messageIds)],
   )) {
     const list = map.get(a.message_id) ?? [];
     list.push({ id: a.id, filename: a.filename, contentType: a.content_type, size: a.size, contentId: a.content_id, inline: !!a.inline });
@@ -214,23 +215,25 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
   };
 }
 
-export function getMessage(userId: number, id: number): MessageDetail | null {
+export async function getMessage(userId: number, id: number): Promise<MessageDetail | null> {
   const r = get<any>('SELECT * FROM messages WHERE id = ? AND user_id = ?', [id, userId]);
   if (!r) return null;
+  await loadBody(r);
   const atts = attachmentsFor([id]).get(id) ?? [];
   const labels = all<{ label_id: number }>('SELECT label_id FROM message_labels WHERE message_id = ?', [id]).map((l) => l.label_id);
   return toDetail(r, atts, labels);
 }
 
-export function getThread(userId: number, threadId: number): ThreadDetail | null {
+export async function getThread(userId: number, threadId: number): Promise<ThreadDetail | null> {
   const t = get<{ id: number; subject: string }>('SELECT id, subject FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
   if (!t) return null;
   let rows = all<any>(`SELECT * FROM messages WHERE thread_id = ? AND folder NOT IN ('spam','trash') ORDER BY date ASC, id ASC`, [threadId]);
   if (!rows.length) rows = all<any>('SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC, id ASC', [threadId]);
+  for (const r of rows) await loadBody(r);
   const ids = rows.map((r) => r.id);
   const atts = attachmentsFor(ids);
   const labelRows = ids.length
-    ? all<{ message_id: number; label_id: number }>(`SELECT message_id, label_id FROM message_labels WHERE message_id IN (${placeholders(ids.length)})`, ids)
+    ? all<{ message_id: number; label_id: number }>(`SELECT message_id, label_id FROM message_labels WHERE message_id IN ${IN_LIST}`, [listParam(ids)])
     : [];
   const labelMap = new Map<number, number[]>();
   for (const l of labelRows) labelMap.set(l.message_id, [...(labelMap.get(l.message_id) ?? []), l.label_id]);
@@ -249,8 +252,8 @@ export type ThreadAction =
 function threadMessageIds(userId: number, threadIds: number[], extra = ''): number[] {
   if (!threadIds.length) return [];
   return all<{ id: number }>(
-    `SELECT id FROM messages WHERE user_id = ? AND thread_id IN (${placeholders(threadIds.length)}) AND folder != 'drafts' ${extra}`,
-    [userId, ...threadIds],
+    `SELECT id FROM messages WHERE user_id = ? AND thread_id IN ${IN_LIST} AND folder != 'drafts' ${extra}`,
+    [userId, listParam(threadIds)],
   ).map((r) => r.id);
 }
 
@@ -260,7 +263,7 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
     const ids = (extra = '') => threadMessageIds(userId, threadIds, extra);
     const upd = (sql: string, list: number[], ...p: unknown[]) => {
       if (!list.length) return 0;
-      return run(`UPDATE messages SET ${sql} WHERE id IN (${placeholders(list.length)})`, [...p, ...list]).changes;
+      return run(`UPDATE messages SET ${sql} WHERE id IN ${IN_LIST}`, [...p, listParam(list)]).changes;
     };
     switch (action.type) {
       case 'read':

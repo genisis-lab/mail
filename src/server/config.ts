@@ -29,6 +29,8 @@ export const config = {
   dbPath: './data/wren.db',
   blobDir: './data/blobs',
   secret: '',
+  /** WREN_SECRET differs from the key the data was encrypted with. */
+  keyMismatch: false,
   publicUrl: 'http://localhost:3000',
   trustProxy: false,
   webDir: './dist/web',

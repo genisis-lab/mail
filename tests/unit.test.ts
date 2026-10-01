@@ -125,13 +125,13 @@ describe('MIME builder', async () => {
   it('round-trips unicode headers, bodies, attachments and inline images', async () => {
     const long = 'Résumé — '.repeat(30);
     const raw = buildMimeMessage({
-      from: { address: 'zoë@acme.test', name: 'Zoë Ünïcode' },
+      from: { address: 'zoë@wren.test', name: 'Zoë Ünïcode' },
       to: [{ address: 'bob@example.com', name: 'Bob, Jr.' }],
       cc: [{ address: 'c@example.com' }],
       subject: `Grüße aus Köln 🎉 ${long}`,
       text: `Hallo!\n${long}\n.`,
       html: `<p>Hallo <img src="cid:logo@wren"></p><p>${long}</p>`,
-      messageId: 'abc@acme.test',
+      messageId: 'abc@wren.test',
       inReplyTo: 'parent@x',
       references: ['root@x', 'parent@x'],
       headers: { 'X-Test': 'yes' },
@@ -145,9 +145,9 @@ describe('MIME builder', async () => {
     for (const line of text.split('\r\n')) expect(line.length).toBeLessThanOrEqual(998);
     const p = await parseMail(raw);
     expect(p.subject).toBe(`Grüße aus Köln 🎉 ${long}`.trim());
-    expect(p.from).toEqual({ address: 'zoë@acme.test', name: 'Zoë Ünïcode' });
+    expect(p.from).toEqual({ address: 'zoë@wren.test', name: 'Zoë Ünïcode' });
     expect(p.to).toEqual([{ address: 'bob@example.com', name: 'Bob, Jr.' }]);
-    expect(p.messageId).toBe('abc@acme.test');
+    expect(p.messageId).toBe('abc@wren.test');
     expect(p.references).toEqual(['root@x', 'parent@x']);
     expect(p.text?.trim()).toBe(`Hallo!\n${long}\n.`);
     expect(p.html).toContain('cid:logo@wren');
