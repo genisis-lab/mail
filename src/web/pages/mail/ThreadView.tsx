@@ -46,6 +46,7 @@ import { useLabels, useSession } from '../../lib/session';
 import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
 import { InviteCard } from './InviteCard';
+import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
@@ -543,6 +544,7 @@ function MessageCard({
       toast({ message: (err as Error).message, tone: 'error' });
     }
   };
+  const [preview, setPreview] = useState<number | null>(null);
   const visibleAttachments = m.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`));
   const scheduled = m.status === 'queued' && m.sendAt && m.sendAt > Date.now() + 30_000;
 
@@ -817,30 +819,38 @@ function MessageCard({
               {visibleAttachments.length} attachment{visibleAttachments.length > 1 ? 's' : ''}
             </p>
             <div className="flex flex-wrap gap-3">
-              {visibleAttachments.map((a) => (
-                <a
-                  key={a.id}
-                  href={`/api/attachments/${a.id}`}
-                  className="group relative flex h-[120px] w-[180px] flex-col overflow-hidden rounded-xl border border-line bg-panel2 hover:shadow-panel"
-                  title={`Download ${a.filename}`}
-                >
-                  <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-                    {a.contentType.startsWith('image/') ? (
-                      <img src={`/api/attachments/${a.id}?inline=1`} alt="" className="h-full w-full object-cover" loading="lazy" />
-                    ) : (
-                      <AttachmentIcon type={a.contentType} name={a.filename} />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 border-t border-line bg-panel px-2.5 py-1.5">
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{a.filename}</span>
-                    <span className="shrink-0 text-[11px] text-muted">{fileSize(a.size)}</span>
-                  </div>
-                  <span className="absolute top-2 right-2 hidden rounded-full bg-black/60 p-1.5 text-white group-hover:block">
+              {visibleAttachments.map((a, i) => (
+                <div key={a.id} className="group relative h-[120px] w-[180px] max-sm:w-[calc(50%-6px)]">
+                  <button
+                    type="button"
+                    onClick={() => setPreview(i)}
+                    className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-line bg-panel2 text-left hover:shadow-panel focus-visible:shadow-panel"
+                    aria-label={`${previewKind(a) === 'none' ? 'Open' : 'Preview'} ${a.filename}, ${fileSize(a.size)}`}
+                  >
+                    <span className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
+                      {previewKind(a) === 'image' ? (
+                        <img src={`/api/attachments/${a.id}?inline=1`} alt="" className="h-full w-full object-cover" loading="lazy" />
+                      ) : (
+                        <AttachmentIcon type={a.contentType} name={a.filename} />
+                      )}
+                    </span>
+                    <span className="flex w-full items-center gap-2 border-t border-line bg-panel px-2.5 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium">{a.filename}</span>
+                      <span className="shrink-0 text-[11px] text-muted">{fileSize(a.size)}</span>
+                    </span>
+                  </button>
+                  <a
+                    href={`/api/attachments/${a.id}`}
+                    className="absolute top-2 right-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100"
+                    aria-label={`Download ${a.filename}`}
+                    title="Download"
+                  >
                     <Download className="size-3.5" />
-                  </span>
-                </a>
+                  </a>
+                </div>
               ))}
             </div>
+            <AttachmentViewer items={visibleAttachments} index={preview} onIndex={setPreview} onClose={() => setPreview(null)} />
           </div>
         )}
       </div>
@@ -851,7 +861,7 @@ function MessageCard({
 function AttachmentIcon({ type, name }: { type: string; name: string }) {
   const ext = name.split('.').pop()?.toUpperCase().slice(0, 4) ?? '';
   const Icon = type.startsWith('image/') ? FileImage : /zip|compressed|tar|rar|7z/.test(type) ? FileArchive : FileText;
-  const color = /pdf/.test(type) ? '#d93025' : /sheet|excel|csv/.test(type) ? '#188038' : /word|document/.test(type) ? '#1a73e8' : /presentation|powerpoint/.test(type) ? '#e8710a' : 'var(--muted)';
+  const color = /pdf/.test(type) ? '#b3261e' : /sheet|excel|csv/.test(type) ? '#137333' : /word|document/.test(type) ? '#1558b0' : /presentation|powerpoint/.test(type) ? '#b45309' : 'var(--muted)';
   return (
     <div className="flex flex-col items-center gap-1">
       <Icon className="size-10" style={{ color }} strokeWidth={1.5} />

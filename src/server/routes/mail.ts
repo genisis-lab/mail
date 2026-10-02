@@ -219,6 +219,8 @@ attachmentRoutes.get('/:id', async (c) => {
   // Only render "safe" types inline; everything else downloads.
   const safeInline = /^(image\/(png|jpe?g|gif|webp|bmp|avif)|application\/pdf|text\/plain|audio\/|video\/)/i.test(a.content_type);
   const disposition = inline && safeInline ? 'inline' : 'attachment';
+  // Browsers won't run their PDF viewer in a sandboxed document, so an inline PDF gets a strict policy without the sandbox.
+  const pdf = inline && /^application\/pdf/i.test(a.content_type);
   return new Response(new Uint8Array(data), {
     headers: {
       'Content-Type': safeInline ? a.content_type : 'application/octet-stream',
@@ -226,7 +228,8 @@ attachmentRoutes.get('/:id', async (c) => {
       'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(a.filename)}`,
       'Cache-Control': 'private, max-age=86400',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+      'Content-Security-Policy': pdf ? "default-src 'none'; object-src 'self'; frame-ancestors 'self'" : "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+      ...(pdf ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
     },
   });
 });
