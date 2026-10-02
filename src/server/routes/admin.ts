@@ -39,7 +39,7 @@ function storage() {
 adminRoutes.get('/overview', async (c) => {
   const ts = now();
   const day = 86_400_000;
-  const users = get<any>(`SELECT COUNT(*) AS total, SUM(status = 'active') AS active, SUM(status = 'suspended') AS suspended, SUM(role != 'user') AS admins FROM users`);
+  const users = get<any>(`SELECT COUNT(*) AS total, SUM(status = 'active') AS active, SUM(status = 'suspended') AS suspended, SUM(role != 'user') AS admins FROM users WHERE kind = 'person'`);
   const domains = get<any>('SELECT COUNT(*) AS total, SUM(verified_at IS NOT NULL) AS verified, SUM(enabled) AS enabled FROM domains');
   const since = ts - 14 * day;
   const startOfDay = (t: number) => Math.floor(t / day) * day;
@@ -136,7 +136,7 @@ adminRoutes.get('/users', (c) => {
   const rows = all<any>(
     `SELECT u.*, (SELECT COUNT(*) FROM addresses a WHERE a.user_id = u.id AND a.kind = 'alias') AS aliases,
             (SELECT COUNT(*) FROM messages m WHERE m.user_id = u.id) AS messages
-       FROM users u ${q ? 'WHERE u.email LIKE ? OR u.name LIKE ?' : ''} ORDER BY u.created_at`,
+       FROM users u WHERE u.kind = 'person' ${q ? 'AND (u.email LIKE ? OR u.name LIKE ?)' : ''} ORDER BY u.created_at`,
     q ? [`%${q}%`, `%${q}%`] : [],
   );
   return c.json({ users: rows.map(userDto) });

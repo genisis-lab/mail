@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { badRequest, notFound } from '../lib/http.js';
+import type { Context } from 'hono';
+import { badRequest, forbidden, notFound } from '../lib/http.js';
 import { get } from '../db/index.js';
 import { cancelSend, composeTemplate, deleteDraft, saveDraft, sendDraft, sendDirect, storeUpload } from '../mail/send.js';
 import { getMessage } from '../mail/threads.js';
@@ -61,19 +62,28 @@ composeRoutes.delete('/drafts/:id', (c) => {
   return c.json({ ok: true });
 });
 
+/** In a shared mailbox, members without send permission can read and draft but not send. */
+function sendOptions(c: Context<AppEnv>) {
+  const box = c.get('mailbox');
+  if (box && !box.canSend) throw forbidden('You can read this shared mailbox, but not send from it');
+  return { sentBy: c.get('actor')?.id ?? c.get('user').id };
+}
+
 composeRoutes.post('/drafts/:id/send', async (c) => {
   const user = c.get('user');
+  const opts = sendOptions(c);
   const { sendAt } = await body(c, z.object({ sendAt: z.number().int().nullable().optional() }));
-  const res = await sendDraft(user.id, intParam(c, 'id'), { sendAt: sendAt ?? null });
+  const res = await sendDraft(user.id, intParam(c, 'id'), { sendAt: sendAt ?? null, ...opts });
   return c.json(res);
 });
 
 /** Save + send in one call. */
 composeRoutes.post('/send', async (c) => {
   const user = c.get('user');
+  const opts = sendOptions(c);
   const input = await body(c, draftSchema.extend({ draftId: z.number().int().positive().nullable().optional(), sendAt: z.number().int().nullable().optional() }));
   const id = await saveDraft(user.id, { ...input, id: input.draftId ?? null });
-  const res = await sendDraft(user.id, id, { sendAt: input.sendAt ?? null });
+  const res = await sendDraft(user.id, id, { sendAt: input.sendAt ?? null, ...opts });
   return c.json(res);
 });
 

@@ -16,6 +16,12 @@ import { checklist, startRoundtrip } from '../services/checklist.js';
 import { CloudflareApiError, cloudflareToken, listZones, saveCloudflareToken, setUpDomainOnCloudflare } from '../services/cloudflare-setup.js';
 import { openAlerts, recentAlerts, resolveAlert, runAlertChecks, type AlertKind } from '../services/alerts.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { forbidden } from '../lib/http.js';
+import { hashPassword, randomToken } from '../lib/crypto.js';
+import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
+import { purgeMessages } from '../mail/store.js';
+import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
+import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -266,3 +272,270 @@ adminOpsRoutes.get('/log-filters', (c) =>
   }),
 );
 
+
+// ── User detail ─────────────────────────────────────────────────────────────
+
+adminOpsRoutes.get('/users/:id/detail', (c) => {
+  const id = intParam(c, 'id');
+  const u = getUser(id);
+  if (!u || u.kind !== 'person') throw notFound();
+  const folders = all<{ folder: string; c: number; bytes: number }>('SELECT folder, COUNT(*) AS c, COALESCE(SUM(size), 0) AS bytes FROM messages WHERE user_id = ? GROUP BY folder', [id]);
+  const attachments = get<{ c: number; bytes: number }>('SELECT COUNT(*) AS c, COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE user_id = ?', [id]);
+  const addresses = all<any>(
+    `SELECT a.id, a.address, a.kind, a.enabled, a.can_send, a.created_by FROM addresses a WHERE a.user_id = ?
+     UNION ALL
+     SELECT a.id, a.address, 'group' AS kind, a.enabled, a.can_send, NULL FROM addresses a JOIN address_targets t ON t.address_id = a.id WHERE t.user_id = ? AND a.kind = 'group'
+     ORDER BY kind, address`,
+    [id, id],
+  );
+  const shared = all<any>(
+    `SELECT b.id, b.email, b.name, mm.can_send FROM mailbox_members mm JOIN users b ON b.id = mm.mailbox_id WHERE mm.user_id = ? ORDER BY b.email`,
+    [id],
+  );
+  const sessions = all<any>(
+    'SELECT id, ip, user_agent, created_at, last_seen_at FROM sessions WHERE user_id = ? AND expires_at > ? AND mfa_pending = 0 ORDER BY last_seen_at DESC',
+    [id, now()],
+  ).map((s) => ({ id: s.id.slice(0, 16), ip: s.ip, userAgent: s.user_agent, createdAt: s.created_at, lastSeenAt: s.last_seen_at }));
+  const signIns = all<any>(
+    `SELECT action, ip, created_at, details FROM audit_log WHERE user_id = ? AND action IN ('auth.login','auth.login_failed','auth.password_reset','auth.account_setup') ORDER BY id DESC LIMIT 25`,
+    [id],
+  ).map((r) => ({ action: r.action, ip: r.ip, at: r.created_at, mfa: !!(r.details && JSON.parse(r.details).mfa) }));
+  const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
+  return c.json({
+    user: {
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      role: u.role,
+      status: u.status,
+      createdAt: u.created_at,
+      lastLoginAt: u.last_login_at,
+      passwordChangedAt: u.password_changed_at,
+      totpEnabled: !!u.totp_enabled,
+      recoveryEmail: u.recovery_email,
+      recoveryVerified: !!u.recovery_verified_at,
+      usedBytes: u.used_bytes,
+      quotaBytes: quotaBytes(u),
+      customQuota: u.quota_bytes !== null,
+      sendLimitPerDay: sendLimit(u),
+      customSendLimit: u.send_limit_per_day !== null,
+      sentToday,
+    },
+    storage: { folders, attachments },
+    addresses,
+    shared: shared.map((b) => ({ id: b.id, email: b.email, name: b.name, canSend: !!b.can_send })),
+    sessions,
+    signIns,
+  });
+});
+
+adminOpsRoutes.delete('/users/:id/sessions/:sid', (c) => {
+  const id = intParam(c, 'id');
+  const sid = c.req.param('sid');
+  if (!/^[a-f0-9]{16}$/.test(sid)) throw badRequest('Invalid session');
+  const r = run('DELETE FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ?', [id, sid]);
+  act(c, 'admin.user_session_revoked', String(id));
+  return c.json({ revoked: r.changes });
+});
+
+// ── Bulk actions ────────────────────────────────────────────────────────────
+
+const bulkSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(1000),
+  action: z.enum(['suspend', 'activate', 'quota', 'sendLimit', 'signout', 'delete']),
+  /** MB for quota, messages/day for sendLimit; null resets to the default. */
+  value: z.number().int().min(0).nullable().optional(),
+});
+
+adminOpsRoutes.post('/users/bulk', async (c) => {
+  const input = await body(c, bulkSchema);
+  const me = c.get('user');
+  const results: { id: number; email: string; ok: boolean; error?: string }[] = [];
+  for (const id of [...new Set(input.ids)]) {
+    const u = getUser(id);
+    if (!u || u.kind !== 'person') {
+      results.push({ id, email: '', ok: false, error: 'not found' });
+      continue;
+    }
+    const skip = (error: string) => results.push({ id, email: u.email, ok: false, error });
+    if (u.role === 'owner' && me.role !== 'owner') {
+      skip('only the owner can change the owner');
+      continue;
+    }
+    if (id === me.id && ['suspend', 'delete'].includes(input.action)) {
+      skip('you can’t do that to your own account');
+      continue;
+    }
+    if (u.role === 'owner' && ['suspend', 'delete'].includes(input.action)) {
+      skip('owners can’t be suspended or deleted');
+      continue;
+    }
+    switch (input.action) {
+      case 'suspend':
+        run(`UPDATE users SET status = 'suspended' WHERE id = ?`, [id]);
+        run('DELETE FROM sessions WHERE user_id = ?', [id]);
+        break;
+      case 'activate':
+        run(`UPDATE users SET status = 'active' WHERE id = ?`, [id]);
+        break;
+      case 'quota':
+        run('UPDATE users SET quota_bytes = ? WHERE id = ?', [input.value ? input.value * 1024 * 1024 : null, id]);
+        break;
+      case 'sendLimit':
+        run('UPDATE users SET send_limit_per_day = ? WHERE id = ?', [input.value ?? null, id]);
+        break;
+      case 'signout':
+        run('DELETE FROM sessions WHERE user_id = ?', [id]);
+        break;
+      case 'delete':
+        purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
+        run('DELETE FROM users WHERE id = ?', [id]);
+        break;
+    }
+    results.push({ id, email: u.email, ok: true });
+  }
+  act(c, `admin.users_bulk_${input.action}`, `${results.filter((r) => r.ok).length} user(s)`, { value: input.value ?? null });
+  return c.json({ results });
+});
+
+// ── CSV import (the browser parses the file; rows arrive as JSON) ───────────
+
+const importRow = z.object({
+  email: z.string().max(254),
+  name: z.string().max(100).default(''),
+  password: z.string().max(256).optional(),
+  role: z.enum(['user', 'admin']).optional(),
+  quotaMb: z.number().int().min(1).nullable().optional(),
+  sendLimitPerDay: z.number().int().min(0).nullable().optional(),
+  setupEmail: z.string().max(254).optional(),
+});
+
+function validateRow(r: z.infer<typeof importRow>, seen: Set<string>): string | null {
+  const email = normalizeEmail(r.email);
+  if (!isEmail(email)) return 'invalid email address';
+  if (seen.has(email)) return 'duplicate row';
+  if (!get('SELECT 1 FROM domains WHERE name = ?', [domainOf(email)])) return `domain ${domainOf(email)} isn’t hosted here`;
+  if (get('SELECT 1 FROM addresses WHERE address = ?', [email]) || get('SELECT 1 FROM users WHERE email = ?', [email])) return 'address already exists';
+  if (r.setupEmail && !isEmail(r.setupEmail.trim())) return 'invalid setup email';
+  if (!r.password && !r.setupEmail) return 'needs a password or a setup email';
+  if (r.password) {
+    try {
+      validatePassword(r.password);
+    } catch (err) {
+      return (err as Error).message.toLowerCase();
+    }
+  }
+  return null;
+}
+
+adminOpsRoutes.post('/users/import', async (c) => {
+  // Password hashing is CPU-heavy: the browser sends large files in batches of up to 100.
+  const input = await body(c, z.object({ rows: z.array(importRow).min(1).max(100), dryRun: z.boolean().default(false) }));
+  const seen = new Set<string>();
+  const results: { row: number; email: string; ok: boolean; error?: string; setupUrl?: string | null }[] = [];
+  for (const [i, r] of input.rows.entries()) {
+    const email = normalizeEmail(r.email);
+    const error = validateRow(r, seen);
+    seen.add(email);
+    if (error || input.dryRun) {
+      results.push({ row: i + 1, email, ok: !error, error: error ?? undefined });
+      continue;
+    }
+    try {
+      const id = await createUser({
+        email,
+        name: r.name.trim() || email.split('@')[0],
+        password: r.password || `${randomToken(24)}${randomToken(8)}`,
+        role: r.role ?? 'user',
+        quotaBytes: r.quotaMb ? r.quotaMb * 1024 * 1024 : null,
+        sendLimitPerDay: r.sendLimitPerDay ?? null,
+      });
+      let setupUrl: string | null = null;
+      const setupEmail = r.setupEmail?.trim().toLowerCase();
+      if (setupEmail) {
+        run('UPDATE users SET recovery_email = ? WHERE id = ?', [setupEmail, id]);
+        if (!r.password) setupUrl = await sendSetupLink(getUser(id)!, setupEmail);
+      }
+      await welcomeUser(id);
+      results.push({ row: i + 1, email, ok: true, setupUrl });
+    } catch (err) {
+      results.push({ row: i + 1, email, ok: false, error: (err as Error).message });
+    }
+  }
+  if (!input.dryRun) act(c, 'admin.users_imported', `${results.filter((r) => r.ok).length} user(s)`);
+  return c.json({ results });
+});
+
+// ── Shared mailboxes ────────────────────────────────────────────────────────
+
+const memberSchema = z.array(z.object({ userId: z.number().int().positive(), canSend: z.boolean().default(true) })).max(500);
+
+function sharedDto(b: any) {
+  const members = all<any>(
+    `SELECT u.id, u.email, u.name, mm.can_send FROM mailbox_members mm JOIN users u ON u.id = mm.user_id WHERE mm.mailbox_id = ? ORDER BY u.email`,
+    [b.id],
+  );
+  return {
+    id: b.id,
+    address: b.email,
+    name: b.name,
+    status: b.status,
+    usedBytes: b.used_bytes,
+    quotaBytes: quotaBytes(b),
+    unread: get<{ c: number }>(`SELECT COUNT(DISTINCT thread_id) AS c FROM messages WHERE user_id = ? AND folder = 'inbox' AND is_read = 0`, [b.id])?.c ?? 0,
+    members: members.map((m) => ({ userId: m.id, email: m.email, name: m.name, canSend: !!m.can_send })),
+  };
+}
+
+function setMembers(mailboxId: number, members: z.infer<typeof memberSchema>) {
+  run('DELETE FROM mailbox_members WHERE mailbox_id = ?', [mailboxId]);
+  for (const m of members) {
+    const u = getUser(m.userId);
+    if (!u || u.kind !== 'person') throw badRequest(`Unknown member ${m.userId}`);
+    run('INSERT INTO mailbox_members (mailbox_id, user_id, can_send, created_at) VALUES (?, ?, ?, ?)', [mailboxId, m.userId, m.canSend ? 1 : 0, now()]);
+  }
+}
+
+adminOpsRoutes.get('/shared-mailboxes', (c) => c.json({ mailboxes: all<any>(`SELECT * FROM users WHERE kind = 'shared' ORDER BY email`).map(sharedDto) }));
+
+adminOpsRoutes.post('/shared-mailboxes', async (c) => {
+  const input = await body(c, z.object({ address: z.string().max(254), name: z.string().min(1).max(100), members: memberSchema.default([]), quotaMb: z.number().int().min(1).nullable().optional() }));
+  const id = await createUser({
+    email: input.address,
+    name: input.name,
+    // Never used: shared mailboxes can't sign in.
+    password: `${randomToken(24)}${randomToken(8)}`,
+    quotaBytes: input.quotaMb ? input.quotaMb * 1024 * 1024 : null,
+  });
+  run(`UPDATE users SET kind = 'shared', password_hash = ? WHERE id = ?`, [await hashPassword(randomToken(32)), id]);
+  setMembers(id, input.members);
+  act(c, 'admin.shared_mailbox_created', normalizeEmail(input.address), { members: input.members.length });
+  return c.json({ mailbox: sharedDto(getUser(id)) });
+});
+
+adminOpsRoutes.put('/shared-mailboxes/:id', async (c) => {
+  const id = intParam(c, 'id');
+  const b = getUser(id);
+  if (!b || b.kind !== 'shared') throw notFound();
+  const input = await body(c, z.object({ name: z.string().min(1).max(100).optional(), members: memberSchema.optional(), quotaMb: z.number().int().min(1).nullable().optional(), status: z.enum(['active', 'suspended']).optional() }));
+  if (input.name !== undefined) {
+    run('UPDATE users SET name = ? WHERE id = ?', [input.name, id]);
+    run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [input.name, id]);
+  }
+  if (input.quotaMb !== undefined) run('UPDATE users SET quota_bytes = ? WHERE id = ?', [input.quotaMb ? input.quotaMb * 1024 * 1024 : null, id]);
+  if (input.status) run('UPDATE users SET status = ? WHERE id = ?', [input.status, id]);
+  if (input.members) setMembers(id, input.members);
+  act(c, 'admin.shared_mailbox_updated', b.email);
+  return c.json({ mailbox: sharedDto(getUser(id)) });
+});
+
+adminOpsRoutes.delete('/shared-mailboxes/:id', (c) => {
+  const id = intParam(c, 'id');
+  const b = getUser(id);
+  if (!b || b.kind !== 'shared') throw notFound();
+  if (c.get('user').role !== 'owner' && c.get('user').role !== 'admin') throw forbidden();
+  purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
+  run('DELETE FROM users WHERE id = ?', [id]);
+  act(c, 'admin.shared_mailbox_deleted', b.email);
+  return c.json({ ok: true });
+});

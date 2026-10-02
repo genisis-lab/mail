@@ -140,6 +140,8 @@ export interface SendOptions {
   /** Override the user's undo-send delay (API sends use 0). */
   undoSeconds?: number;
   kind?: 'user' | 'api';
+  /** Person who pressed Send (differs from the mailbox owner in shared mailboxes). */
+  sentBy?: number;
 }
 
 /** Turn a draft into a queued outgoing message. */
@@ -189,15 +191,15 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   });
   const rawBlob = await putBlob(raw);
   const ts = now();
-  const undo = opts.undoSeconds ?? getPrefs(userId).undoSendSeconds;
+  const undo = opts.undoSeconds ?? getPrefs(opts.sentBy ?? userId).undoSendSeconds;
   const scheduled = !!opts.sendAt && opts.sendAt > ts + 30_000;
   const sendAt = scheduled ? opts.sendAt! : ts + Math.max(0, Math.min(undo, 30)) * 1000;
 
   tx(() => {
     run(
       `UPDATE messages SET folder = 'sent', status = 'queued', message_id = ?, raw_blob = ?, size = ?, date = ?, send_at = ?,
-         is_scheduled = ?, from_addr = ?, from_name = ?, last_error = NULL WHERE id = ?`,
-      [messageId, rawBlob, raw.length, scheduled ? sendAt : ts, sendAt, scheduled ? 1 : 0, from.address, from.name, draftId],
+         is_scheduled = ?, from_addr = ?, from_name = ?, last_error = NULL, sent_by = ? WHERE id = ?`,
+      [messageId, rawBlob, raw.length, scheduled ? sendAt : ts, sendAt, scheduled ? 1 : 0, from.address, from.name, opts.sentBy ?? userId, draftId],
     );
     // A reply to a thread that is otherwise only a draft keeps the thread subject in sync.
     run('UPDATE threads SET last_date = MAX(last_date, ?) WHERE id = ?', [ts, d.thread_id]);

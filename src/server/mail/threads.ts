@@ -212,6 +212,8 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     inReplyTo: r.in_reply_to,
     references: r.refs,
     identity: r.identity,
+    // In a shared mailbox, who on the team sent this.
+    sentBy: r.sent_by && r.sent_by !== r.user_id && r.sent_by_email ? { name: r.sent_by_name ?? '', email: r.sent_by_email } : null,
   };
 }
 
@@ -227,8 +229,9 @@ export async function getMessage(userId: number, id: number): Promise<MessageDet
 export async function getThread(userId: number, threadId: number): Promise<ThreadDetail | null> {
   const t = get<{ id: number; subject: string }>('SELECT id, subject FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
   if (!t) return null;
-  let rows = all<any>(`SELECT * FROM messages WHERE thread_id = ? AND folder NOT IN ('spam','trash') ORDER BY date ASC, id ASC`, [threadId]);
-  if (!rows.length) rows = all<any>('SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC, id ASC', [threadId]);
+  const cols = 'm.*, sb.name AS sent_by_name, sb.email AS sent_by_email FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by';
+  let rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? AND m.folder NOT IN ('spam','trash') ORDER BY m.date ASC, m.id ASC`, [threadId]);
+  if (!rows.length) rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? ORDER BY m.date ASC, m.id ASC`, [threadId]);
   for (const r of rows) await loadBody(r);
   const ids = rows.map((r) => r.id);
   const atts = attachmentsFor(ids);

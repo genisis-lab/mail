@@ -21,7 +21,11 @@ export interface SessionRow {
 
 export type AppEnv = {
   Variables: {
+    /** The mailbox being acted on: the signed-in user, or a shared mailbox they belong to. */
     user: UserRow;
+    /** The person who is signed in (differs from `user` inside a shared mailbox). */
+    actor: UserRow;
+    mailbox: { id: number; canSend: boolean } | null;
     session: SessionRow | null;
     apiKeyId: number | null;
   };
@@ -98,6 +102,26 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
 };
 
 /** Like requireUser, but blocks everything except 2FA setup when policy demands it. */
+/**
+ * Lets mail routes act on a shared mailbox the signed-in user belongs to,
+ * selected with the X-Wren-Mailbox header (or ?mailbox= for plain links).
+ */
+export const actAsMailbox: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const actor = c.get('user');
+  c.set('actor', actor);
+  c.set('mailbox', null);
+  const raw = c.req.header('x-wren-mailbox') ?? c.req.query('mailbox');
+  if (raw && Number(raw) !== actor.id) {
+    const id = Number(raw);
+    const member = Number.isInteger(id) && id > 0 ? get<{ can_send: number }>('SELECT can_send FROM mailbox_members WHERE mailbox_id = ? AND user_id = ?', [id, actor.id]) : undefined;
+    const box = member ? getUser(id) : undefined;
+    if (!member || !box || box.kind !== 'shared' || box.status !== 'active') throw forbidden('You don’t have access to that mailbox');
+    c.set('user', box);
+    c.set('mailbox', { id, canSend: !!member.can_send });
+  }
+  await next();
+};
+
 export const requireUserReady: MiddlewareHandler<AppEnv> = async (c, next) => {
   const s = loadSession(c);
   if (!s || s.session.mfa_pending) throw unauthorized();

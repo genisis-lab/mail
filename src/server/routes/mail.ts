@@ -145,7 +145,11 @@ export const attachmentRoutes = new Hono<AppEnv>();
 
 attachmentRoutes.get('/:id', async (c) => {
   const user = c.get('user');
-  const a = get<any>('SELECT * FROM attachments WHERE id = ? AND user_id = ?', [intParam(c, 'id'), user.id]);
+  const id = intParam(c, 'id');
+  // Links (images, downloads) carry no mailbox header, so also allow shared mailboxes the person belongs to.
+  const a =
+    get<any>('SELECT * FROM attachments WHERE id = ? AND user_id = ?', [id, user.id]) ??
+    get<any>('SELECT a.* FROM attachments a JOIN mailbox_members mm ON mm.mailbox_id = a.user_id WHERE a.id = ? AND mm.user_id = ?', [id, c.get('actor').id]);
   if (!a) throw notFound();
   const data = await getBlob(a.blob);
   const inline = c.req.query('inline') === '1';

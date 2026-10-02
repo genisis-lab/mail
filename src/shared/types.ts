@@ -121,6 +121,8 @@ export interface AttachmentInfo {
 }
 
 export interface MessageDetail {
+  /** In a shared mailbox: the teammate who sent this message. */
+  sentBy?: { name: string; email: string } | null;
   id: number;
   threadId: number;
   folder: Folder;

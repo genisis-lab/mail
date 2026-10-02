@@ -86,6 +86,19 @@ accountRoutes.post('/password', async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Shared mailboxes this person can open ───────────────────────────────────
+
+accountRoutes.get('/mailboxes', (c) => {
+  const rows = all<any>(
+    `SELECT b.id, b.email, b.name, mm.can_send,
+            (SELECT COUNT(DISTINCT thread_id) FROM messages m WHERE m.user_id = b.id AND m.folder = 'inbox' AND m.is_read = 0) AS unread
+       FROM mailbox_members mm JOIN users b ON b.id = mm.mailbox_id
+      WHERE mm.user_id = ? AND b.kind = 'shared' AND b.status = 'active' ORDER BY b.name, b.email`,
+    [c.get('user').id],
+  );
+  return c.json({ mailboxes: rows.map((r) => ({ id: r.id, address: r.email, name: r.name, canSend: !!r.can_send, unread: r.unread })) });
+});
+
 // ── Recovery email (for "Forgot password?") ─────────────────────────────────
 
 accountRoutes.get('/recovery', (c) => {
