@@ -6,6 +6,7 @@ import { ingest } from '../mail/ingest.js';
 import { providerContext } from '../mail/outbound.js';
 import { getProviderDef } from '../providers/registry.js';
 import { ProviderError, type InboundRequest } from '../providers/types.js';
+import { recordDeliveryEvents } from '../services/delivery-events.js';
 import { insert, now } from '../db/index.js';
 
 const log = logger('inbound');
@@ -62,6 +63,7 @@ async function handle(c: any) {
 
   try {
     const result = await def.receive(cfg, req, providerContext);
+    if (result.events?.length) await recordDeliveryEvents(provider.id, result.events);
     const outcome = { accepted: [] as string[], rejected: [] as { rcpt: string; reason: string }[], delivered: 0 };
     for (const item of result.items ?? []) {
       const r = await ingest(item.raw, {

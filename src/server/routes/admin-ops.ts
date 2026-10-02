@@ -22,6 +22,7 @@ import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
+import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -119,7 +120,7 @@ adminOpsRoutes.get('/delivery-log', (c) => {
   const where: string[] = [];
   const params: unknown[] = [];
   const event = c.req.query('event');
-  if (event === 'problems') where.push(`l.event IN ('deferred','rejected','failed')`);
+  if (event === 'problems') where.push(`l.event IN ('deferred','rejected','failed','bounced','complained','suppressed')`);
   else if (event) {
     where.push('l.event = ?');
     params.push(event);
@@ -262,6 +263,26 @@ adminOpsRoutes.get('/inbound-log/:id', async (c) => {
     delivered: msg ? { folder: msg.folder, mailbox: msg.mailbox, spamScore: msg.spam_score, authResults: msg.auth_results ? JSON.parse(msg.auth_results) : null } : null,
     headers: msg ? await headersOf(msg.raw_blob) : null,
   });
+});
+
+// ── Suppression list ────────────────────────────────────────────────────────
+
+adminOpsRoutes.get('/suppressions', (c) => c.json({ items: listSuppressions((c.req.query('q') ?? '').trim()) }));
+
+adminOpsRoutes.post('/suppressions', async (c) => {
+  const { address, detail } = await body(c, z.object({ address: z.string().max(254), detail: z.string().max(300).default('') }));
+  const a = normalizeEmail(address);
+  if (!isEmail(a)) throw badRequest('Enter a valid email address');
+  suppress(a, 'manual', detail);
+  act(c, 'admin.suppression_added', a);
+  return c.json({ ok: true });
+});
+
+adminOpsRoutes.delete('/suppressions/:address', (c) => {
+  const a = normalizeEmail(decodeURIComponent(c.req.param('address')));
+  if (!unsuppress(a)) throw notFound();
+  act(c, 'admin.suppression_removed', a);
+  return c.json({ ok: true });
 });
 
 /** Domains and users for the log filters. */

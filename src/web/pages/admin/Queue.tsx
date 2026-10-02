@@ -20,6 +20,10 @@ const STATUS_TONE: Record<string, 'ok' | 'warn' | 'danger' | 'neutral' | 'accent
   rejected: 'danger',
   error: 'danger',
   cancelled: 'neutral',
+  bounced: 'danger',
+  complained: 'danger',
+  delayed: 'warn',
+  suppressed: 'neutral',
 };
 
 export function QueuePage() {
@@ -107,6 +111,93 @@ export function QueuePage() {
   );
 }
 
+interface Suppression {
+  address: string;
+  reason: 'bounce' | 'complaint' | 'manual';
+  detail: string;
+  createdAt: number;
+}
+
+const REASONS: Record<Suppression['reason'], { label: string; tone: 'danger' | 'warn' | 'neutral' }> = {
+  bounce: { label: 'hard bounce', tone: 'danger' },
+  complaint: { label: 'marked as spam', tone: 'warn' },
+  manual: { label: 'added by an admin', tone: 'neutral' },
+};
+
+/** Addresses Wren won't mail: they hard-bounced, reported spam, or were added here. */
+function Suppressions() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [q, setQ] = useState('');
+  const [add, setAdd] = useState('');
+  const search = useDebounced(q.trim());
+  const list = useQuery({ queryKey: ['admin', 'suppressions', search], queryFn: () => api.get<{ items: Suppression[] }>(`/api/admin/suppressions${qs({ q: search })}`).then((r) => r.items) });
+  const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'suppressions'] });
+  return (
+    <div>
+      <p className="mb-4 max-w-2xl text-sm text-muted">
+        Wren stops mailing an address that hard-bounces or marks a message as spam, which protects your sending reputation. Senders get a clear notice instead. Delivery events come from your provider’s webhooks (Resend: email.bounced and email.complained).
+      </p>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="relative w-72 max-sm:w-full">
+          <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
+          <Input className="pl-9" placeholder="Find an address" aria-label="Find a suppressed address" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <form
+          className="flex flex-wrap gap-2 max-sm:w-full"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await api.post('/api/admin/suppressions', { address: add.trim() });
+              setAdd('');
+              refresh();
+              toast('Address suppressed');
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            }
+          }}
+        >
+          <Input type="email" className="w-64 max-sm:flex-1" placeholder="Block an address" aria-label="Address to block" value={add} onChange={(e) => setAdd(e.target.value)} />
+          <Button type="submit" disabled={!add.trim()}>
+            Block
+          </Button>
+        </form>
+      </div>
+      {list.isLoading ? (
+        <Spinner />
+      ) : !list.data?.length ? (
+        <Empty title={search ? 'No suppressed address matches' : 'No suppressed addresses'}>Addresses that bounce or report spam will show up here.</Empty>
+      ) : (
+        <Table head={['Address', 'Why', 'Since', '']}>
+          {list.data.map((s) => (
+            <tr key={s.address}>
+              <td className="font-medium break-all">{s.address}</td>
+              <td>
+                <Badge tone={REASONS[s.reason].tone}>{REASONS[s.reason].label}</Badge>
+                {s.detail && <p className="mt-1 line-clamp-2 text-xs text-muted">{s.detail}</p>}
+              </td>
+              <td className="text-xs whitespace-nowrap text-muted">{relativeTime(s.createdAt)}</td>
+              <td className="text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    await api.del(`/api/admin/suppressions/${encodeURIComponent(s.address)}`);
+                    refresh();
+                    toast(`${s.address} can be mailed again`);
+                  }}
+                >
+                  Remove
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
+    </div>
+  );
+}
+
 /** A search box that only reports after the person pauses typing. */
 function useDebounced<T>(value: T, ms = 300): T {
   const [v, setV] = useState(value);
@@ -123,7 +214,7 @@ interface Page<T> {
 }
 
 export function LogsPage() {
-  const [tab, setTab] = useState<'delivery' | 'inbound'>('delivery');
+  const [tab, setTab] = useState<'delivery' | 'inbound' | 'suppressed'>('delivery');
   const [q, setQ] = useState('');
   const [event, setEvent] = useState('');
   const [status, setStatus] = useState('');
@@ -160,9 +251,14 @@ export function LogsPage() {
           tabs={[
             { value: 'delivery', label: 'Outbound' },
             { value: 'inbound', label: 'Inbound' },
+            { value: 'suppressed', label: 'Suppressed addresses' },
           ]}
         />
       </div>
+      {tab === 'suppressed' ? (
+        <Suppressions />
+      ) : (
+      <>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative w-72 max-sm:w-full">
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
@@ -175,6 +271,10 @@ export function LogsPage() {
             <option value="sent">Sent</option>
             <option value="delivered">Delivered</option>
             <option value="deferred">Deferred</option>
+            <option value="delayed">Delayed</option>
+            <option value="bounced">Bounced</option>
+            <option value="complained">Marked as spam</option>
+            <option value="suppressed">Suppressed</option>
             <option value="rejected">Rejected</option>
             <option value="failed">Failed</option>
           </Select>
@@ -276,6 +376,8 @@ export function LogsPage() {
             Load older entries
           </Button>
         </div>
+      )}
+      </>
       )}
       <LogDetail target={detail} onClose={() => setDetail(null)} />
     </div>

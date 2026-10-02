@@ -65,6 +65,9 @@ describe('setup checklist and round-trip test', () => {
     const { raw } = await buildMime({ from: { address: 'admin@wren.test', name: 'Ada' }, to: [{ address: 'admin@wren.test' }], subject: parsed.subject, html: parsed.html ?? '' });
     await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'resend' });
     expect(await roundtrip()).toMatchObject({ status: 'done' });
+    // It doesn't clutter the inbox.
+    const back = get<{ folder: string; is_read: number }>(`SELECT folder, is_read FROM messages WHERE subject = ? AND direction = 'in' ORDER BY id DESC LIMIT 1`, [parsed.subject])!;
+    expect(back).toEqual({ folder: 'archive', is_read: 1 });
   });
 
   it('recognises a test that came back with no marker at all, from its subject and sender', async () => {

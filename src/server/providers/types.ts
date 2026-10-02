@@ -68,9 +68,22 @@ export interface InboundRequest {
 }
 
 /** A webhook can respond with messages to ingest, or a direct HTTP response (e.g. a handshake). */
-export type InboundResult =
-  | { items: InboundItem[]; response?: { status: number; body: unknown } }
-  | { items?: undefined; response: { status: number; body: unknown } };
+/** What happened to a message after the provider accepted it (from its event webhooks). */
+export interface DeliveryEvent {
+  /** The id the provider returned when Wren sent the message (outbox.provider_message_id). */
+  providerMessageId: string;
+  type: 'delivered' | 'bounced' | 'complained' | 'delayed';
+  recipients: string[];
+  /** For bounces: true when the address can't receive mail (hard bounce). */
+  permanent?: boolean;
+  detail?: string;
+}
+
+export interface InboundResult {
+  items?: InboundItem[];
+  events?: DeliveryEvent[];
+  response?: { status: number; body: unknown };
+}
 
 export interface ProviderContext {
   fetch: typeof fetch;

@@ -64,6 +64,22 @@ export const postmark: ProviderDefinition<PostmarkConfig> = {
 
   async receive(_cfg, req) {
     const p = req.json<any>();
+    // Delivery status webhooks (Bounce, Delivery, SpamComplaint) can share this URL.
+    if (p?.RecordType === 'Bounce' || p?.RecordType === 'Delivery' || p?.RecordType === 'SpamComplaint') {
+      const hard = ['HardBounce', 'BadEmailAddress', 'ManuallyDeactivated', 'Blocked', 'SpamNotification'].includes(p.Type);
+      return {
+        events: [
+          {
+            providerMessageId: p.MessageID,
+            type: p.RecordType === 'Bounce' ? 'bounced' : p.RecordType === 'Delivery' ? 'delivered' : 'complained',
+            recipients: [p.Email ?? p.Recipient].filter(Boolean),
+            permanent: p.RecordType === 'Bounce' ? hard : undefined,
+            detail: p.RecordType === 'Bounce' ? [p.Type, p.Description].filter(Boolean).join(': ') : p.Details,
+          },
+        ],
+        response: { status: 200, body: { ok: true } },
+      };
+    }
     const verdicts: Record<string, string> = {};
     const headerList: { Name: string; Value: string }[] = p?.Headers ?? [];
     const spamScoreHeader = headerList.find((h) => h.Name.toLowerCase() === 'x-spam-score')?.Value;

@@ -495,11 +495,7 @@ export function ThreadList() {
           ))}
           </div>
         )}
-        {!list.isLoading && threads.length > 0 && (
-          <div className="px-4 py-6 text-center text-xs text-faint">
-            {counters.data && view === 'inbox' && counters.data.inbox === 0 ? 'Inbox zero — nice work.' : ''}
-          </div>
-        )}
+        {!list.isLoading && threads.length > 0 && <div className="h-20" aria-hidden />}
       </div>
 
       <LabelDialog label={labelDialog ? { name: '' } : null} onClose={() => setLabelDialog(false)} onCreated={(l) => void act({ type: 'label', labelId: l.id })} />

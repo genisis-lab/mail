@@ -11,6 +11,7 @@ import { getBlob } from './blobs.js';
 import { getHeader, parseMail } from './parse.js';
 import { storeMessage } from './store.js';
 import { escapeHtml } from './compose.js';
+import { suppressionFor, suppressionReason } from '../services/suppressions.js';
 
 const log = logger('outbound');
 
@@ -216,8 +217,19 @@ async function deliver(job: OutboxRow) {
   const settings = getSettings();
   // Round-trip tests ('test') must leave through the provider even when addressed to ourselves.
   const local = settings['mail.localDelivery'] && job.kind !== 'test' ? recipients.filter((r) => isHostedDomain(domainOf(r))) : [];
-  const external = recipients.filter((r) => !local.includes(r));
+  let external = recipients.filter((r) => !local.includes(r));
   const failures: { rcpt: string; reason: string }[] = [];
+  // Addresses that hard-bounced or reported spam aren't mailed again (round-trip tests excepted).
+  if (job.kind !== 'test') {
+    for (const r of external) {
+      const s = suppressionFor(r);
+      if (!s) continue;
+      const reason = suppressionReason(s);
+      failures.push({ rcpt: r, reason });
+      logDelivery(job, 'suppressed', null, [r], reason);
+    }
+    external = external.filter((r) => !failures.some((f) => f.rcpt === r));
+  }
   let providerMessageId: string | null = null;
   let usedProvider: number | null = null;
 

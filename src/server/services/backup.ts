@@ -19,7 +19,7 @@ import { indexMessage } from '../mail/store.js';
 export const EXPORT_FORMAT = 'wren-export';
 
 /** Never exported: sessions (everyone signs in again), rate-limit counters and internal state. */
-const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones']);
+const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'webauthn_challenges', 'known_devices', 'backups']);
 
 export interface ExportHeader {
   format: typeof EXPORT_FORMAT;

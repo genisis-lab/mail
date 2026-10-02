@@ -24,6 +24,13 @@ export function verifyStandardWebhook(secret: string, headers: Headers, body: Bu
   });
 }
 
+const RESEND_EVENTS: Record<string, 'delivered' | 'bounced' | 'complained' | 'delayed'> = {
+  'email.delivered': 'delivered',
+  'email.bounced': 'bounced',
+  'email.complained': 'complained',
+  'email.delivery_delayed': 'delayed',
+};
+
 export const resend: ProviderDefinition<ResendConfig> = {
   type: 'resend',
   name: 'Resend',
@@ -48,7 +55,7 @@ export const resend: ProviderDefinition<ResendConfig> = {
   ],
   outboundSetup: 'Verify your domain in the Resend dashboard (Domains), then paste a sending API key.',
   inboundSetup:
-    'In Resend, enable receiving on your domain and add the MX record it shows. Then go to Webhooks → Add endpoint, paste {{url}} and select the email.received event. Copy the signing secret into this provider. The API key needs permission to read received emails.',
+    'In Resend, enable receiving on your domain and add the MX record it shows. Then go to Webhooks → Add endpoint, paste {{url}} and select the email.received event. Also select email.delivered, email.bounced, email.complained and email.delivery_delayed to see delivery status in Wren’s logs. Copy the signing secret into this provider. The API key needs permission to read received emails.',
 
   async send(cfg, email, ctx) {
     requireFields(cfg, ['apiKey']);
@@ -91,7 +98,25 @@ export const resend: ProviderDefinition<ResendConfig> = {
     if (cfg.webhookSecret && !verifyStandardWebhook(cfg.webhookSecret, req.headers, req.body)) {
       throw new ProviderError('Invalid webhook signature', true, 401);
     }
-    const event = req.json<{ type: string; data: { email_id: string; to?: string[]; from?: string } }>();
+    const event = req.json<{ type: string; data: { email_id: string; to?: string[]; from?: string; bounce?: { message?: string; type?: string; subType?: string } } }>();
+    // Delivery status for mail Wren sent (add these events to the same Resend webhook).
+    const status = RESEND_EVENTS[event?.type ?? ''];
+    if (status) {
+      const bounce = event.data?.bounce;
+      return {
+        events: [
+          {
+            providerMessageId: event.data?.email_id,
+            type: status,
+            recipients: event.data?.to ?? [],
+            // Resend reports SES-style bounce types; only "Permanent" means the address can't receive mail.
+            permanent: status === 'bounced' ? (bounce?.type ?? 'Permanent').toLowerCase() === 'permanent' : undefined,
+            detail: [bounce?.subType, bounce?.message].filter(Boolean).join(': '),
+          },
+        ],
+        response: { status: 200, body: { ok: true } },
+      };
+    }
     if (event?.type !== 'email.received') return { response: { status: 200, body: { ignored: event?.type ?? 'unknown' } } };
     requireFields(cfg, ['apiKey']);
     const auth = { Authorization: `Bearer ${cfg.apiKey}` };

@@ -42,8 +42,8 @@ export function systemTemplate(opts: { title: string; paragraphs: string[]; butt
     ? `<p style="margin:22px 0"><a href="${escapeHtml(opts.button.url)}" style="background:${accent};color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;display:inline-block">${escapeHtml(opts.button.label)}</a></p>
 <p style="margin:0 0 14px;font-size:13px;color:#555">Or paste this link into your browser:<br><span style="word-break:break-all">${escapeHtml(opts.button.url)}</span></p>`
     : '';
+  // No header line above the title: inbox previews would start with the instance name.
   return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#1f2328;max-width:560px">
-<p style="margin:0 0 18px;font-weight:700;font-size:16px">${name}</p>
 <h2 style="margin:0 0 14px;font-size:20px">${escapeHtml(opts.title)}</h2>${p}${button}
 <p style="margin:24px 0 0;font-size:12px;color:#777">${opts.footer ?? `Sent by ${name}.`}</p></div>`;
 }

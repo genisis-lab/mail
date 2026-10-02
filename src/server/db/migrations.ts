@@ -447,4 +447,100 @@ export const migrations: string[] = [
     received_at INTEGER
   );
   `,
+
+  // 5: delivery status and suppressions, alias "via", catch-all control, inbox
+  //    categories and unsubscribe, passkeys and sign-in alerts, automatic backups.
+  `
+  ALTER TABLE messages ADD COLUMN delivered_to TEXT;
+  ALTER TABLE messages ADD COLUMN category TEXT NOT NULL DEFAULT 'primary';
+  ALTER TABLE messages ADD COLUMN list_unsubscribe TEXT;
+  ALTER TABLE messages ADD COLUMN list_unsubscribe_post TEXT;
+  CREATE INDEX idx_messages_user_category ON messages(user_id, folder, category, date DESC);
+  CREATE INDEX idx_outbox_provider_message ON outbox(provider_message_id);
+
+  CREATE TABLE suppressions (
+    address     TEXT PRIMARY KEY COLLATE NOCASE,
+    reason      TEXT NOT NULL CHECK (reason IN ('bounce','complaint','manual')),
+    detail      TEXT NOT NULL DEFAULT '',
+    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+    created_at  INTEGER NOT NULL
+  );
+
+  CREATE TABLE blocked_recipients (
+    address    TEXT PRIMARY KEY COLLATE NOCASE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE catchall_hits (
+    address      TEXT PRIMARY KEY COLLATE NOCASE,
+    domain_id    INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+    count        INTEGER NOT NULL DEFAULT 0,
+    first_at     INTEGER NOT NULL,
+    last_at      INTEGER NOT NULL,
+    last_from    TEXT NOT NULL DEFAULT '',
+    last_subject TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX idx_catchall_domain ON catchall_hits(domain_id, last_at DESC);
+
+  CREATE TABLE category_rules (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender     TEXT NOT NULL COLLATE NOCASE,
+    category   TEXT NOT NULL CHECK (category IN ('primary','updates','promotions')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, sender)
+  );
+
+  CREATE TABLE unsubscribes (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender     TEXT NOT NULL COLLATE NOCASE,
+    method     TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, sender)
+  );
+
+  CREATE TABLE passkeys (
+    id            INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key    TEXT NOT NULL,
+    algorithm     INTEGER NOT NULL,
+    sign_count    INTEGER NOT NULL DEFAULT 0,
+    name          TEXT NOT NULL DEFAULT '',
+    transports    TEXT NOT NULL DEFAULT '[]',
+    created_at    INTEGER NOT NULL,
+    last_used_at  INTEGER
+  );
+  CREATE INDEX idx_passkeys_user ON passkeys(user_id);
+
+  CREATE TABLE webauthn_challenges (
+    challenge  TEXT PRIMARY KEY,
+    user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK (purpose IN ('register','login')),
+    expires_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE known_devices (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_hash TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT '',
+    first_seen  INTEGER NOT NULL,
+    last_seen   INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_hash)
+  );
+
+  CREATE TABLE backups (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL CHECK (kind IN ('auto','manual')),
+    status      TEXT NOT NULL CHECK (status IN ('running','done','failed')),
+    parts       TEXT NOT NULL DEFAULT '[]',
+    state       TEXT NOT NULL DEFAULT '{}',
+    rows        INTEGER NOT NULL DEFAULT 0,
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    error       TEXT,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  `,
 ];

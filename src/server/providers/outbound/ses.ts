@@ -92,6 +92,23 @@ export const ses: ProviderDefinition<SesConfig> = {
     if (msg?.Type !== 'Notification') return { response: { status: 200, body: { ignored: msg?.Type ?? 'unknown' } } };
 
     const n = typeof msg.Message === 'string' ? JSON.parse(msg.Message) : msg.Message;
+    // Delivery status for mail Wren sent (SES configuration set or identity notifications → this SNS topic).
+    const kind = n?.notificationType ?? n?.eventType;
+    if (kind === 'Bounce' || kind === 'Complaint' || kind === 'Delivery') {
+      const id = n.mail?.messageId;
+      const event =
+        kind === 'Bounce'
+          ? {
+              type: 'bounced' as const,
+              recipients: (n.bounce?.bouncedRecipients ?? []).map((r: any) => r.emailAddress),
+              permanent: n.bounce?.bounceType === 'Permanent',
+              detail: [n.bounce?.bounceSubType, n.bounce?.bouncedRecipients?.[0]?.diagnosticCode].filter(Boolean).join(': '),
+            }
+          : kind === 'Complaint'
+            ? { type: 'complained' as const, recipients: (n.complaint?.complainedRecipients ?? []).map((r: any) => r.emailAddress) }
+            : { type: 'delivered' as const, recipients: n.delivery?.recipients ?? [], detail: n.delivery?.smtpResponse };
+      return { events: id ? [{ providerMessageId: id, ...event }] : [], response: { status: 200, body: { ok: true } } };
+    }
     if (n?.notificationType !== 'Received') return { response: { status: 200, body: { ignored: n?.notificationType } } };
 
     let raw: Buffer;

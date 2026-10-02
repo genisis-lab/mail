@@ -126,6 +126,14 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
     }
   }
 
+  // A recognised delivery test has done its job: keep it out of the inbox (it stays searchable in All Mail).
+  if (roundtrip && p.messageId && result.delivered) {
+    run(`UPDATE messages SET folder = 'archive', is_read = 1 WHERE message_id = ? AND direction = 'in' AND user_id IN (SELECT value FROM json_each(?))`, [
+      p.messageId,
+      JSON.stringify([...userTargets.keys()]),
+    ]);
+  }
+
   // Group members outside this server.
   if (externalTargets.size && !(spam?.isSpam ?? false)) {
     const byVia = new Map<string, string[]>();
