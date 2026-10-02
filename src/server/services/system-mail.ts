@@ -12,14 +12,25 @@ import { putBlob } from '../mail/blobs.js';
 import { buildMime, escapeHtml } from '../mail/compose.js';
 import { enqueue } from '../mail/outbound.js';
 
-/** The From address for system mail: no-reply@ a hosted domain (the recipient's, if hosted). */
+const hosted = (domain: string) => !!get('SELECT 1 FROM domains WHERE name = ? AND enabled = 1', [domain.toLowerCase()]);
+
+/**
+ * The From address for system mail: the one chosen in Settings & policies, or
+ * no-reply@ a hosted domain (the recipient's, if hosted). A chosen address
+ * whose domain is no longer hosted falls back to the automatic one, since the
+ * provider couldn't send it.
+ */
 export function systemSender(domainHint?: string): { address: string; name: string } | null {
+  const s = getSettings();
+  const name = s['mail.systemName'].trim() || s['instance.name'];
+  const chosen = s['mail.systemFrom'].trim().toLowerCase();
+  if (chosen && hosted(domainOf(chosen))) return { address: chosen, name };
   const hinted = domainHint ? get<{ name: string }>('SELECT name FROM domains WHERE name = ? AND enabled = 1', [domainHint.toLowerCase()]) : undefined;
   const d =
     hinted ??
     get<{ name: string }>('SELECT name FROM domains WHERE enabled = 1 ORDER BY verified_at IS NULL, id LIMIT 1');
   if (!d) return null;
-  return { address: `no-reply@${d.name}`, name: getSettings()['instance.name'] };
+  return { address: `no-reply@${d.name}`, name };
 }
 
 /** Minimal, mail-client-safe HTML layout with an optional call-to-action button. */
@@ -56,7 +67,7 @@ export async function sendSystemEmail(mail: SystemEmail): Promise<number | null>
     to: mail.to.map((address) => ({ address })),
     subject: mail.subject,
     html: mail.html,
-    replyTo: mail.replyTo ?? null,
+    replyTo: mail.replyTo ?? (getSettings()['mail.systemReplyTo'].trim() || null),
     headers: { 'Auto-Submitted': 'auto-generated', ...(mail.headers ?? {}) },
   });
   const id = enqueue({ kind: 'notice', userId: mail.userId ?? null, mailFrom: from.address, recipients: mail.to, rawBlob: await putBlob(raw), subject: mail.subject });

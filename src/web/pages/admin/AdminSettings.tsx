@@ -61,6 +61,7 @@ export function AdminSettingsPage() {
       </div>
 
       {tab === 'general' && (
+        <div className="space-y-6">
         <Card title="Branding">
           <div className="grid max-w-xl gap-4">
             <Field label="Instance name">
@@ -82,6 +83,8 @@ export function AdminSettingsPage() {
             </Field>
           </div>
         </Card>
+        <SystemMailCard draft={draft} set={set} />
+        </div>
       )}
 
       {tab === 'registration' && <RegistrationTab draft={draft} set={set} />}
@@ -201,6 +204,36 @@ export function AdminSettingsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Who password resets, invites, recovery confirmations and alerts come from. */
+function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
+  const domains = useDomains();
+  const sender = useQuery({ queryKey: ['admin', 'settings', 'sender'], queryFn: () => api.get<{ systemSender: { address: string; name: string } | null }>('/api/admin/settings').then((r) => r.systemSender) });
+  const firstDomain = domains.data?.find((d) => d.enabled)?.name ?? 'yourdomain.com';
+  return (
+    <Card
+      title="System emails"
+      description="Password resets, sign-in and invite links, recovery-email confirmations and alerts."
+    >
+      <div className="grid max-w-xl gap-4">
+        {sender.data && (
+          <p className="rounded-xl bg-panel2 px-3 py-2 text-[13px]">
+            Sent as <b>{sender.data.name}</b> &lt;{sender.data.address}&gt;
+          </p>
+        )}
+        <Field label="Send from" help={`An address on a domain hosted here, so your provider can send it. Blank: no-reply@${firstDomain}.`}>
+          <Input type="email" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`no-reply@${firstDomain}`} />
+        </Field>
+        <Field label="Sender name" help={`Blank: the instance name (${draft['instance.name']}).`}>
+          <Input value={draft['mail.systemName']} onChange={(e) => set('mail.systemName', e.target.value)} placeholder={draft['instance.name']} />
+        </Field>
+        <Field label="Replies go to" help="Optional. When someone replies to a system email, it goes here (for example contact@ or support@).">
+          <Input type="email" value={draft['mail.systemReplyTo']} onChange={(e) => set('mail.systemReplyTo', e.target.value)} placeholder="No Reply-To" />
+        </Field>
+      </div>
+    </Card>
   );
 }
 

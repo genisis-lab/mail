@@ -326,3 +326,30 @@ describe('DNS guidance follows the sending provider', () => {
     }
   });
 });
+
+describe('system email sender', () => {
+  const lastNotice = async () => (await outbox('notice')).at(-1)!;
+  const header = (raw: string, name: string) => new RegExp(`^${name}: (.+)$`, 'mi').exec(raw)?.[1]?.trim();
+
+  it('defaults to no-reply@ and can be set to another hosted address, name and reply-to', async () => {
+    await h.call('POST', '/api/admin/invites', { sendTo: 'friend@example.org', days: 7 });
+    let raw = (await lastNotice()).raw;
+    expect(header(raw, 'From')).toBe('Fernhill <no-reply@wren.test>');
+    expect(header(raw, 'Reply-To')).toBeUndefined();
+
+    expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': 'contact@elsewhere.example' })).body.error).toMatch(/isn’t a domain hosted here/);
+    expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemName': 'Bad\r\nBcc: x' })).status).toBe(400);
+    const saved = await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': ' Contact@Wren.test ', 'mail.systemName': 'No reply', 'mail.systemReplyTo': 'contact@wren.test' });
+    expect(saved.status).toBe(200);
+    expect((await h.call('GET', '/api/admin/settings')).body.systemSender).toEqual({ address: 'contact@wren.test', name: 'No reply' });
+
+    await h.call('POST', '/api/admin/invites', { sendTo: 'friend2@example.org', days: 7 });
+    raw = (await lastNotice()).raw;
+    expect(header(raw, 'From')).toBe('No reply <contact@wren.test>');
+    expect(header(raw, 'Reply-To')).toBe('contact@wren.test');
+
+    // Back to automatic.
+    await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': '', 'mail.systemName': '', 'mail.systemReplyTo': '' });
+    expect((await h.call('GET', '/api/admin/settings')).body.systemSender).toEqual({ address: 'no-reply@wren.test', name: 'Fernhill' });
+  });
+});

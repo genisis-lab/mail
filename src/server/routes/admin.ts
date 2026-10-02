@@ -21,6 +21,7 @@ import { buildMime } from '../mail/compose.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
 import { purgeMessages } from '../mail/store.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { systemSender } from '../services/system-mail.js';
 
 export const adminRoutes = new Hono<AppEnv>();
 // Set by createApp(): Workers freeze Date.now() at module load.
@@ -705,7 +706,7 @@ function settingsDto() {
   return { ...s, 'cloudflare.apiToken': s['cloudflare.apiToken'] ? MASK : '', 'spam.rspamdPassword': s['spam.rspamdPassword'] ? MASK : '' };
 }
 
-adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS }));
+adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS, systemSender: systemSender() }));
 
 adminRoutes.put('/settings', async (c) => {
   const input = (await c.req.json().catch(() => null)) as Partial<Settings> | null;
@@ -718,6 +719,22 @@ adminRoutes.put('/settings', async (c) => {
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');
+  if ('mail.systemFrom' in input) {
+    const from = String(input['mail.systemFrom'] ?? '').trim().toLowerCase();
+    if (from && !isEmail(from)) throw badRequest('Enter a valid address to send system emails from');
+    if (from && !get('SELECT 1 FROM domains WHERE name = ? AND enabled = 1', [domainOf(from)])) throw badRequest(`${domainOf(from)} isn’t a domain hosted here, so your provider can’t send from it`);
+    input['mail.systemFrom'] = from;
+  }
+  if ('mail.systemReplyTo' in input) {
+    const to = String(input['mail.systemReplyTo'] ?? '').trim().toLowerCase();
+    if (to && !isEmail(to)) throw badRequest('Enter a valid address for replies to system emails');
+    input['mail.systemReplyTo'] = to;
+  }
+  if ('mail.systemName' in input) {
+    const name = String(input['mail.systemName'] ?? '').trim();
+    if (name.length > 100 || /[\r\n<>"]/.test(name)) throw badRequest('Use a plain sender name, up to 100 characters');
+    input['mail.systemName'] = name;
+  }
   try {
     setSettings(input);
   } catch (err) {

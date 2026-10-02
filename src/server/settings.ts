@@ -32,6 +32,12 @@ export const DEFAULT_SETTINGS = {
   'mail.allowExternalForwarding': true,
   'mail.maxRetries': 6,
   'mail.inboundRejectUnknown': true,
+  /** Sender of password links, invites and alerts. Empty: no-reply@ a hosted domain. */
+  'mail.systemFrom': '',
+  /** Display name for system mail. Empty: the instance name. */
+  'mail.systemName': '',
+  /** Where replies to system mail go. Empty: no Reply-To. */
+  'mail.systemReplyTo': '',
 
   'users.welcomeMessage': true,
   'aliases.selfService': false,
