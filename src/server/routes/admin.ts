@@ -346,6 +346,8 @@ adminRoutes.post('/domains', async (c) => {
   if (get('SELECT 1 FROM domains WHERE name = ?', [input.name])) throw conflict('That domain is already added');
   const id = insert('INSERT INTO domains (name, verify_token, provider_id, created_at) VALUES (?, ?, ?, ?)', [input.name, randomToken(12), input.providerId ?? null, now()]);
   act(c, 'admin.domain_added', input.name);
+  // First DNS check right away, so the domain page shows real status.
+  await checkDomainDns(id).catch(() => {});
   return c.json({ id });
 });
 
@@ -689,25 +691,6 @@ adminRoutes.post('/outbox/:id/cancel', (c) => {
   return c.json({ ok: true });
 });
 
-adminRoutes.get('/delivery-log', (c) => {
-  const rows = all<any>(
-    `SELECT l.*, p.name AS provider_name, u.email AS user_email, m.subject FROM delivery_log l
-       LEFT JOIN providers p ON p.id = l.provider_id LEFT JOIN users u ON u.id = l.user_id LEFT JOIN messages m ON m.id = l.message_id
-      ORDER BY l.id DESC LIMIT 300`,
-  );
-  return c.json({ items: rows });
-});
-
-adminRoutes.get('/inbound-log', (c) => {
-  const status = c.req.query('status');
-  const rows = all<any>(
-    `SELECT l.*, p.name AS provider_name FROM inbound_log l LEFT JOIN providers p ON p.id = l.provider_id
-      ${status ? 'WHERE l.status = ?' : ''} ORDER BY l.id DESC LIMIT 300`,
-    status ? [status] : [],
-  );
-  return c.json({ items: rows });
-});
-
 adminRoutes.get('/audit', (c) => {
   const rows = all<any>(`SELECT a.*, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 500`);
   return c.json({ items: rows.map((r) => ({ ...r, details: r.details ? JSON.parse(r.details) : null })) });
@@ -715,11 +698,22 @@ adminRoutes.get('/audit', (c) => {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 
-adminRoutes.get('/settings', (c) => c.json({ settings: getSettings(), defaults: DEFAULT_SETTINGS }));
+/** Settings for the admin UI. Secrets never leave the server. */
+function settingsDto() {
+  const s = getSettings();
+  return { ...s, 'cloudflare.apiToken': s['cloudflare.apiToken'] ? MASK : '', 'spam.rspamdPassword': s['spam.rspamdPassword'] ? MASK : '' };
+}
+
+adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS }));
 
 adminRoutes.put('/settings', async (c) => {
   const input = (await c.req.json().catch(() => null)) as Partial<Settings> | null;
   if (!input || typeof input !== 'object') throw badRequest('Invalid settings');
+  // The Cloudflare token has its own endpoint (it is verified and encrypted there).
+  delete (input as Record<string, unknown>)['cloudflare.apiToken'];
+  if (input['spam.rspamdPassword'] === MASK) delete (input as Record<string, unknown>)['spam.rspamdPassword'];
+  if ('alerts.externalTo' in input && input['alerts.externalTo'] && !isEmail(String(input['alerts.externalTo']))) throw badRequest('Enter a valid address for alert emails');
+  if ('aliases.maxPerUser' in input && (Number(input['aliases.maxPerUser']) < 0 || Number(input['aliases.maxPerUser']) > 100)) throw badRequest('Alias limit must be between 0 and 100');
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');
@@ -729,7 +723,7 @@ adminRoutes.put('/settings', async (c) => {
     throw badRequest((err as Error).message);
   }
   act(c, 'admin.settings_updated', Object.keys(input).join(', '));
-  return c.json({ settings: getSettings() });
+  return c.json({ settings: settingsDto() });
 });
 
 // ── Global blocklist ────────────────────────────────────────────────────────

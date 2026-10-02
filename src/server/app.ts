@@ -7,6 +7,7 @@ import { accountRoutes } from './routes/account.js';
 import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRoutes, mailRoutes } from './routes/mail.js';
 import { apiV1Routes, composeRoutes } from './routes/compose.js';
 import { adminRoutes, runtimeInfo } from './routes/admin.js';
+import { adminOpsRoutes } from './routes/admin-ops.js';
 import { inboundRoutes } from './routes/inbound.js';
 
 const log = logger('http');
@@ -79,6 +80,7 @@ export function createApp() {
   app.route('/api/filters', filterRoutes);
   app.route('/api/blocked', blockedRoutes);
   app.route('/api/admin', adminRoutes);
+  app.route('/api/admin', adminOpsRoutes);
 
   app.use('/api/v1/*', requireApiKey);
   app.route('/api/v1', apiV1Routes);

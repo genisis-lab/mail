@@ -7,6 +7,9 @@ import { purgeMessages } from './mail/store.js';
 import { wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
 import { pruneTokens } from './services/tokens.js';
+import { runAlertChecks } from './services/alerts.js';
+import { autoCheckDomains } from './services/dns.js';
+import { jobsDueAt, runJobs } from './services/jobs.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
@@ -47,6 +50,15 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
     setMeta('last_maintenance', ts);
     runMaintenance();
   }
+  if (ts - lastRun('alerts') > 10 * 60_000) {
+    setMeta('last_alerts', ts);
+    await runAlertChecks().catch((err) => log.warn('Alert checks failed', err));
+  }
+  if (ts - lastRun('dns') > HOUR) {
+    setMeta('last_dns', ts);
+    await autoCheckDomains().catch((err) => log.warn('DNS checks failed', err));
+  }
+  await runJobs().catch((err) => log.warn('Background jobs failed', err));
   if (opts.gc !== false && ts - lastRun('gc') > DAY) {
     setMeta('last_gc', ts);
     const r = await collectGarbage();
@@ -61,5 +73,6 @@ export function nextWakeAt(): number {
   const snooze = get<{ t: number | null }>(`SELECT MIN(snoozed_until) AS t FROM messages WHERE snoozed_until IS NOT NULL`)?.t ?? Infinity;
   const maintenance = (lastRun('maintenance') || ts) + HOUR;
   const rebuild = searchRebuildPending() ? ts : Infinity;
-  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild));
+  const alerts = (lastRun('alerts') || ts) + 10 * 60_000;
+  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild, alerts, jobsDueAt()));
 }

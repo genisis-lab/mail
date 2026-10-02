@@ -1,4 +1,5 @@
-import { get, now, run } from '../db/index.js';
+import { all, get, now, run } from '../db/index.js';
+import { raiseAlert, resolveAlert } from './alerts.js';
 import { config } from '../config.js';
 import { getProviderDef } from '../providers/registry.js';
 import { platform } from '../platform.js';
@@ -30,13 +31,30 @@ async function txt(name: string): Promise<string[]> {
   }
 }
 
+/** The provider that actually sends for a domain: its own, else the default. */
+export function sendingProviderType(domain: { provider_id: number | null }): string | null {
+  const own = domain.provider_id ? get<{ type: string }>('SELECT type FROM providers WHERE id = ? AND enabled = 1', [domain.provider_id]) : undefined;
+  if (own) return own.type;
+  return get<{ type: string }>('SELECT type FROM providers WHERE is_default = 1 AND enabled = 1 ORDER BY id LIMIT 1')?.type ?? null;
+}
+
+/** Providers whose SPF and DKIM records the provider adds itself when you onboard the domain. */
+const MANAGED_RECORDS = new Set(['cloudflare-binding', 'cloudflare']);
+
 /** DNS records an admin should create for this domain. */
 export function recommendedRecords(domain: { name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }): DnsRecordHint[] {
   const records: DnsRecordHint[] = [
-    { type: 'TXT', host: `_wren.${domain.name}`, value: `wren-verify=${domain.verify_token}`, purpose: 'Proves you own the domain' },
+    {
+      type: 'TXT',
+      host: `_wren.${domain.name}`,
+      value: `wren-verify=${domain.verify_token}`,
+      purpose: 'Proves you own the domain. Not needed if the domain receives mail through Cloudflare Email Routing: it’s verified automatically when the first message arrives.',
+      optional: true,
+    },
   ];
-  const provider = domain.provider_id ? get<{ type: string }>('SELECT type FROM providers WHERE id = ?', [domain.provider_id]) : undefined;
-  const def = provider ? getProviderDef(provider.type) : undefined;
+  const type = sendingProviderType(domain);
+  const def = type ? getProviderDef(type) : undefined;
+  const managed = !!type && MANAGED_RECORDS.has(type);
   records.push({
     type: 'MX',
     host: domain.name,
@@ -44,14 +62,28 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
     priority: 10,
     purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker. (Receiving through a provider webhook such as Resend instead? Use that provider’s MX records.)',
   });
-  records.push({
-    type: 'TXT',
-    host: domain.name,
-    value: `v=spf1 ${def?.spfInclude ? `include:${def.spfInclude} ` : ''}~all`,
-    purpose: def?.spfInclude
-      ? `Authorises ${def.name} to send for this domain (merge with any existing SPF record).`
-      : 'Sender Policy Framework — add your provider’s include (merge with any existing SPF record).',
-  });
+  if (managed) {
+    records.push({
+      type: 'TXT',
+      host: domain.name,
+      value: '(added by Cloudflare)',
+      purpose: `SPF and DKIM are created by Cloudflare when you onboard ${domain.name} under Email Service → Email Sending (or use “Set up with Cloudflare” below). Don’t replace them by hand.`,
+    });
+  } else if (def?.spfInclude) {
+    records.push({
+      type: 'TXT',
+      host: domain.name,
+      value: `v=spf1 include:${def.spfInclude} ~all`,
+      purpose: `Authorises ${def.name} to send for this domain. If an SPF record already exists, add include:${def.spfInclude} to it instead of creating a second one.`,
+    });
+  } else {
+    records.push({
+      type: 'TXT',
+      host: domain.name,
+      value: '(from your sending provider)',
+      purpose: 'SPF: use the record your sending provider gives you. If one already exists, merge the provider’s include into it.',
+    });
+  }
   records.push({
     type: 'TXT',
     host: `_dmarc.${domain.name}`,
@@ -59,7 +91,7 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
     purpose: 'DMARC policy — start with p=none if you are unsure.',
   });
   const selectors = (domain.dkim_selector || def?.dkimSelectors?.join(',') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  for (const sel of selectors) {
+  for (const sel of managed ? [] : selectors) {
     records.push({
       type: 'TXT',
       host: `${sel}._domainkey.${domain.name}`,
@@ -96,10 +128,10 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
 
   const rootTxt = await txt(d.name);
   const spfRecord = rootTxt.find((t) => t.toLowerCase().startsWith('v=spf1')) ?? null;
-  const provider = d.provider_id ? get<{ type: string }>('SELECT type FROM providers WHERE id = ?', [d.provider_id]) : undefined;
-  const expectedInclude = provider ? getProviderDef(provider.type)?.spfInclude ?? null : null;
+  const providerType = sendingProviderType(d);
+  const expectedInclude = providerType ? getProviderDef(providerType)?.spfInclude ?? null : null;
 
-  const selectors = (d.dkim_selector || (provider ? getProviderDef(provider.type)?.dkimSelectors?.join(',') : '') || '')
+  const selectors = (d.dkim_selector || (providerType ? getProviderDef(providerType)?.dkimSelectors?.join(',') : '') || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -143,4 +175,48 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
     d.id,
   ]);
   return report;
+}
+
+/** What got worse between two DNS checks (used for alerts). */
+export function dnsRegressions(prev: DnsReport | null, next: DnsReport): string[] {
+  if (!prev) return [];
+  const out: string[] = [];
+  if (prev.mx.records.length && !next.mx.records.length) out.push('MX records are gone, so the domain can’t receive mail');
+  const cf = (r: DnsReport) => r.mx.records.some((m) => /\.mx\.cloudflare\.net\.?$/i.test(m.exchange));
+  if (cf(prev) && next.mx.records.length && !cf(next)) out.push('MX no longer points to Cloudflare Email Routing');
+  for (const k of prev.dkim) {
+    if (k.found && next.dkim.some((n) => n.selector === k.selector && !n.found)) out.push(`DKIM key ${k.selector} disappeared`);
+  }
+  if (prev.spf.ok && !next.spf.ok) out.push('The SPF record is gone');
+  if (prev.spf.includesProvider && next.spf.includesProvider === false) out.push('SPF no longer includes the sending provider');
+  return out;
+}
+
+/** Check domains that haven't been checked for a day; alert on regressions. */
+export async function autoCheckDomains(limit = 5): Promise<number> {
+  const due = all<{ id: number; name: string; dns_report: string | null }>(
+    'SELECT id, name, dns_report FROM domains WHERE enabled = 1 AND (dns_checked_at IS NULL OR dns_checked_at < ?) ORDER BY dns_checked_at LIMIT ?',
+    [now() - 24 * 3600_000, limit],
+  );
+  for (const d of due) {
+    const prev = d.dns_report ? (JSON.parse(d.dns_report) as DnsReport) : null;
+    try {
+      const next = await checkDomainDns(d.id);
+      const problems = dnsRegressions(prev, next);
+      if (problems.length) {
+        await raiseAlert({ kind: 'dns', key: String(d.id), severity: 'critical', title: `DNS changed for ${d.name}`, detail: problems.join('. ') + '.', link: `/admin/domains/${d.id}` });
+      } else if (next.mx.records.length && next.errors.length === 0) {
+        resolveAlert('dns', String(d.id));
+      }
+    } catch {
+      run('UPDATE domains SET dns_checked_at = ? WHERE id = ?', [now(), d.id]); // try again tomorrow
+    }
+  }
+  return due.length;
+}
+
+/** Mail delivered for a domain through Cloudflare Email Routing proves the domain routes to this Worker. */
+export function verifyDomainsByRouting(addresses: string[]) {
+  const domains = [...new Set(addresses.map((a) => a.split('@')[1]?.toLowerCase()).filter(Boolean))];
+  for (const d of domains) run('UPDATE domains SET verified_at = ? WHERE name = ? AND verified_at IS NULL', [now(), d]);
 }

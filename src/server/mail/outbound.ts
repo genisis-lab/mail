@@ -213,7 +213,8 @@ async function deliver(job: OutboxRow) {
   const recipients: string[] = JSON.parse(job.recipients);
   const raw = await getBlob(job.raw_blob);
   const settings = getSettings();
-  const local = settings['mail.localDelivery'] ? recipients.filter((r) => isHostedDomain(domainOf(r))) : [];
+  // Round-trip tests ('test') must leave through the provider even when addressed to ourselves.
+  const local = settings['mail.localDelivery'] && job.kind !== 'test' ? recipients.filter((r) => isHostedDomain(domainOf(r))) : [];
   const external = recipients.filter((r) => !local.includes(r));
   const failures: { rcpt: string; reason: string }[] = [];
   let providerMessageId: string | null = null;
