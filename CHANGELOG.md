@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — admin controls, plainer system mail, dark-mode email
 
 **Admin.** Change a user's address (their sign-in name), optionally keeping the old one
 as an alias; they get a note in their inbox. Unlock an account locked by wrong
@@ -17,9 +17,13 @@ readable text whatever colours the sender set); designed emails such as newslett
 keep a white background, and each message can be flipped. Replying to your own message
 goes to its recipients, never to an empty To.
 
-**Mail.** System emails are plain, with the link written out; invites reply to the
-admin who sent them. Sending-only subdomains don't need MX, and their DMARC comes from
-the parent domain.
+**System mail and domains.** System emails are plain, with the link written out, so
+they're less likely to land in spam; invites reply to the admin who sent them. A
+sending-only subdomain (say contact.example.com) doesn't need MX, its DMARC comes from
+the parent domain, and the domain page shows whether your provider has it verified.
+
+**Upgrading from v0.1.0.** Redeploy; the database update runs by itself on the first
+request (it only adds a column). No settings, secrets or DNS changes are needed.
 
 ## v0.1.0 — first public release
 
