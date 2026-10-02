@@ -14,6 +14,7 @@ import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived } from '../services/checklist.js';
+import { notifyNewMail } from '../services/push.js';
 
 const log = logger('ingest');
 
@@ -220,6 +221,7 @@ async function deliverToUser(
     labelIds: filters.labelIds.filter((l) => !!get('SELECT 1 FROM labels WHERE id = ? AND user_id = ?', [l, userId])),
   });
   if (folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
+  if (folder === 'inbox' && !isRead && opts.source !== 'system') notifyNewMail(userId);
 
   if (folder !== 'spam') {
     const targets = [...filters.forwardTo, ...(fwd.enabled && fwd.to ? [fwd.to] : [])];

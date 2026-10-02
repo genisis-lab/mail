@@ -7,6 +7,7 @@ import { domainOf, normalizeEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { pushToUsers, saveSubscription, validEndpoint, vapidPublicKey } from '../services/push.js';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -122,4 +123,66 @@ meRoutes.delete('/aliases/:id', (c) => {
   run('DELETE FROM addresses WHERE id = ?', [intParam(c, 'id')]);
   audit(user.id, 'account.alias_deleted', a.address, undefined, clientIp(c));
   return c.json({ ok: true });
+});
+
+// ── Push notifications ──────────────────────────────────────────────────────
+
+meRoutes.get('/push', async (c) => {
+  const count = get<{ c: number }>('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id = ?', [c.get('user').id])?.c ?? 0;
+  return c.json({ publicKey: await vapidPublicKey(), devices: count });
+});
+
+const subSchema = z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }) });
+
+meRoutes.post('/push/subscribe', async (c) => {
+  const sub = await body(c, subSchema);
+  if (!validEndpoint(sub.endpoint)) throw badRequest('Unsupported push service');
+  const user = c.get('user');
+  if ((get<{ c: number }>('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id = ?', [user.id])?.c ?? 0) >= 20) {
+    // Keep the 19 most recent devices.
+    run('DELETE FROM push_subscriptions WHERE id IN (SELECT id FROM push_subscriptions WHERE user_id = ? ORDER BY COALESCE(last_used_at, created_at) LIMIT 1)', [user.id]);
+  }
+  saveSubscription(user.id, sub, c.req.header('user-agent') ?? null);
+  return c.json({ ok: true });
+});
+
+meRoutes.post('/push/unsubscribe', async (c) => {
+  const { endpoint } = await body(c, z.object({ endpoint: z.string().max(1000) }));
+  run('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [c.get('user').id, endpoint]);
+  return c.json({ ok: true });
+});
+
+meRoutes.post('/push/test', async (c) => c.json({ delivered: await pushToUsers([c.get('user').id]) }));
+
+/**
+ * What the service worker shows when a push arrives: newest unread inbox mail
+ * across the person's own mailbox and the shared mailboxes they belong to.
+ */
+meRoutes.get('/notifications', (c) => {
+  const user = c.get('user');
+  const since = Number(c.req.query('since') ?? 0) || now() - 24 * 3600_000;
+  const boxes = [user.id, ...all<{ mailbox_id: number }>('SELECT mailbox_id FROM mailbox_members WHERE user_id = ?', [user.id]).map((r) => r.mailbox_id)];
+  const rows = all<any>(
+    `SELECT m.id, m.user_id, m.thread_id, m.from_addr, m.from_name, m.subject, m.date, m.created_at, u.name AS box_name, u.email AS box_email
+       FROM messages m JOIN users u ON u.id = m.user_id
+      WHERE m.user_id IN (SELECT value FROM json_each(?)) AND m.direction = 'in' AND m.folder = 'inbox' AND m.is_read = 0 AND m.created_at > ?
+      ORDER BY m.created_at DESC LIMIT 5`,
+    [JSON.stringify(boxes), since],
+  );
+  const total =
+    get<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM messages WHERE user_id IN (SELECT value FROM json_each(?)) AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND created_at > ?`,
+      [JSON.stringify(boxes), since],
+    )?.c ?? 0;
+  return c.json({
+    total,
+    items: rows.map((r) => ({
+      id: r.id,
+      threadId: r.thread_id,
+      mailbox: r.user_id === user.id ? null : { id: r.user_id, name: r.box_name, address: r.box_email },
+      from: { address: r.from_addr, name: r.from_name },
+      subject: r.subject,
+      arrivedAt: r.created_at,
+    })),
+  });
 });

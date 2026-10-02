@@ -14,6 +14,7 @@ import { storeMessage } from '../mail/store.js';
 import { getSettings } from '../settings.js';
 import { appUrl, sendSystemEmail, systemTemplate } from './system-mail.js';
 import { quotaBytes } from './users.js';
+import { notifyNewMail } from './push.js';
 
 const log = logger('alerts');
 const RENOTIFY_MS = 24 * 3600_000;
@@ -118,6 +119,7 @@ async function notifyAdmins(a: AlertRow) {
       isImportant: a.severity === 'critical',
       source: 'system',
     });
+    if (a.severity === 'critical') notifyNewMail(admin.id);
   }
   const external = s['alerts.externalTo'].trim();
   if (external) await sendSystemEmail({ to: [external], subject: `[${s['instance.name']}] ${a.title}`, html });
