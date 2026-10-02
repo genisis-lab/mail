@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  BookmarkPlus,
   CalendarClock,
+  Check,
+  ChevronDown,
   Clock,
   File,
   Flag,
@@ -16,6 +19,7 @@ import {
   Pencil,
   Plus,
   Search,
+  SearchCheck,
   Send,
   Settings,
   Shield,
@@ -29,12 +33,14 @@ import {
 import type { Label, View } from '../../shared/types';
 import { api } from '../lib/api';
 import { useHotkeys } from '../lib/hotkeys';
+import { MailboxProvider, useMailbox } from '../lib/mailbox';
+import { useNewMailNotifications, useUnreadTitle } from '../lib/notify';
 import { useCounters, useLabels, useSession } from '../lib/session';
 import { Avatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
 import { LogoMark } from '../components/Logo';
 import { useToast } from '../components/toast';
-import { Button, Checkbox, cx, Field, IconButton, Input, Kbd, Menu, Modal, Select } from '../components/ui';
+import { Button, Checkbox, cx, Field, IconButton, Input, Kbd, Menu, Modal, Select, useDialogFocus } from '../components/ui';
 import { ThreadList } from './mail/ThreadList';
 import { ThreadView } from './mail/ThreadView';
 import { SettingsPage } from './settings/SettingsPage';
@@ -56,14 +62,46 @@ const NAV: { view: View; label: string; icon: ReactNode; count?: 'inbox' | 'draf
 export const LABEL_COLORS = ['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#6366f1', '#a855f7', '#ec4899'];
 
 export function MailLayout() {
+  return (
+    <MailboxProvider>
+      <MailShell />
+    </MailboxProvider>
+  );
+}
+
+export interface SavedSearch {
+  id: number;
+  name: string;
+  query: string;
+  position: number;
+}
+
+export function useSavedSearches() {
+  return useQuery({ queryKey: ['me', 'saved-searches'], queryFn: () => api.get<{ searches: SavedSearch[] }>('/api/me/saved-searches').then((r) => r.searches), staleTime: 60_000 });
+}
+
+/** Phones show a floating Compose button on mail lists (not in a conversation or settings). */
+function isListPath(pathname: string): boolean {
+  const parts = pathname.split('/').filter(Boolean);
+  if (!parts.length) return true;
+  if (parts[0] === 'settings' || parts[0] === 'contacts') return false;
+  if (parts[0] === 'label' || parts[0] === 'search') return parts.length <= 2;
+  return parts.length === 1;
+}
+
+function MailShell() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('wren.sidebar') === 'collapsed');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const compose = useCompose();
   const navigate = useNavigate();
   const location = useLocation();
-  const { prefs } = useSession();
+  const { prefs, instance } = useSession();
+  const mailbox = useMailbox();
+  const counters = useCounters();
   const gPrefix = useRef(0);
+  useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', counters.data?.inbox, instance.name);
+  useNewMailNotifications(prefs.notifications, mailbox.current?.id ?? null);
 
   useEffect(() => setMobileOpen(false), [location.pathname]);
   useEffect(() => localStorage.setItem('wren.sidebar', collapsed ? 'collapsed' : 'open'), [collapsed]);
@@ -118,6 +156,15 @@ export function MailLayout() {
         </main>
       </div>
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {isListPath(location.pathname) && (
+        <button
+          onClick={() => compose.open()}
+          className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex h-14 items-center gap-3 rounded-2xl bg-accent-soft pr-5 pl-4 text-[15px] font-medium text-fg shadow-float backdrop-blur md:hidden dark:text-accent"
+          style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 18%, var(--panel))' }}
+        >
+          <Pencil className="size-5" aria-hidden /> Compose
+        </button>
+      )}
     </div>
   );
 }
@@ -190,6 +237,11 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                   onClick={async () => {
                     close();
                     await api.post('/api/auth/logout');
+                    try {
+                      sessionStorage.removeItem('wren.mailbox');
+                    } catch {
+                      /* private mode */
+                    }
                     qc.clear();
                     window.location.href = '/login';
                   }}
@@ -377,10 +429,74 @@ function AdvancedSearch({ initial, onClose, onSearch }: { initial: string; onClo
 
 // ── Sidebar ─────────────────────────────────────────────────────────────────
 
+/** Switch between the person's own mailbox and shared mailboxes they belong to. */
+function MailboxSwitcher({ wide }: { wide: boolean }) {
+  const { user } = useSession();
+  const { current, mailboxes, switchTo } = useMailbox();
+  if (!mailboxes.length) return null;
+  const totalShared = mailboxes.reduce((n, b) => n + (b.id === current?.id ? 0 : b.unread), 0);
+  return (
+    <div className={cx('mb-3', wide ? 'pl-2' : '')}>
+      <Menu
+        width="w-72"
+        trigger={({ onClick, open }) => (
+          <button
+            onClick={onClick}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-label={`Mailbox: ${current ? current.address : user.email}. Switch mailbox`}
+            title={current ? current.address : user.email}
+            className={cx(
+              'flex items-center gap-2 rounded-xl border text-left text-sm transition-colors hover:bg-hover',
+              current ? 'border-accent bg-accent-softer' : 'border-line',
+              wide ? 'w-full px-3 py-2' : 'size-12 justify-center',
+            )}
+          >
+            <Inbox className={cx('size-[18px] shrink-0', current ? 'text-accent' : 'text-muted')} aria-hidden />
+            {wide && (
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{current ? current.name : 'My mailbox'}</span>
+                <span className="block truncate text-xs text-muted">{current ? current.address : user.email}</span>
+              </span>
+            )}
+            {wide && totalShared > 0 && <span className="rounded-full bg-accent px-1.5 text-[11px] leading-[18px] font-semibold text-accent-fg">{totalShared}</span>}
+            {wide && <ChevronDown className="size-4 shrink-0 text-muted" aria-hidden />}
+          </button>
+        )}
+      >
+        {(close) => (
+          <div role="menu" aria-label="Mailboxes" className="py-1">
+            {[{ id: null as number | null, name: 'My mailbox', address: user.email, unread: 0 }, ...mailboxes].map((b) => (
+              <button
+                key={b.id ?? 'me'}
+                role="menuitemradio"
+                aria-checked={(current?.id ?? null) === b.id}
+                onClick={() => {
+                  close();
+                  switchTo(b.id);
+                }}
+                className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
+              >
+                <span className="flex size-4 items-center justify-center">{(current?.id ?? null) === b.id && <Check className="size-4 text-accent" />}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{b.name}</span>
+                  <span className="block truncate text-xs text-muted">{b.address}</span>
+                </span>
+                {b.unread > 0 && <span className="text-xs font-semibold">{b.unread}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </Menu>
+    </div>
+  );
+}
+
 function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean; mobileOpen: boolean; onCloseMobile: () => void }) {
   const compose = useCompose();
   const counters = useCounters();
   const labels = useLabels();
+  const searches = useSavedSearches();
   const [labelDialog, setLabelDialog] = useState<Partial<Label> | null>(null);
   const qc = useQueryClient();
   const toast = useToast();
@@ -391,7 +507,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
   const fmtCount = (n: number | undefined) => (n ? (n > 9999 ? '9,999+' : n.toLocaleString()) : '');
 
   const content = (
-    <nav className={cx('flex h-full flex-col overflow-y-auto pb-6', wide ? 'w-64 pr-3' : 'w-[72px] items-center')}>
+    <nav aria-label="Mail folders" className={cx('flex h-full flex-col overflow-y-auto pb-6', wide ? 'w-64 pr-3' : 'w-[72px] items-center')}>
       <div className={cx('pt-2 pb-4', wide ? 'pl-2' : '')}>
         <button
           onClick={() => compose.open()}
@@ -405,6 +521,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
           {wide && 'Compose'}
         </button>
       </div>
+      <MailboxSwitcher wide={wide} />
       {NAV.map((n) => {
         const count = n.count && c ? c[n.count] : 0;
         return (
@@ -425,7 +542,12 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
               {!wide && count > 0 && n.countStyle === 'bold' && <span className="absolute -top-1 -right-1.5 size-2 rounded-full bg-danger" />}
             </span>
             {wide && <span className="flex-1 truncate">{n.label}</span>}
-            {wide && count > 0 && <span className={cx('text-xs', n.countStyle === 'bold' ? 'font-bold' : 'text-muted')}>{fmtCount(count)}</span>}
+            {wide && count > 0 && (
+              <span className={cx('text-xs', n.countStyle === 'bold' ? 'font-bold' : 'text-muted')}>
+                {fmtCount(count)}
+                <span className="sr-only">{n.countStyle === 'bold' ? ' unread' : ''}</span>
+              </span>
+            )}
           </NavLink>
         );
       })}
@@ -483,22 +605,110 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
           </NavLink>
         );
       })}
+
+      {(searches.data?.length ?? 0) > 0 && (
+        <>
+          <div className={cx('mt-5 flex items-center', wide ? 'pr-1 pl-6' : 'justify-center')}>
+            {wide ? <span className="text-[15px] font-medium">Saved searches</span> : <span className="h-px w-8 bg-line" aria-hidden />}
+          </div>
+          {searches.data!.map((sv) => (
+            <NavLink
+              key={sv.id}
+              to={`/search/${encodeURIComponent(sv.query)}`}
+              title={`${sv.name}: ${sv.query}`}
+              className={({ isActive }) =>
+                cx('group flex shrink-0 items-center gap-4 text-sm', wide ? 'h-8 rounded-r-full pr-1 pl-6' : 'mb-1 size-8 justify-center rounded-full', isActive ? 'bg-sel font-semibold' : 'hover:bg-hover')
+              }
+            >
+              <SearchCheck className="size-[18px] shrink-0 text-muted" aria-hidden />
+              {wide && <span className="flex-1 truncate">{sv.name}</span>}
+              {wide && (
+                <span className="hidden group-hover:inline-flex group-focus-within:inline-flex" onClick={(e) => e.preventDefault()}>
+                  <Menu
+                    align="right"
+                    trigger={({ onClick }) => (
+                      <IconButton label={`Options for ${sv.name}`} size="sm" onClick={onClick} className="size-7">
+                        <MoreVertical className="size-4" />
+                      </IconButton>
+                    )}
+                    items={[
+                      {
+                        label: 'Rename',
+                        onClick: async () => {
+                          const name = window.prompt('Name this search', sv.name)?.trim();
+                          if (!name || name === sv.name) return;
+                          await api.put(`/api/me/saved-searches/${sv.id}`, { name });
+                          qc.invalidateQueries({ queryKey: ['me', 'saved-searches'] });
+                        },
+                      },
+                      {
+                        label: 'Remove',
+                        danger: true,
+                        onClick: async () => {
+                          await api.del(`/api/me/saved-searches/${sv.id}`);
+                          qc.invalidateQueries({ queryKey: ['me', 'saved-searches'] });
+                          toast(`“${sv.name}” removed`);
+                        },
+                      },
+                    ]}
+                  />
+                </span>
+              )}
+            </NavLink>
+          ))}
+        </>
+      )}
     </nav>
   );
 
   return (
     <>
       <aside className="shrink-0 max-md:hidden">{content}</aside>
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 md:hidden" onClick={onCloseMobile}>
-          <div className="absolute inset-0 bg-black/40" />
-          <div className="animate-slide-up absolute top-0 bottom-0 left-0 bg-bg pt-3 shadow-float" onClick={(e) => e.stopPropagation()}>
-            {content}
-          </div>
-        </div>
-      )}
+      {mobileOpen && <MobileDrawer onClose={onCloseMobile}>{content}</MobileDrawer>}
       <LabelDialog label={labelDialog} onClose={() => setLabelDialog(null)} />
     </>
+  );
+}
+
+function MobileDrawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useDialogFocus(true, ref, onClose);
+  return (
+    <div className="fixed inset-0 z-50 md:hidden" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div ref={ref} role="dialog" aria-modal="true" aria-label="Main menu" tabIndex={-1} className="animate-slide-up absolute top-0 bottom-0 left-0 bg-bg pt-3 shadow-float outline-none" onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** "Save this search" for the current search results. */
+export function SaveSearchButton({ query }: { query: string }) {
+  const searches = useSavedSearches();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const saved = searches.data?.find((s) => s.query === query);
+  if (saved) return <span className="text-xs text-muted">Saved as “{saved.name}”</span>;
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      icon={<BookmarkPlus className="size-4" />}
+      onClick={async () => {
+        const name = window.prompt('Name this search', query.length > 40 ? `${query.slice(0, 40)}…` : query)?.trim();
+        if (!name) return;
+        try {
+          await api.post('/api/me/saved-searches', { name, query });
+          qc.invalidateQueries({ queryKey: ['me', 'saved-searches'] });
+          toast(`Saved. Find “${name}” in the sidebar.`);
+        } catch (err) {
+          toast({ message: (err as Error).message, tone: 'error' });
+        }
+      }}
+    >
+      Save search
+    </Button>
   );
 }
 

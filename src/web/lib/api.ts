@@ -10,8 +10,28 @@ export class ApiError extends Error {
 
 type Json = Record<string, unknown> | unknown[];
 
-async function request<T>(method: string, url: string, data?: Json | FormData): Promise<T> {
+/** Requests under these paths act on the shared mailbox being viewed, if any. */
+const MAILBOX_SCOPED = /^\/api\/(mail|compose|attachments|labels)(\/|\?|$)/;
+let currentMailbox: number | null = null;
+
+/** Point mail requests at a shared mailbox (null: the person's own). */
+export function setApiMailbox(id: number | null) {
+  currentMailbox = id;
+}
+
+export function getApiMailbox(): number | null {
+  return currentMailbox;
+}
+
+/** A link the browser opens itself (raw source, downloads): carry the mailbox in the query string. */
+export function mailboxUrl(url: string, mailbox = currentMailbox): string {
+  if (!mailbox || !MAILBOX_SCOPED.test(url)) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}mailbox=${mailbox}`;
+}
+
+async function request<T>(method: string, url: string, data?: Json | FormData, mailbox = currentMailbox): Promise<T> {
   const headers: Record<string, string> = { 'X-Wren': '1' };
+  if (mailbox && MAILBOX_SCOPED.test(url)) headers['X-Wren-Mailbox'] = String(mailbox);
   let body: BodyInit | undefined;
   if (data instanceof FormData) body = data;
   else if (data !== undefined) {
@@ -41,6 +61,18 @@ export const api = {
   put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}),
   del: <T = any>(url: string) => request<T>('DELETE', url),
 };
+
+export type Api = typeof api;
+
+/** The same client, pinned to one mailbox (a compose window keeps the mailbox it was opened in). */
+export function apiFor(mailbox: number | null): Api {
+  return {
+    get: <T = any>(url: string) => request<T>('GET', url, undefined, mailbox),
+    post: <T = any>(url: string, data?: Json | FormData) => request<T>('POST', url, data ?? {}, mailbox),
+    put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}, mailbox),
+    del: <T = any>(url: string) => request<T>('DELETE', url, undefined, mailbox),
+  };
+}
 
 export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const p = new URLSearchParams();

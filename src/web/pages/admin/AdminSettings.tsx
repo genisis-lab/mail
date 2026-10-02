@@ -10,7 +10,7 @@ import { PageHeader } from './common';
 import { useDomains } from './Users';
 
 type S = Record<string, any>;
-type Tab = 'general' | 'registration' | 'security' | 'limits' | 'spam' | 'retention';
+type Tab = 'general' | 'registration' | 'security' | 'limits' | 'spam' | 'alerts' | 'retention';
 
 export function AdminSettingsPage() {
   const { tab = 'general' } = useParams();
@@ -54,6 +54,7 @@ export function AdminSettingsPage() {
             { value: 'security', label: 'Security' },
             { value: 'limits', label: 'Limits' },
             { value: 'spam', label: 'Spam & blocking' },
+            { value: 'alerts', label: 'Alerts' },
             { value: 'retention', label: 'Retention' },
           ]}
         />
@@ -148,6 +149,30 @@ export function AdminSettingsPage() {
 
       {tab === 'spam' && <SpamTab draft={draft} set={set} />}
 
+      {tab === 'alerts' && (
+        <Card title="Alerts" description="Wren watches for a failing provider, a stuck send queue, full mailboxes and DNS changes, and tells admins.">
+          <div className="grid max-w-xl gap-5">
+            <Switch
+              checked={draft['alerts.email']}
+              onChange={(v) => set('alerts.email', v)}
+              label="Tell admins about new alerts"
+              description="A message in each admin’s inbox, plus a push notification for critical alerts. Alerts always show on the Overview page."
+            />
+            <Field label="Also email alerts to" help="An address outside this server, so you hear about problems even when Wren’s own mail is down. Leave blank for none.">
+              <Input type="email" value={draft['alerts.externalTo']} onChange={(e) => set('alerts.externalTo', e.target.value)} placeholder="you@gmail.com" />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Queue backlog alert at" help="Messages waiting to go out.">
+                <Input type="number" min={1} value={draft['alerts.queueThreshold']} onChange={num('alerts.queueThreshold')} />
+              </Field>
+              <Field label="Mailbox full alert at (%)" help="Of a user’s quota.">
+                <Input type="number" min={50} max={100} value={draft['alerts.quotaPercent']} onChange={num('alerts.quotaPercent')} />
+              </Field>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {tab === 'retention' && (
         <Card title="Automatic clean-up">
           <div className="grid max-w-xl gap-4 sm:grid-cols-2">
@@ -183,6 +208,28 @@ function RegistrationTab({ draft, set }: { draft: S; set: (k: string, v: unknown
   const domains = useDomains();
   const selected: number[] = draft['registration.domains'] ?? [];
   return (
+    <div className="space-y-6">
+    <Card title="New accounts">
+      <div className="grid max-w-xl gap-5">
+        <Switch
+          checked={draft['users.welcomeMessage']}
+          onChange={(v) => set('users.welcomeMessage', v)}
+          label="Send a welcome message"
+          description="New mailboxes start with a short message: their address, what to set up first (recovery email, 2-step verification), importing old mail and installing the app."
+        />
+        <Switch
+          checked={draft['aliases.selfService']}
+          onChange={(v) => set('aliases.selfService', v)}
+          label="Let people create their own aliases"
+          description="In Settings → Accounts, on their own domain. Reserved names like postmaster@ and admin@ stay off limits."
+        />
+        {draft['aliases.selfService'] && (
+          <Field label="Aliases per person" className="max-w-48">
+            <Input type="number" min={1} max={100} value={draft['aliases.maxPerUser']} onChange={(e) => set('aliases.maxPerUser', Number(e.target.value))} />
+          </Field>
+        )}
+      </div>
+    </Card>
     <Card title="Who can create accounts?">
       <div className="max-w-xl space-y-3">
         {(
@@ -217,6 +264,7 @@ function RegistrationTab({ draft, set }: { draft: S; set: (k: string, v: unknown
         )}
       </div>
     </Card>
+    </div>
   );
 }
 
