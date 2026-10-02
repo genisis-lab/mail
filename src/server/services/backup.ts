@@ -31,7 +31,7 @@ export interface ExportHeader {
 }
 
 /** Tables in creation order, which is also foreign-key order. */
-function dataTables(): string[] {
+export function dataTables(): string[] {
   return all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY rowid`)
     .map((r) => r.name)
     .filter((n) => !SKIP.has(n) && !n.startsWith('sqlite_') && !n.startsWith('_cf_') && !n.startsWith('messages_fts'));
@@ -39,6 +39,10 @@ function dataTables(): string[] {
 
 function columns(table: string): Set<string> {
   return new Set(all<{ name: string }>(`PRAGMA table_info("${table}")`).map((c) => c.name));
+}
+
+export function exportHeader(): ExportHeader {
+  return { format: EXPORT_FORMAT, app: APP_VERSION, schema: migrations.length, exportedAt: Date.now(), keyFingerprint: secretFingerprint() };
 }
 
 /** Stream the export a page at a time, so large databases never sit in memory. */
@@ -52,14 +56,7 @@ export function exportStream(): ReadableStream<Uint8Array> {
     pull(controller) {
       if (!started) {
         started = true;
-        const header: ExportHeader = {
-          format: EXPORT_FORMAT,
-          app: APP_VERSION,
-          schema: migrations.length,
-          exportedAt: Date.now(),
-          keyFingerprint: secretFingerprint(),
-        };
-        controller.enqueue(enc.encode(JSON.stringify(header) + '\n'));
+        controller.enqueue(enc.encode(JSON.stringify(exportHeader()) + '\n'));
         return;
       }
       while (ti < tables.length) {

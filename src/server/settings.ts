@@ -46,6 +46,13 @@ export const DEFAULT_SETTINGS = {
   'aliases.throwaway': false,
   'aliases.maxThrowaway': 50,
 
+  /** Daily backup of the database to blob storage (R2). */
+  'backups.enabled': true,
+  /** Automatic backups to keep. */
+  'backups.keep': 7,
+  /** Hour of the day (UTC) the automatic backup runs. */
+  'backups.hour': 3,
+
   'alerts.email': true,
   'alerts.externalTo': '',
   'alerts.queueThreshold': 50,

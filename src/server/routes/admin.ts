@@ -12,6 +12,7 @@ import { audit } from '../services/audit.js';
 import { cleanConfig, createProvider, MASK } from '../services/providers.js';
 import { sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
+import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -716,6 +717,8 @@ adminRoutes.put('/settings', async (c) => {
   if (input['spam.rspamdPassword'] === MASK) delete (input as Record<string, unknown>)['spam.rspamdPassword'];
   if ('alerts.externalTo' in input && input['alerts.externalTo'] && !isEmail(String(input['alerts.externalTo']))) throw badRequest('Enter a valid address for alert emails');
   if ('aliases.maxPerUser' in input && (Number(input['aliases.maxPerUser']) < 0 || Number(input['aliases.maxPerUser']) > 100)) throw badRequest('Alias limit must be between 0 and 100');
+  if ('backups.keep' in input && !(Number(input['backups.keep']) >= 1 && Number(input['backups.keep']) <= 60)) throw badRequest('Keep between 1 and 60 backups');
+  if ('backups.hour' in input && !(Number.isInteger(Number(input['backups.hour'])) && Number(input['backups.hour']) >= 0 && Number(input['backups.hour']) <= 23)) throw badRequest('Pick an hour from 0 to 23');
   if ('aliases.maxThrowaway' in input && (Number(input['aliases.maxThrowaway']) < 0 || Number(input['aliases.maxThrowaway']) > 500)) throw badRequest('Throwaway alias limit must be between 0 and 500');
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
@@ -846,6 +849,69 @@ adminRoutes.get('/export', (c) => {
       'Cache-Control': 'no-store',
     },
   });
+});
+
+// Backups kept in storage: automatic (daily) and on demand.
+
+adminRoutes.get('/backups', (c) => {
+  const s = getSettings();
+  return c.json({
+    settings: { enabled: s['backups.enabled'], keep: s['backups.keep'], hour: s['backups.hour'] },
+    nextAt: Number.isFinite(nextBackupAt()) ? nextBackupAt() : null,
+    backups: listBackups().map(backupDto),
+  });
+});
+
+adminRoutes.post('/backups', (c) => {
+  const b = startBackup('manual', c.get('user').id);
+  act(c, 'admin.backup_started', `backup ${b.id}`);
+  return c.json({ backup: backupDto(b) });
+});
+
+const storedBackup = (c: Context<AppEnv>) => {
+  const b = get<BackupRow>('SELECT * FROM backups WHERE id = ?', [intParam(c, 'id')]);
+  if (!b) throw notFound('Backup not found');
+  return b;
+};
+
+adminRoutes.get('/backups/:id/download', (c) => {
+  const b = storedBackup(c);
+  if (b.status !== 'done') throw badRequest('This backup isn’t finished');
+  act(c, 'admin.export_downloaded', `backup ${b.id}`);
+  return new Response(backupStream(b), {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Content-Disposition': `attachment; filename="wren-backup-${new Date(b.created_at).toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jsonl"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
+/** Replace all data with a stored backup. Everyone is signed out afterwards. */
+adminRoutes.post('/backups/:id/restore', async (c) => {
+  requireOwner(c);
+  const b = storedBackup(c);
+  if (b.status !== 'done') throw badRequest('This backup isn’t finished');
+  const me = c.get('user');
+  try {
+    const r = await restoreExport(backupStream(b), { allowKeyMismatch: c.req.query('allowKeyMismatch') === '1' });
+    audit(null, 'admin.backup_restored', `backup from ${new Date(b.created_at).toISOString()}`, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }, clientIp(c));
+    return c.json({ ok: true, exportedAt: r.header.exportedAt, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch });
+  } catch (err) {
+    if (err instanceof RestoreError) {
+      if (err.message === 'KEY_MISMATCH') return c.json({ error: 'key_mismatch' }, 409);
+      throw badRequest(err.message);
+    }
+    throw err;
+  }
+});
+
+adminRoutes.delete('/backups/:id', async (c) => {
+  const b = storedBackup(c);
+  if (b.status === 'running') throw badRequest('Wait for this backup to finish');
+  await deleteBackup(b);
+  act(c, 'admin.backup_deleted', `backup ${b.id}`);
+  return c.json({ ok: true });
 });
 
 function requireOwner(c: Context<AppEnv>) {

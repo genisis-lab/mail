@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Download, History, Megaphone, Upload } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { DatabaseBackup, Download, History, Megaphone, Trash2, Upload } from 'lucide-react';
 import { api, ApiError } from '../../lib/api';
 import { fileSize, longDate, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, Field, Input, Spinner, Textarea } from '../../components/ui';
+import { Badge, Button, Card, Field, IconButton, Input, Select, Spinner, Switch, Textarea } from '../../components/ui';
+import { useSession } from '../../lib/session';
 import { PageHeader, Table } from './common';
 
 export function AuditPage() {
@@ -43,6 +44,7 @@ export function AuditPage() {
 
 export function SystemPage() {
   const toast = useToast();
+  const { user } = useSession();
   const q = useQuery({ queryKey: ['admin', 'system'], queryFn: () => api.get<any>('/api/admin/system') });
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -93,6 +95,7 @@ export function SystemPage() {
           ))}
         </dl>
       </Card>
+      <AutoBackupCard isOwner={user.role === 'owner'} />
       <BackupCard selfHosted={selfHosted} pointInTime={s.backup.pointInTime} rebuilding={s.backup.searchRebuilding} />
       <Card title="Announcement" description="Email every active user, e.g. about planned maintenance.">
         <div className="grid max-w-xl gap-3">
@@ -221,7 +224,7 @@ function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boole
               Roll the whole database back to any moment in the last 30 days, for example after an accidental bulk delete. Files deleted in that window are kept, so restored messages keep their contents.
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <Input type="datetime-local" className="w-auto" value={at} max={toLocalInput(Date.now())} min={toLocalInput(Date.now() - 30 * 86_400_000)} onChange={(e) => setAt(e.target.value)} />
+              <Input type="datetime-local" aria-label="Moment to restore to" className="w-auto" value={at} max={toLocalInput(Date.now())} min={toLocalInput(Date.now() - 30 * 86_400_000)} onChange={(e) => setAt(e.target.value)} />
               <Button
                 icon={<History className="size-4" />}
                 loading={busy === 'pit'}
@@ -244,6 +247,160 @@ function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boole
               </Button>
             </div>
           </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+interface StoredBackup {
+  id: number;
+  kind: 'auto' | 'manual';
+  status: 'running' | 'done' | 'failed';
+  rows: number;
+  bytes: number;
+  parts: number;
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+  createdBy: string | null;
+}
+
+/** Daily backups kept in storage, plus backing up on demand. */
+function AutoBackupCard({ isOwner }: { isOwner: boolean }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ['admin', 'backups'],
+    queryFn: () => api.get<{ settings: { enabled: boolean; keep: number; hour: number }; nextAt: number | null; backups: StoredBackup[] }>('/api/admin/backups'),
+    refetchInterval: (query) => (query.state.data?.backups.some((b) => b.status === 'running') ? 2000 : false),
+  });
+  const [busy, setBusy] = useState<number | 'new' | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'backups'] });
+  const save = async (patch: Record<string, unknown>) => {
+    try {
+      await api.put('/api/admin/settings', patch);
+      refresh();
+      toast('Saved');
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    }
+  };
+  if (!q.data) return null;
+  const { settings, backups, nextAt } = q.data;
+  const running = backups.some((b) => b.status === 'running');
+  const restore = async (b: StoredBackup, allowKeyMismatch = false): Promise<void> => {
+    if (!allowKeyMismatch && !window.confirm(`Replace ALL data with the backup from ${longDate(b.createdAt)}? Everything since then is lost, and everyone, including you, is signed out.`)) return;
+    setBusy(b.id);
+    try {
+      const r = await api.post<{ rows: Record<string, number>; skipped: number; exportedAt: number }>(`/api/admin/backups/${b.id}/restore${allowKeyMismatch ? '?allowKeyMismatch=1' : ''}`);
+      const total = Object.values(r.rows).reduce((x, y) => x + y, 0);
+      window.alert(`Restored ${total.toLocaleString()} records from ${new Date(r.exportedAt).toLocaleString()}.${r.skipped ? ` ${r.skipped} could not be restored.` : ''} Sign in again to continue.`);
+      window.location.href = '/login';
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'key_mismatch' && !allowKeyMismatch) {
+        if (window.confirm('This backup was made with a different encryption key (WREN_SECRET). Restore anyway? Two-factor sign-in will be turned off and provider settings must be re-entered.')) return restore(b, true);
+      } else toast({ message: (err as Error).message, tone: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Card
+      title="Automatic backups"
+      description="A copy of the database is saved to storage (R2) every day. Message files are already in R2 and are kept for 30 days after they’re deleted, so a restore brings messages back whole."
+      actions={
+        <Button
+          icon={<DatabaseBackup className="size-4" />}
+          loading={busy === 'new' || running}
+          onClick={async () => {
+            setBusy('new');
+            try {
+              await api.post('/api/admin/backups');
+              refresh();
+              toast('Backing up…');
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {running ? 'Backing up…' : 'Back up now'}
+        </Button>
+      }
+    >
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <Switch checked={settings.enabled} onChange={(v) => void save({ 'backups.enabled': v })} label="Back up every day" description={settings.enabled && nextAt ? `Next: ${longDate(nextAt)}` : undefined} />
+          <Field label="Time (UTC)" className="w-32">
+            <Select value={String(settings.hour)} disabled={!settings.enabled} onChange={(e) => void save({ 'backups.hour': Number(e.target.value) })}>
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {String(h).padStart(2, '0')}:00
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Keep" className="w-36">
+            <Select value={String(settings.keep)} disabled={!settings.enabled} onChange={(e) => void save({ 'backups.keep': Number(e.target.value) })}>
+              {[3, 7, 14, 30, 60].map((n) => (
+                <option key={n} value={n}>
+                  last {n}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        {backups.length === 0 ? (
+          <p className="text-sm text-muted">No backups yet.</p>
+        ) : (
+          <ul className="divide-y divide-line rounded-xl border border-line">
+            {backups.map((b) => (
+              <li key={b.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">
+                    {longDate(b.createdAt)} <span className="font-normal text-muted">· {b.kind === 'auto' ? 'daily' : `by ${b.createdBy ?? 'an admin'}`}</span>
+                  </p>
+                  <p className="text-xs text-muted">
+                    {b.status === 'done'
+                      ? `${b.rows.toLocaleString()} records · ${fileSize(b.bytes)}`
+                      : b.status === 'running'
+                        ? `In progress · ${b.rows.toLocaleString()} records so far`
+                        : `Failed: ${b.error ?? 'unknown error'}`}
+                  </p>
+                </div>
+                <Badge tone={b.status === 'done' ? 'ok' : b.status === 'running' ? 'accent' : 'danger'}>{b.status === 'done' ? 'ready' : b.status === 'running' ? 'running' : 'failed'}</Badge>
+                {b.status === 'done' && (
+                  <>
+                    <a href={`/api/admin/backups/${b.id}/download`}>
+                      <Button size="sm" variant="ghost" icon={<Download className="size-4" />}>
+                        Download
+                      </Button>
+                    </a>
+                    {isOwner && (
+                      <Button size="sm" variant="ghost" loading={busy === b.id} onClick={() => void restore(b)}>
+                        Restore
+                      </Button>
+                    )}
+                  </>
+                )}
+                {b.status !== 'running' && (
+                  <IconButton
+                    size="sm"
+                    label={`Delete the backup from ${longDate(b.createdAt)}`}
+                    onClick={async () => {
+                      if (!window.confirm('Delete this backup?')) return;
+                      await api.del(`/api/admin/backups/${b.id}`);
+                      refresh();
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </Card>

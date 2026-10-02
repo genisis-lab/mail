@@ -33,7 +33,8 @@ export async function collectGarbage(): Promise<{ removed: number; bytes: number
     `SELECT raw_blob AS h FROM messages WHERE raw_blob IS NOT NULL
      UNION SELECT body_blob FROM messages WHERE body_blob IS NOT NULL
      UNION SELECT blob FROM attachments
-     UNION SELECT raw_blob FROM outbox`,
+     UNION SELECT raw_blob FROM outbox
+     UNION SELECT j.value FROM backups b, json_each(b.parts) j`,
   )) {
     referenced.add(r.h);
   }

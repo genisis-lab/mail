@@ -11,6 +11,7 @@ import { runAlertChecks } from './services/alerts.js';
 import { autoCheckDomains } from './services/dns.js';
 import { jobsDueAt, runJobs } from './services/jobs.js';
 import { pruneJobs } from './services/mail-import.js';
+import { nextBackupAt, runBackups } from './services/auto-backup.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
@@ -61,6 +62,7 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
     await autoCheckDomains().catch((err) => log.warn('DNS checks failed', err));
   }
   await runJobs().catch((err) => log.warn('Background jobs failed', err));
+  await runBackups(ts).catch((err) => log.warn('Backups failed', err));
   if (opts.gc !== false && ts - lastRun('gc') > DAY) {
     setMeta('last_gc', ts);
     const r = await collectGarbage();
@@ -76,5 +78,5 @@ export function nextWakeAt(): number {
   const maintenance = (lastRun('maintenance') || ts) + HOUR;
   const rebuild = searchRebuildPending() ? ts : Infinity;
   const alerts = (lastRun('alerts') || ts) + 10 * 60_000;
-  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild, alerts, jobsDueAt()));
+  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild, alerts, jobsDueAt(), nextBackupAt(ts)));
 }
