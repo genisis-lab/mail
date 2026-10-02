@@ -163,6 +163,9 @@ function GeneralTab() {
           ))}
         </div>
       </Row>
+      <Row title="Inbox tabs" help="Receipts, alerts and newsletters wait in their own tabs. Mail from people stays in Primary.">
+        <Switch checked={draft.inboxTabs} onChange={(v) => set('inboxTabs', v)} label="Split the inbox into Primary, Updates and Promotions" />
+      </Row>
       {user.identities.length > 1 && (
         <Row title="Default “From” address">
           <Select value={draft.defaultFrom} onChange={(e) => set('defaultFrom', e.target.value)} aria-label="Default From address">
@@ -678,9 +681,22 @@ function FilterDialog({ filter, labels, onClose }: { filter: Partial<FilterRow> 
   );
 }
 
+interface AliasEntry {
+  id: number;
+  address: string;
+  name: string;
+  kind: 'mailbox' | 'alias';
+  own: boolean;
+  enabled: boolean;
+  throwaway: boolean;
+  description: string;
+  received: number;
+  lastReceivedAt: number | null;
+}
+
 interface AliasInfo {
-  policy: { enabled: boolean; limit: number; used: number; domain: string };
-  aliases: { id: number; address: string; name: string; own: boolean }[];
+  policy: { enabled: boolean; limit: number; used: number; domain: string; throwaway: { enabled: boolean; limit: number; used: number } };
+  aliases: AliasEntry[];
 }
 
 function AccountsTab() {
@@ -690,11 +706,43 @@ function AccountsTab() {
   const { draft, setDraft, dirty, save, busy, reset } = usePrefsForm();
   const [newAlias, setNewAlias] = useState('');
   const [aliasBusy, setAliasBusy] = useState(false);
+  const [throwawayOpen, setThrowawayOpen] = useState(false);
+  const navigate = useNavigate();
   const [sigFor, setSigFor] = useState<string | null>(null);
   const aliases = useQuery({ queryKey: ['me', 'aliases'], queryFn: () => api.get<AliasInfo>('/api/me/aliases') });
   const fwd = draft.forwarding;
   const policy = aliases.data?.policy;
-  const own = new Map((aliases.data?.aliases ?? []).filter((a) => a.own).map((a) => [a.address, a.id]));
+  const list = aliases.data?.aliases ?? [];
+  const byAddress = new Map(list.map((a) => [a.address.toLowerCase(), a]));
+  // Sendable addresses (incl. groups), plus aliases that are turned off (not sendable, but still yours).
+  const rows = [
+    ...user.identities.map((i) => ({ address: i.address, name: i.name, kind: i.kind as string, entry: byAddress.get(i.address.toLowerCase()) })),
+    ...list.filter((a) => !a.throwaway && !user.identities.some((i) => i.address.toLowerCase() === a.address.toLowerCase())).map((a) => ({ address: a.address, name: a.name, kind: a.kind as string, entry: a })),
+  ].filter((r) => !r.entry?.throwaway);
+  const throwaways = list.filter((a) => a.throwaway);
+  const changed = async (message: string) => {
+    qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
+    await refresh();
+    toast(message);
+  };
+  const toggle = async (a: AliasEntry, enabled: boolean) => {
+    try {
+      await api.put(`/api/me/aliases/${a.id}`, { enabled });
+      await changed(enabled ? `${a.address} is on again` : `${a.address} is off. Mail sent to it will bounce.`);
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    }
+  };
+  const remove = async (a: AliasEntry) => {
+    if (!window.confirm(`Remove ${a.address}? Mail sent to it will bounce.`)) return;
+    try {
+      await api.del(`/api/me/aliases/${a.id}`);
+      await changed(`${a.address} removed`);
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    }
+  };
+  const received = (a?: AliasEntry) => (a && a.kind === 'alias' ? (a.received ? `${a.received.toLocaleString()} received · last ${relativeTime(a.lastReceivedAt!)}` : 'nothing received yet') : '');
   return (
     <div className="space-y-6">
       <Card
@@ -702,32 +750,27 @@ function AccountsTab() {
         description={policy?.enabled ? `Addresses you receive mail at and can send from. You can add up to ${policy.limit} of your own aliases.` : 'Addresses you receive mail at and can send from. Administrators manage aliases and groups.'}
       >
         <ul className="-my-2 divide-y divide-line">
-          {user.identities.map((i) => (
-            <li key={i.address} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-              <span className="min-w-0 flex-1 text-sm">
-                <span className="font-medium">{i.name || user.name}</span> <span className="break-all text-muted">&lt;{i.address}&gt;</span>
-                {draft.signatures?.[i.address] && <span className="ml-2 text-xs text-faint">own signature</span>}
+          {rows.map((r) => (
+            <li key={r.address} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <span className={cx('min-w-0 flex-1 text-sm', r.entry && !r.entry.enabled && 'text-muted')}>
+                <span className="font-medium">{r.name || user.name}</span> <span className="break-all text-muted">&lt;{r.address}&gt;</span>
+                {draft.signatures?.[r.address] && <span className="ml-2 text-xs text-faint">own signature</span>}
+                {r.entry?.kind === 'alias' && <span className="block text-xs text-muted">{r.entry.enabled ? received(r.entry) : 'Off: mail sent here bounces'}</span>}
               </span>
-              <Badge tone={i.kind === 'mailbox' ? 'accent' : 'neutral'}>{i.kind === 'mailbox' ? 'primary' : i.kind}</Badge>
-              <Button size="sm" variant="ghost" onClick={() => setSigFor(i.address)}>
-                Signature
-              </Button>
-              {own.has(i.address) && (
-                <IconButton
-                  size="sm"
-                  label={`Remove ${i.address}`}
-                  onClick={async () => {
-                    if (!window.confirm(`Remove ${i.address}? Mail sent to it will bounce.`)) return;
-                    try {
-                      await api.del(`/api/me/aliases/${own.get(i.address)}`);
-                      qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
-                      await refresh();
-                      toast(`${i.address} removed`);
-                    } catch (err) {
-                      toast({ message: (err as Error).message, tone: 'error' });
-                    }
-                  }}
-                >
+              <Badge tone={r.kind === 'mailbox' ? 'accent' : 'neutral'}>{r.kind === 'mailbox' ? 'primary' : r.kind}</Badge>
+              {r.entry?.kind === 'alias' && r.entry.received > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => navigate(`/search/${encodeURIComponent(`deliveredto:${r.address}`)}`)}>
+                  View mail
+                </Button>
+              )}
+              {(!r.entry || r.entry.enabled) && (
+                <Button size="sm" variant="ghost" onClick={() => setSigFor(r.address)}>
+                  Signature
+                </Button>
+              )}
+              {r.entry?.kind === 'alias' && <Switch checked={r.entry.enabled} onChange={(v) => void toggle(r.entry!, v)} ariaLabel={`Receive mail at ${r.address}`} />}
+              {r.entry?.own && (
+                <IconButton size="sm" label={`Remove ${r.address}`} onClick={() => void remove(r.entry!)}>
                   <Trash2 className="size-4" />
                 </IconButton>
               )}
@@ -743,9 +786,7 @@ function AccountsTab() {
               try {
                 const r = await api.post<{ alias: { address: string } }>('/api/me/aliases', { localPart: newAlias });
                 setNewAlias('');
-                qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
-                await refresh();
-                toast(`${r.alias.address} is ready. Mail to it arrives in your inbox.`);
+                await changed(`${r.alias.address} is ready. Mail to it arrives in your inbox.`);
               } catch (err) {
                 toast({ message: (err as Error).message, tone: 'error' });
               } finally {
@@ -769,6 +810,55 @@ function AccountsTab() {
           Tip: plus-addressing works out of the box — mail to <code className="rounded bg-panel2 px-1">{user.email.replace('@', '+anything@')}</code> lands in your inbox.
         </p>
       </Card>
+      {policy?.throwaway.enabled && (
+        <Card
+          title="Sign-up addresses"
+          description="A separate throwaway address for each site you sign up to. If one starts getting spam, you know who leaked it: turn it off and mail sent there bounces."
+          actions={
+            <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setThrowawayOpen(true)} disabled={policy.throwaway.used >= policy.throwaway.limit}>
+              New address
+            </Button>
+          }
+        >
+          {throwaways.length === 0 ? (
+            <p className="text-sm text-muted">None yet. Make one the next time a site asks for your email.</p>
+          ) : (
+            <ul className="-my-2 divide-y divide-line">
+              {throwaways.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                  <span className={cx('min-w-0 flex-1 text-sm', !a.enabled && 'text-muted')}>
+                    <span className="font-medium break-all">{a.address}</span>
+                    <span className="block text-xs text-muted">
+                      {[a.description, a.enabled ? received(a) : 'Off: mail sent here bounces'].filter(Boolean).join(' · ')}
+                    </span>
+                  </span>
+                  <CopyButton value={a.address} />
+                  {a.received > 0 && (
+                    <Button size="sm" variant="ghost" onClick={() => navigate(`/search/${encodeURIComponent(`deliveredto:${a.address}`)}`)}>
+                      View mail
+                    </Button>
+                  )}
+                  <Switch checked={a.enabled} onChange={(v) => void toggle(a, v)} ariaLabel={`Receive mail at ${a.address}`} />
+                  <IconButton size="sm" label={`Remove ${a.address}`} onClick={() => void remove(a)}>
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-xs text-muted">
+            {policy.throwaway.used} of {policy.throwaway.limit} used
+          </p>
+        </Card>
+      )}
+      <ThrowawayDialog
+        open={throwawayOpen}
+        onClose={() => setThrowawayOpen(false)}
+        onCreated={(address) => {
+          setThrowawayOpen(false);
+          void changed(`${address} is ready and copied`);
+        }}
+      />
       <Card title="Forwarding" description="Automatically forward a copy of incoming mail to another address.">
         <div className="space-y-4">
           <Switch checked={fwd.enabled} onChange={(v) => setDraft({ ...draft, forwarding: { ...fwd, enabled: v } })} label="Forward incoming mail" />
@@ -1208,4 +1298,79 @@ export function browserName(ua: string | null): string {
   const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /curl/i.test(ua) ? 'curl' : 'Browser';
   const os = /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : '';
   return os ? `${browser} on ${os}` : browser;
+}
+
+function CopyButton({ value }: { value: string }) {
+  const toast = useToast();
+  return (
+    <IconButton
+      size="sm"
+      label={`Copy ${value}`}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          toast('Copied');
+        } catch {
+          toast({ message: 'Couldn’t copy; select the address instead', tone: 'error' });
+        }
+      }}
+    >
+      <Copy className="size-4" />
+    </IconButton>
+  );
+}
+
+function ThrowawayDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (address: string) => void }) {
+  const toast = useToast();
+  const [label, setLabel] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setLabel('');
+      setNote('');
+    }
+  }, [open]);
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="New sign-up address"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="throwaway-form" loading={busy}>
+            Create and copy
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="throwaway-form"
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          try {
+            const r = await api.post<{ alias: { address: string } }>('/api/me/aliases/throwaway', { label, description: note });
+            await navigator.clipboard?.writeText(r.alias.address).catch(() => {});
+            onCreated(r.alias.address);
+          } catch (err) {
+            toast({ message: (err as Error).message, tone: 'error' });
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <Field label="Where is it for?" help="Becomes the start of the address, followed by four random characters.">
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="shoe-shop" autoFocus maxLength={40} />
+        </Field>
+        <Field label="Note (optional)">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Signed up for the newsletter" maxLength={200} />
+        </Field>
+      </form>
+    </Modal>
+  );
 }

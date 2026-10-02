@@ -5,7 +5,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, Cloud, Globe, MinusCirc
 import { api } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, cx, Empty, Field, Input, Modal, Select, Spinner, Switch } from '../../components/ui';
+import { Badge, Button, Card, cx, Empty, Field, IconButton, Input, Modal, Select, Spinner, Switch } from '../../components/ui';
 import { CopyField, PageHeader, StatusDot, Table } from './common';
 import { useDomains } from './Users';
 import { useProviders } from './Providers';
@@ -339,10 +339,109 @@ export function DomainDetail() {
               <Switch checked={d.enabled} onChange={(v) => void update({ enabled: v })} label="Domain enabled" description="Disabled domains don’t receive mail and can’t be sent from." />
             </div>
           </Card>
+          <CatchAllCard domainId={d.id} domain={d.name} enabled={!!d.catchAllUserId} />
           <CloudflareCard domain={d} onDone={refresh} />
         </div>
       </div>
     </div>
+  );
+}
+
+interface CatchAllInfo {
+  catchAllUserId: number | null;
+  hits: { address: string; count: number; firstAt: number; lastAt: number; lastFrom: string; lastSubject: string; blocked: boolean }[];
+  blocked: { address: string; createdAt: number }[];
+}
+
+/** What the catch-all has been taking, so a leaked or guessed address can be blocked, or made a real alias. */
+function CatchAllCard({ domainId, domain, enabled }: { domainId: number; domain: string; enabled: boolean }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [block, setBlock] = useState('');
+  const info = useQuery({ queryKey: ['admin', 'catchall', domainId], queryFn: () => api.get<CatchAllInfo>(`/api/admin/domains/${domainId}/catchall`) });
+  const hits = info.data?.hits ?? [];
+  const blocked = info.data?.blocked ?? [];
+  if (!enabled && !blocked.length && !hits.length) return null;
+  const run = async (fn: () => Promise<unknown>, message: string) => {
+    try {
+      await fn();
+      qc.invalidateQueries({ queryKey: ['admin', 'catchall', domainId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'addresses'] });
+      toast(message);
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    }
+  };
+  const doBlock = (address: string) => run(() => api.post('/api/admin/blocked-recipients', { address }), `Mail to ${address} will be refused`);
+  const unblock = (address: string) => run(() => api.del(`/api/admin/blocked-recipients/${encodeURIComponent(address)}`), `${address} unblocked`);
+  return (
+    <Card title="Catch-all activity" description="Addresses without a mailbox or alias that received mail through the catch-all. Block the ones that only get spam.">
+      {info.isLoading ? (
+        <Spinner />
+      ) : hits.length === 0 ? (
+        <p className="text-sm text-muted">{enabled ? 'Nothing yet. Mail to unknown addresses will be listed here.' : 'The catch-all is off.'}</p>
+      ) : (
+        <ul className="-my-2 divide-y divide-line">
+          {hits.map((h) => (
+            <li key={h.address} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className={cx('text-sm font-medium break-all', h.blocked && 'text-muted line-through')}>{h.address}</p>
+                <p className="truncate text-xs text-muted" title={`${h.lastFrom} — ${h.lastSubject}`}>
+                  {h.count.toLocaleString()} message{h.count === 1 ? '' : 's'} · last {relativeTime(h.lastAt)} from {h.lastFrom || 'unknown'}
+                  {h.lastSubject ? ` · “${h.lastSubject}”` : ''}
+                </p>
+              </div>
+              {h.blocked ? (
+                <Button size="sm" variant="ghost" onClick={() => void unblock(h.address)}>
+                  Unblock
+                </Button>
+              ) : (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => void run(() => api.post('/api/admin/catchall/alias', { address: h.address }), `${h.address} is now an alias`)}>
+                    Make alias
+                  </Button>
+                  <Button size="sm" variant="ghost" className="text-danger" onClick={() => void doBlock(h.address)}>
+                    Block
+                  </Button>
+                </>
+              )}
+              <IconButton size="sm" label={`Hide ${h.address} from this list`} onClick={() => void run(() => api.del(`/api/admin/catchall/hits/${encodeURIComponent(h.address)}`), 'Hidden until it gets mail again')}>
+                <XCircle className="size-4" />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-5 border-t border-line pt-4">
+        <p className="text-[13px] font-medium">Blocked addresses</p>
+        <p className="mt-0.5 text-xs text-muted">Mail to these is refused, even with the catch-all on.</p>
+        {blocked.length > 0 && (
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {blocked.map((b) => (
+              <li key={b.address} className="flex items-center gap-1 rounded-full border border-line py-0.5 pr-1 pl-3 text-[13px]">
+                <span className="break-all">{b.address}</span>
+                <IconButton size="sm" label={`Unblock ${b.address}`} onClick={() => void unblock(b.address)}>
+                  <XCircle className="size-4" />
+                </IconButton>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const a = block.includes('@') ? block.trim() : `${block.trim()}@${domain}`;
+            void doBlock(a).then(() => setBlock(''));
+          }}
+        >
+          <Input value={block} onChange={(e) => setBlock(e.target.value)} placeholder={`leaked@${domain}`} aria-label="Address to block" />
+          <Button type="submit" disabled={!block.trim()}>
+            Block
+          </Button>
+        </form>
+      </div>
+    </Card>
   );
 }
 

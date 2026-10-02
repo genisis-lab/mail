@@ -131,6 +131,13 @@ describe('inbox tabs', () => {
     expect(categorize(alert, c)).toBe('updates');
     const github = await parsed({ from: 'notifications@github.com', subject: 'Re: [org/repo] Fix the build (#12)', headers: { 'List-Id': 'org/repo <repo.org.github.com>' } });
     expect(categorize(github, c)).toBe('updates');
+    const newsletter = await parsed({ from: 'issues@weeklysketch.example', subject: 'Issue #48: Designing calm interfaces', headers: { 'List-Id': '<weekly.weeklysketch.example>', 'List-Unsubscribe': '<https://weeklysketch.example/u>' } });
+    expect(categorize(newsletter, c)).toBe('promotions');
+    const discussion = await parsed({ from: 'kim@example.org', subject: '[design-club] Meetup next week', headers: { 'List-Id': '<design-club.groups.example>', 'List-Post': '<mailto:design-club@groups.example>', 'List-Unsubscribe': '<mailto:leave@groups.example>' } });
+    expect(categorize(discussion, c)).toBe('updates');
+    expect(categorize(await parsed({ from: 'bookings@lisbonair.example', subject: 'Your flight to Lisbon is confirmed' }), c)).toBe('updates');
+    const sale = await parsed({ from: 'noreply@shop.example', subject: 'Last chance: 25% off ends tonight', headers: { 'List-Unsubscribe': '<https://shop.example/u/1>' } });
+    expect(categorize(sale, c)).toBe('promotions');
     // People always land in Primary, even with an "order" in the subject.
     expect(categorize(await parsed({ from: 'sam@example.org', subject: 'Question about my order' }), c)).toBe('primary');
     expect(categorize(await parsed({ from: 'sam@example.org', subject: '50% off at the bakery, want to go?' }), c)).toBe('primary');

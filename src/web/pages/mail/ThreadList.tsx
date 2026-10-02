@@ -24,8 +24,10 @@ import {
   Search,
   Send,
   File as FileIcon,
+  Megaphone,
+  BellRing,
 } from 'lucide-react';
-import type { Label, ThreadSummary, View } from '../../../shared/types';
+import type { Category, Label, ThreadSummary, View } from '../../../shared/types';
 import { api, qs } from '../../lib/api';
 import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/actions';
 import { shortDate, number, relativeTime } from '../../lib/format';
@@ -38,6 +40,13 @@ import { Button, Checkbox, cx, Empty, IconButton, Menu, Spinner, type MenuItem }
 import { LabelDialog, SaveSearchButton } from '../MailLayout';
 import { setListContext } from './listContext';
 import { PhoneRow } from './PhoneRow';
+import { ViaChip } from './Via';
+
+export const TABS: { id: Category; label: string; icon: React.ReactNode; empty: string }[] = [
+  { id: 'primary', label: 'Primary', icon: <Inbox className="size-[18px]" />, empty: 'You’re all caught up' },
+  { id: 'updates', label: 'Updates', icon: <BellRing className="size-[18px]" />, empty: 'No updates: receipts, alerts and notifications go here' },
+  { id: 'promotions', label: 'Promotions', icon: <Megaphone className="size-[18px]" />, empty: 'No promotions: newsletters and offers go here' },
+];
 
 interface ListResponse {
   threads: ThreadSummary[];
@@ -90,10 +99,21 @@ export function ThreadList() {
   const q = params.q ? decodeURIComponent(params.q) : undefined;
   const page = Math.max(1, Number(search.get('page') ?? 1));
   const base = location.pathname;
+  const tabbed = view === 'inbox' && prefs.inboxTabs;
+  const tab: Category | undefined = tabbed ? (TABS.find((t) => t.id === search.get('tab'))?.id ?? 'primary') : undefined;
+  /** Change the page or tab, keeping the other. */
+  const go = (next: { page?: number; tab?: Category }) => {
+    const p = new URLSearchParams();
+    const nt = next.tab ?? tab;
+    if (nt && nt !== 'primary') p.set('tab', nt);
+    const np = next.tab !== undefined ? 1 : (next.page ?? page);
+    if (np > 1) p.set('page', String(np));
+    setSearch(p);
+  };
 
   const list = useQuery({
-    queryKey: ['threads', { view, labelId, q, page, pageSize: prefs.pageSize }],
-    queryFn: () => api.get<ListResponse>(`/api/mail/threads${qs({ view, label: labelId, q, page, pageSize: prefs.pageSize })}`),
+    queryKey: ['threads', { view, labelId, q, page, pageSize: prefs.pageSize, category: tab }],
+    queryFn: () => api.get<ListResponse>(`/api/mail/threads${qs({ view, label: labelId, q, page, pageSize: prefs.pageSize, category: tab })}`),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   });
@@ -109,14 +129,14 @@ export function ThreadList() {
     setSelected(new Set());
     setAllMatching(false);
     setCursor(0);
-  }, [view, labelId, q, page]);
+  }, [view, labelId, q, page, tab]);
 
   useEffect(() => {
     setListContext(base, threads.map((t) => t.id), search.toString());
   }, [base, threads, search]);
 
   const label = labelId ? labels.data?.find((l) => l.id === labelId) : undefined;
-  const title = q ? `Search results` : label ? label.name : TITLES[view ?? 'inbox'];
+  const title = q ? `Search results` : label ? label.name : tab && tab !== 'primary' ? TABS.find((t) => t.id === tab)!.label : TITLES[view ?? 'inbox'];
   const total = list.data?.total ?? 0;
   const pageSize = list.data?.pageSize ?? prefs.pageSize;
   const from = total ? (page - 1) * pageSize + 1 : 0;
@@ -132,17 +152,24 @@ export function ThreadList() {
       });
       return;
     }
-    navigate(`${base}/${t.id}${page > 1 ? `?page=${page}` : ''}`);
+    navigate(`${base}/${t.id}${search.toString() ? `?${search.toString()}` : ''}`);
   };
 
   const act = async (action: ThreadAction) => {
     if (allMatching) {
-      await api.post('/api/mail/threads/bulk', { view, label: labelId, q, action });
+      await api.post('/api/mail/threads/bulk', { view, label: labelId, q, category: tab, action });
       refresh();
       toast('Done');
     } else await run(selIds, action);
     setSelected(new Set());
     setAllMatching(false);
+  };
+
+  const moveToTab = async (category: Category) => {
+    const senders = [...new Set(threads.filter((t) => selected.has(t.id)).flatMap((t) => t.participants.filter((p) => !p.me).map((p) => p.name)))];
+    await act({ type: 'category', category });
+    const name = TABS.find((x) => x.id === category)!.label;
+    toast(senders.length === 1 ? `Moved to ${name}. Future mail from ${senders[0]} goes there too.` : `Moved to ${name}. Future mail from these senders goes there too.`);
   };
 
   const selectBy = (pred: (t: ThreadSummary) => boolean) => {
@@ -256,7 +283,7 @@ export function ThreadList() {
                 </IconButton>
               )}
               items={[{ label: 'Mark all as read', icon: <MailOpen className="size-4" />, onClick: () => void (async () => {
-                await api.post('/api/mail/threads/bulk', { view, label: labelId, q, action: { type: 'read' } });
+                await api.post('/api/mail/threads/bulk', { view, label: labelId, q, category: tab, action: { type: 'read' } });
                 refresh();
                 toast('All conversations marked as read');
               })() }]}
@@ -345,6 +372,12 @@ export function ThreadList() {
                 { label: 'Archive', icon: <Archive className="size-4" />, onClick: () => void act({ type: 'archive' }) },
                 { label: 'Spam', icon: <OctagonAlert className="size-4" />, onClick: () => void act({ type: 'spam' }) },
                 { label: 'Trash', icon: <Trash2 className="size-4" />, onClick: () => void act({ type: 'trash' }) },
+                ...(prefs.inboxTabs && !inTrash && !inSpam
+                  ? [
+                      { divider: true },
+                      ...TABS.filter((x) => x.id !== tab).map((x) => ({ label: x.label, icon: x.icon, onClick: () => void moveToTab(x.id) })),
+                    ]
+                  : []),
               ]}
             />
             <Menu
@@ -369,14 +402,16 @@ export function ThreadList() {
               {number(from)}–{number(to)} of {total > 10_000 ? 'many' : number(total)}
             </span>
           )}
-          <IconButton label="Newer" disabled={page <= 1} onClick={() => setSearch(page - 1 > 1 ? { page: String(page - 1) } : {})}>
+          <IconButton label="Newer" disabled={page <= 1} onClick={() => go({ page: page - 1 })}>
             <ChevronLeft className="size-[18px]" />
           </IconButton>
-          <IconButton label="Older" disabled={to >= total} onClick={() => setSearch({ page: String(page + 1) })}>
+          <IconButton label="Older" disabled={to >= total} onClick={() => go({ page: page + 1 })}>
             <ChevronRight className="size-[18px]" />
           </IconButton>
         </div>
       </div>
+
+      {tabbed && <InboxTabs current={tab!} onPick={(id) => go({ tab: id })} />}
 
       {/* Banners */}
       {allOnPage && total > threads.length && (
@@ -440,6 +475,8 @@ export function ThreadList() {
             </Empty>
           ) : label ? (
             <Empty icon={<Tag className="size-7" />} title={`There are no conversations with this label.`} />
+          ) : tab && tab !== 'primary' ? (
+            <Empty icon={TABS.find((x) => x.id === tab)!.icon} title={TABS.find((x) => x.id === tab)!.empty} />
           ) : (
             <Empty icon={EMPTY[view ?? 'inbox'].icon} title={EMPTY[view ?? 'inbox'].title}>
               {EMPTY[view ?? 'inbox'].body}
@@ -608,8 +645,9 @@ function ThreadRow({
         {t.folders.includes('inbox') && view !== 'inbox' && !recipientsView && view !== 'spam' && view !== 'trash' && (
           <span className="shrink-0 rounded bg-panel3 px-1.5 text-[11px] leading-[18px] text-muted">Inbox</span>
         )}
+        {t.via && !recipientsView && <ViaChip address={t.via} />}
         {rowLabels.slice(0, 3).map((l) => (
-          <span key={l.id} className="max-w-28 shrink-0 truncate rounded px-1.5 text-[11px] leading-[18px] font-medium" style={{ background: `${l.color}22`, color: l.color }}>
+          <span key={l.id} className="max-w-28 shrink-0 truncate rounded px-1.5 text-[11px] leading-[18px] font-medium" style={{ background: `${l.color}22`, color: `color-mix(in srgb, ${l.color} 45%, var(--fg))` }}>
             {l.name}
           </span>
         ))}
@@ -658,6 +696,42 @@ function ThreadRow({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function InboxTabs({ current, onPick }: { current: Category; onPick: (c: Category) => void }) {
+  const counters = useCounters();
+  const unread = counters.data?.categories;
+  return (
+    <div role="tablist" aria-label="Inbox tabs" className="flex shrink-0 overflow-x-auto border-b border-line">
+      {TABS.map((t) => {
+        const active = t.id === current;
+        const n = unread?.[t.id] ?? 0;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onPick(t.id)}
+            className={cx(
+              'relative flex h-12 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-sm transition-colors sm:w-60 sm:flex-none sm:justify-start sm:gap-3 sm:px-4',
+              active ? 'font-medium text-accent-ink' : 'text-muted hover:bg-hover',
+            )}
+          >
+            <span className={cx('max-sm:hidden', active && 'text-accent-ink')}>{t.icon}</span>
+            <span className="truncate">{t.label}</span>
+            {t.id !== 'primary' && n > 0 && (
+              <span className="shrink-0 rounded-full bg-accent px-1.5 text-[11px] leading-[18px] font-medium text-white" aria-label={`${n} unread`}>
+                {n > 99 ? '99+' : n}
+                <span className="max-sm:hidden"> new</span>
+              </span>
+            )}
+            {active && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-t bg-accent" aria-hidden />}
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -37,7 +37,7 @@ import { useHotkeys } from '../lib/hotkeys';
 import { MailboxProvider, useMailbox } from '../lib/mailbox';
 import { useNewMailNotifications, useUnreadTitle } from '../lib/notify';
 import { useInstallPrompt } from '../lib/pwa';
-import { useCounters, useLabels, useSession } from '../lib/session';
+import { inboxCount, useCounters, useLabels, useSession } from '../lib/session';
 import { Avatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
 import { LogoMark } from '../components/Logo';
@@ -102,7 +102,7 @@ function MailShell() {
   const mailbox = useMailbox();
   const counters = useCounters();
   const gPrefix = useRef(0);
-  useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', counters.data?.inbox, instance.name);
+  useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', inboxCount(counters.data, prefs.inboxTabs), instance.name);
   useNewMailNotifications(prefs.notifications, mailbox.current?.id ?? null);
 
   // The installed app's "Compose" shortcut opens /inbox?compose=1.
@@ -512,6 +512,7 @@ function MailboxSwitcher({ wide }: { wide: boolean }) {
 function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean; mobileOpen: boolean; onCloseMobile: () => void }) {
   const compose = useCompose();
   const counters = useCounters();
+  const { prefs } = useSession();
   const labels = useLabels();
   const searches = useSavedSearches();
   const [labelDialog, setLabelDialog] = useState<Partial<Label> | null>(null);
@@ -546,7 +547,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
         <MailboxSwitcher wide={wide} />
       </div>
       {NAV.map((n) => {
-        const count = n.count && c ? c[n.count] : 0;
+        const count = (n.count && c ? (n.view === 'inbox' ? inboxCount(c, prefs.inboxTabs) : c[n.count]) : 0) ?? 0;
         return (
           <NavLink
             key={n.view}

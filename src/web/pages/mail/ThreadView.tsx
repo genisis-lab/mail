@@ -34,6 +34,8 @@ import {
   FileImage,
   FileArchive,
   Code2,
+  AtSign,
+  MailX,
 } from 'lucide-react';
 import type { Label, MessageDetail, ThreadDetail } from '../../../shared/types';
 import { api, mailboxUrl } from '../../lib/api';
@@ -41,6 +43,8 @@ import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/ac
 import { fileSize, longDate, relativeTime, shortDate } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
 import { useLabels, useSession } from '../../lib/session';
+import { useMailbox } from '../../lib/mailbox';
+import { TABS } from './ThreadList';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
@@ -58,6 +62,7 @@ export function ThreadView() {
   const toast = useToast();
   const compose = useCompose();
   const { prefs, user, refresh: refreshSession } = useSession();
+  const mailbox = useMailbox();
   const labels = useLabels();
   const { run } = useThreadActions();
   const base = listBase(location.pathname);
@@ -288,6 +293,20 @@ export function ThreadView() {
             { label: 'Archive', icon: <Archive className="size-4" />, onClick: () => void act({ type: 'archive' }) },
             { label: 'Spam', icon: <OctagonAlert className="size-4" />, onClick: () => void act({ type: 'spam' }) },
             { label: 'Trash', icon: <Trash2 className="size-4" />, onClick: () => void act({ type: 'trash' }) },
+            ...(prefs.inboxTabs && messages.some((m) => m.direction === 'in')
+              ? [
+                  { divider: true },
+                  ...TABS.filter((t) => t.id !== messages.filter((m) => m.direction === 'in').at(-1)?.category).map((t) => ({
+                    label: t.label,
+                    icon: t.icon,
+                    onClick: async () => {
+                      await run([threadId], { type: 'category', category: t.id }, { quiet: true });
+                      const from = messages.filter((m) => m.direction === 'in').at(-1)?.from;
+                      toast(`Moved to ${t.label}. Future mail from ${from?.name || from?.address || 'this sender'} goes there too.`);
+                    },
+                  })),
+                ]
+              : []),
           ]}
         />
         <Menu
@@ -326,7 +345,7 @@ export function ThreadView() {
                 .map((id) => labels.data?.find((l) => l.id === id))
                 .filter((l): l is Label => !!l)
                 .map((l) => (
-                  <span key={l.id} className="ml-2 inline-flex translate-y-[-3px] items-center gap-1 rounded px-1.5 align-middle text-xs font-medium" style={{ background: `${l.color}22`, color: l.color }}>
+                  <span key={l.id} className="ml-2 inline-flex translate-y-[-3px] items-center gap-1 rounded px-1.5 align-middle text-xs font-medium" style={{ background: `${l.color}22`, color: `color-mix(in srgb, ${l.color} 45%, var(--fg))` }}>
                     {l.name}
                     <button aria-label={`Remove label ${l.name}`} onClick={() => void run([threadId], { type: 'unlabel', labelId: l.id }, { quiet: true })} className="opacity-70 hover:opacity-100">
                       <X className="size-3" />
@@ -367,7 +386,8 @@ export function ThreadView() {
                     })
                   }
                   onReply={(mode) => void startReply(m, mode)}
-                  meAddress={user.email}
+                  meAddress={mailbox.current?.address ?? user.email}
+                  canBlockRecipients={!mailbox.current && (user.role === 'owner' || user.role === 'admin')}
                   alwaysShowImages={prefs.showImages === 'always'}
                   onAlwaysShowImages={async () => {
                     await api.put('/api/account/prefs', { showImages: 'always' });
@@ -476,7 +496,9 @@ function MessageCard({
   meAddress,
   alwaysShowImages,
   onAlwaysShowImages,
+  canBlockRecipients,
 }: {
+  canBlockRecipients: boolean;
   m: MessageDetail;
   isLast: boolean;
   expanded: boolean;
@@ -500,6 +522,22 @@ function MessageCard({
   const msgAction = async (type: string) => {
     await api.post(`/api/mail/messages/${m.id}/actions`, { type });
     invalidate();
+  };
+  const via = m.direction === 'in' && m.deliveredTo && m.deliveredTo.toLowerCase() !== meAddress.toLowerCase() ? m.deliveredTo : null;
+  const aliases = useQuery({ queryKey: ['me', 'aliases'], queryFn: () => api.get<{ aliases: { id: number; address: string; kind: string; enabled: boolean }[] }>('/api/me/aliases'), enabled: !!via && expanded });
+  const viaAlias = via ? aliases.data?.aliases.find((a) => a.kind === 'alias' && a.address.toLowerCase() === via.toLowerCase()) : undefined;
+  const unsubscribe = async () => {
+    if (!window.confirm(`Unsubscribe from ${m.from.name || m.from.address}? Wren asks the sender to stop mailing you.`)) return;
+    try {
+      const r = await api.post<{ method: 'one-click' | 'email' | 'link'; url?: string }>(`/api/mail/messages/${m.id}/unsubscribe`);
+      invalidate();
+      if (r.method === 'link' && r.url) {
+        window.open(r.url, '_blank', 'noopener,noreferrer');
+        toast('The sender’s unsubscribe page opened in a new tab');
+      } else toast(r.method === 'email' ? `Unsubscribe request sent to ${m.from.name || m.from.address}` : `Unsubscribed from ${m.from.name || m.from.address}`);
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    }
   };
   const visibleAttachments = m.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`));
   const scheduled = m.status === 'queued' && m.sendAt && m.sendAt > Date.now() + 30_000;
@@ -529,6 +567,21 @@ function MessageCard({
             <span className="text-sm font-bold">{fromName}</span>
             <span className="truncate text-xs text-muted">&lt;{m.from.address}&gt;</span>
             {m.sentBy && <span className="rounded bg-accent-soft px-1.5 text-[11px] leading-[18px] font-medium text-accent-ink">sent by {m.sentBy.name || m.sentBy.email}</span>}
+            {m.canUnsubscribe &&
+              (m.unsubscribed ? (
+                <span className="text-xs text-faint">Unsubscribed</span>
+              ) : (
+                <button
+                  type="button"
+                  className="no-print text-xs font-medium text-accent-ink underline-offset-2 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void unsubscribe();
+                  }}
+                >
+                  Unsubscribe
+                </button>
+              ))}
           </div>
           <button
             className="flex items-center gap-0.5 text-xs text-muted hover:text-fg"
@@ -538,6 +591,7 @@ function MessageCard({
             }}
           >
             to {recipientsSummary(m, meAddress)}
+            {via && <span className="ml-1 text-faint">· via {via}</span>}
             <ChevronDown className={cx('size-3.5 transition-transform', showDetails && 'rotate-180')} />
           </button>
         </div>
@@ -568,6 +622,33 @@ function MessageCard({
               { label: 'Download message', icon: <Download className="size-4" />, onClick: () => (window.location.href = mailboxUrl(`/api/mail/messages/${m.id}/raw?download=1`)) },
               { divider: true },
               { label: 'Mark unread from here', icon: <Mail className="size-4" />, onClick: () => void msgAction('unread') },
+              ...(m.canUnsubscribe && !m.unsubscribed ? [{ label: 'Unsubscribe', icon: <MailX className="size-4" />, onClick: () => void unsubscribe() }] : []),
+              ...(viaAlias?.enabled
+                ? [
+                    {
+                      label: `Turn off ${viaAlias.address}`,
+                      icon: <AtSign className="size-4" />,
+                      onClick: async () => {
+                        if (!window.confirm(`Turn off ${viaAlias.address}? Mail sent to it will bounce. You can turn it back on in Settings → Accounts.`)) return;
+                        await api.put(`/api/me/aliases/${viaAlias.id}`, { enabled: false });
+                        qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
+                        toast(`${viaAlias.address} turned off`);
+                      },
+                    },
+                  ]
+                : via && !viaAlias && aliases.isSuccess && canBlockRecipients
+                  ? [
+                      {
+                        label: `Block mail to ${via}`,
+                        icon: <AtSign className="size-4" />,
+                        onClick: async () => {
+                          if (!window.confirm(`Refuse all mail to ${via}? It reached you through the catch-all. You can undo this under Admin → Domains.`)) return;
+                          await api.post('/api/admin/blocked-recipients', { address: via });
+                          toast(`Mail to ${via} will be refused`);
+                        },
+                      },
+                    ]
+                  : []),
               ...(m.direction === 'in'
                 ? [
                     {
@@ -618,6 +699,12 @@ function MessageCard({
               <>
                 <dt className="text-right text-muted">bcc:</dt>
                 <dd className="break-all">{m.bcc.map((a) => a.address).join(', ')}</dd>
+              </>
+            )}
+            {via && (
+              <>
+                <dt className="text-right text-muted">delivered to:</dt>
+                <dd className="break-all">{via}</dd>
               </>
             )}
             <dt className="text-right text-muted">date:</dt>

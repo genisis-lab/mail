@@ -109,13 +109,29 @@ export function Field({ label, help, error, children, className }: { label?: Rea
   );
 }
 
-export function Switch({ checked, onChange, label, description, disabled }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode; description?: ReactNode; disabled?: boolean }) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  description,
+  disabled,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: ReactNode;
+  description?: ReactNode;
+  disabled?: boolean;
+  /** For a switch with no visible label. */
+  ariaLabel?: string;
+}) {
   return (
     <label className={cx('flex items-start gap-3', disabled ? 'opacity-60' : 'cursor-pointer')}>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cx('relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors', checked ? 'bg-accent' : 'bg-line-strong')}

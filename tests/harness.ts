@@ -58,7 +58,7 @@ export function harness() {
 
 /** Outbox jobs with their decoded raw message. */
 export async function outbox(kind = 'notice') {
-  const rows = all<{ id: number; recipients: string; raw_blob: string; subject: string; status: string }>('SELECT * FROM outbox WHERE kind = ? ORDER BY id', [kind]);
+  const rows = all<{ id: number; recipients: string; raw_blob: string; subject: string; status: string; mail_from: string }>('SELECT * FROM outbox WHERE kind = ? ORDER BY id', [kind]);
   return Promise.all(
     rows.map(async (r) => {
       const raw = (await getBlob(r.raw_blob)).toString('utf8');

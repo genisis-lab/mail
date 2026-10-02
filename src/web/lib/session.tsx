@@ -81,7 +81,15 @@ export interface Counters {
   snoozed: number;
   starred: number;
   important: number;
+  /** Unread conversations per inbox tab. */
+  categories?: { primary: number; updates: number; promotions: number };
   labels: { id: number; unread: number; total: number }[];
+}
+
+/** The Inbox count: Primary only when the inbox is split into tabs. */
+export function inboxCount(c: Counters | undefined, tabs: boolean): number | undefined {
+  if (!c) return undefined;
+  return tabs && c.categories ? c.categories.primary : c.inbox;
 }
 
 export function useCounters() {

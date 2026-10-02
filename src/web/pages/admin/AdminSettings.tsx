@@ -261,6 +261,17 @@ function RegistrationTab({ draft, set }: { draft: S; set: (k: string, v: unknown
             <Input type="number" min={1} max={100} value={draft['aliases.maxPerUser']} onChange={(e) => set('aliases.maxPerUser', Number(e.target.value))} />
           </Field>
         )}
+        <Switch
+          checked={draft['aliases.throwaway']}
+          onChange={(v) => set('aliases.throwaway', v)}
+          label="Let people make throwaway sign-up addresses"
+          description="Like shoe-shop.k3x9@ their domain, one per site, which they can turn off when it starts getting spam. Administrators can always make them."
+        />
+        {draft['aliases.throwaway'] && (
+          <Field label="Sign-up addresses per person" className="max-w-48">
+            <Input type="number" min={1} max={500} value={draft['aliases.maxThrowaway']} onChange={(e) => set('aliases.maxThrowaway', Number(e.target.value))} />
+          </Field>
+        )}
       </div>
     </Card>
     <Card title="Who can create accounts?">

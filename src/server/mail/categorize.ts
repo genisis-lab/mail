@@ -15,10 +15,9 @@ export const CATEGORIES: Category[] = ['primary', 'updates', 'promotions'];
 
 /** Headers bulk-mail services add (Mailchimp, SendGrid, Mailgun, Klaviyo, Braze…). */
 const ESP_HEADERS = ['x-mailchimp-campaign', 'x-mc-user', 'x-campaign', 'x-campaignid', 'x-campaign-id', 'x-sg-eid', 'x-mailgun-tag', 'x-klaviyo', 'x-braze', 'x-marketo', 'x-hubspot', 'x-sfmc', 'x-iterable', 'x-cm-msg', 'x-emarsys', 'x-mailjet-campaign', 'x-sib-id', 'x-ccp'];
-const PROMO_SENDER = /^(news|newsletters?|marketing|offers?|deals?|promos?|promotions?|sales?|shop|store|digest|weekly|community|events?)([.+_-]|$)/;
 const PROMO_SUBJECT = /(\d+\s?% off|\bsale\b|\bdeals?\b|\bdiscount|\boffer\b|\bcoupon|promo code|free shipping|limited[- ]time|ends (today|tonight|soon)|last chance|don['’]t miss|\bexclusive\b|new arrivals|black friday|cyber monday|\bsave (up to )?[$£€]|\bnewsletter\b|\bwebinar\b)/i;
-const UPDATE_SENDER = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|updates?|security|billing|invoices?|receipts?|orders?|mailer-daemon|postmaster|bounces?|automated|system)([.+_-]|$)/;
-const UPDATE_SUBJECT = /(receipt|invoice|your order|order (confirm|#|no\.?|number)|has shipped|out for delivery|delivered|tracking|payment|statement|subscription|renew|verify|verification|confirm your|security alert|sign[- ]?in|new login|password|2fa|one-time|code is|reminder|appointment|booking|reservation|itinerary|ticket|notification|mentioned you|commented|assigned to you|pull request|build (passed|failed)|alert:)/i;
+const UPDATE_SENDER = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|updates?|security|billing|invoices?|receipts?|orders?|bookings?|reservations?|confirmations?|tickets?|shipping|delivery|mailer-daemon|postmaster|bounces?|automated|system)([.+_-]|$)/;
+const UPDATE_SUBJECT = /\b(receipt|invoice|your order|order (confirm|#|no\.?|number)|has shipped|out for delivery|delivered|tracking|payment|statement|subscription|renew|verify|verification|confirm your|is confirmed|security alert|sign[- ]?in|new login|password|2fa|one-time|code is|reminder|appointment|booking|reservation|itinerary|ticket|notification|mentioned you|commented|assigned to you|pull request|build (passed|failed)|alert:)/i;
 
 const header = (p: Parsed, k: string) => p.headers.get(k)?.[0] ?? '';
 
@@ -66,17 +65,14 @@ export function categorize(p: Parsed, ctx: CategoryContext): Category {
   // Someone the user knows, writing one-to-one.
   if (ctx.knownContact && !bulk && !UPDATE_SENDER.test(local)) return 'primary';
 
-  let promo = 0;
-  if (esp) promo += 2;
-  if (unsubscribe) promo += 1;
-  if (precedence === 'bulk') promo += 1;
-  if (PROMO_SENDER.test(local)) promo += 1;
-  if (PROMO_SUBJECT.test(p.subject)) promo += 2;
-  // Transactional mail (receipts, alerts) often carries an unsubscribe link too.
-  const transactional = UPDATE_SUBJECT.test(p.subject);
-  if (transactional) promo -= 2;
-  if (promo >= 3) return 'promotions';
-  if (automated || transactional || p.listId || bulk) return 'updates';
+  // Receipts, alerts, notifications and discussion lists are updates, even with an unsubscribe link;
+  // other bulk mail (newsletters, offers) is promotions.
+  const offer = PROMO_SUBJECT.test(p.subject);
+  if (UPDATE_SUBJECT.test(p.subject) && !(offer && esp)) return 'updates';
+  if (UPDATE_SENDER.test(local)) return offer && bulk ? 'promotions' : 'updates';
+  if (p.headers.has('list-post')) return 'updates';
+  if (bulk) return 'promotions';
+  if (automated || p.listId) return 'updates';
   return 'primary';
 }
 

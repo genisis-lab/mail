@@ -19,7 +19,7 @@
   --accent-fg: #ffffff;
   --danger: #c5221f;
   --warn: #9a4a07;
-  --ok: #137333;
+  --ok: #0d652d;
   /* Accent as text: darker than the fill so it stays readable on tinted backgrounds. */
   --accent-ink: color-mix(in srgb, var(--accent) 85%, #000);
   --unread-row: #ffffff;

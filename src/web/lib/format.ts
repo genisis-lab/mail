@@ -45,7 +45,7 @@ export function initials(name: string): string {
   return ((parts[0][0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
 
-const AVATAR_COLORS = ['#e8710a', '#d93025', '#188038', '#1a73e8', '#a142f4', '#e52592', '#12a4af', '#f9ab00', '#5f6368', '#c5221f', '#137333', '#7627bb'];
+const AVATAR_COLORS = ['#b45309', '#d93025', '#188038', '#1a73e8', '#a142f4', '#c2185b', '#0b7285', '#8d5b00', '#5f6368', '#c5221f', '#137333', '#7627bb'];
 export function colorFor(key: string): string {
   let h = 0;
   for (const ch of key.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;

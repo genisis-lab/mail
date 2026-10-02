@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { useToast } from '../components/toast';
 import { plural } from './format';
+import type { Category } from '../../shared/types';
 
 export type ThreadActionType =
   | 'read'
@@ -20,7 +21,11 @@ export type ThreadActionType =
   | 'delete'
   | 'unsnooze';
 
-export type ThreadAction = { type: ThreadActionType } | { type: 'snooze'; until: number } | { type: 'label' | 'unlabel'; labelId: number };
+export type ThreadAction =
+  | { type: ThreadActionType }
+  | { type: 'snooze'; until: number }
+  | { type: 'label' | 'unlabel'; labelId: number }
+  | { type: 'category'; category: Category };
 
 const INVERSE: Partial<Record<string, ThreadActionType | 'unlabel' | 'label'>> = {
   archive: 'inbox',

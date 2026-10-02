@@ -11,6 +11,7 @@ import { shortDate, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
 import { cx } from '../../components/ui';
+import { ViaChip } from './Via';
 
 const THRESHOLD = 88;
 
@@ -175,8 +176,9 @@ export function PhoneRow({
           </div>
           <div className="flex items-center gap-1.5">
             {t.status === 'failed' && <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium text-danger">Failed</span>}
+            {t.via && view !== 'sent' && view !== 'drafts' && view !== 'scheduled' && <ViaChip address={t.via} />}
             {rowLabels.slice(0, 2).map((l) => (
-              <span key={l.id} className="max-w-24 shrink-0 truncate rounded px-1.5 text-[11px] leading-[18px] font-medium" style={{ background: `${l.color}22`, color: l.color }}>
+              <span key={l.id} className="max-w-24 shrink-0 truncate rounded px-1.5 text-[11px] leading-[18px] font-medium" style={{ background: `${l.color}22`, color: `color-mix(in srgb, ${l.color} 45%, var(--fg))` }}>
                 {l.name}
               </span>
             ))}
