@@ -13,7 +13,7 @@ import { getHeader, parseMail, type Parsed } from './parse.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
-import { markRoundtripReceived } from '../services/checklist.js';
+import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
 import { notifyNewMail } from '../services/push.js';
 
 const log = logger('ingest');
@@ -102,7 +102,7 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
   }
   if (!userTargets.size && !externalTargets.size) return result;
   if (opts.source === 'cloudflare-routing') verifyDomainsByRouting(result.accepted);
-  const roundtrip = getHeader(p, 'x-wren-roundtrip');
+  const roundtrip = roundtripToken(p, getHeader(p, 'x-wren-roundtrip'));
   if (roundtrip) markRoundtripReceived(roundtrip);
 
   const rawBlob = await putBlob(raw);

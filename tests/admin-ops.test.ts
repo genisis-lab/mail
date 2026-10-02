@@ -50,6 +50,52 @@ describe('setup checklist and round-trip test', () => {
     expect(item(list.items, 'receive').status).toBe('done');
     expect(get<{ verified_at: number | null }>(`SELECT verified_at FROM domains WHERE name = 'wren.test'`)!.verified_at).toBeTruthy();
   });
+
+  const latest = () => get<{ token: string; outbox_id: number; sent_at: number }>('SELECT token, outbox_id, sent_at FROM roundtrip_tests ORDER BY sent_at DESC, rowid DESC LIMIT 1')!;
+  const roundtrip = async () => item((await h.call('GET', '/api/admin/checklist')).body.items, 'roundtrip');
+
+  it('recognises a test a provider delivered without the marker header (body code)', async () => {
+    await h.call('POST', '/api/admin/checklist/roundtrip');
+    await processQueue();
+    const { token } = latest();
+    // What a header-dropping JSON API delivers: same message, no X-Wren-Roundtrip.
+    const [sent] = (await outbox('test')).slice(-1);
+    const parsed = await (await import('../src/server/mail/parse')).parseMail(Buffer.from(sent.raw));
+    expect(parsed.text).toContain(`Delivery test code: ${token}`);
+    const { raw } = await buildMime({ from: { address: 'admin@wren.test', name: 'Ada' }, to: [{ address: 'admin@wren.test' }], subject: parsed.subject, html: parsed.html ?? '' });
+    await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'resend' });
+    expect(await roundtrip()).toMatchObject({ status: 'done' });
+  });
+
+  it('recognises a test that came back with no marker at all, from its subject and sender', async () => {
+    await h.call('POST', '/api/admin/checklist/roundtrip');
+    await processQueue();
+    const { raw } = await buildMime({ from: { address: 'admin@wren.test' }, to: [{ address: 'admin@wren.test' }], subject: 'Fernhill delivery test', text: 'rewritten by the provider' });
+    await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'resend' });
+    expect(await roundtrip()).toMatchObject({ status: 'done' });
+  });
+
+  it('explains a failed send right away, and a test that never arrived', async () => {
+    await h.call('POST', '/api/admin/checklist/roundtrip');
+    const { outbox_id } = latest();
+    run(`UPDATE outbox SET status = 'failed', last_error = '403 The from address domain is not verified' WHERE id = ?`, [outbox_id]);
+    let r = await roundtrip();
+    expect(r.status).toBe('warn');
+    expect(r.detail).toMatch(/couldn’t be sent.*domain is not verified/);
+    expect(r.action.label).toBe('Try again');
+
+    await h.call('POST', '/api/admin/checklist/roundtrip');
+    await processQueue();
+    expect((await roundtrip()).status).toBe('pending');
+    // Six minutes pass.
+    run('UPDATE roundtrip_tests SET sent_at = sent_at - 6 * 60000');
+    run('UPDATE messages SET created_at = created_at - 6 * 60000');
+    run('UPDATE inbound_log SET created_at = created_at - 6 * 60000');
+    r = await roundtrip();
+    expect(r.status).toBe('warn');
+    expect(r.detail).toMatch(/nothing has arrived for admin@wren.test since/);
+    expect(r.action.api).toBe('/api/admin/checklist/roundtrip');
+  });
 });
 
 describe('alerts', () => {

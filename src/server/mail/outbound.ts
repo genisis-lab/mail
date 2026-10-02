@@ -113,7 +113,8 @@ export function enqueue(input: EnqueueInput): number {
   );
 }
 
-const PASS_HEADERS = ['in-reply-to', 'references', 'message-id', 'auto-submitted', 'list-unsubscribe', 'list-unsubscribe-post', 'x-auto-response-suppress'];
+/** Headers JSON-API providers (Resend, Postmark…) are asked to send, since they don't take the raw message. */
+const PASS_HEADERS = ['in-reply-to', 'references', 'message-id', 'auto-submitted', 'list-unsubscribe', 'list-unsubscribe-post', 'x-auto-response-suppress', 'x-wren-roundtrip'];
 
 /** Turn a stored raw message into the structured form adapters use. */
 export async function toOutboundEmail(raw: Buffer, envelope: { from: string; to: string[] }): Promise<OutboundEmail> {
