@@ -65,10 +65,22 @@ in the admin panel, and you re-enter the provider settings.
 
 ### Custom hostname
 
-In **Workers & Pages → wren → Settings → Domains & Routes**, add a custom domain
-such as `mail.example.com`. Wren uses the hostname each request arrives on to build
-inbound webhook URLs. To pin it explicitly, set `PUBLIC_URL` under `[vars]` in
-`wrangler.toml`.
+The repository's `wrangler.toml` has no hostname in it, so it deploys to any account.
+Add yours one of two ways:
+
+- **In the dashboard** (nothing to commit): **Workers & Pages → wren → Settings →
+  Domains & Routes → Add → Custom domain**, for example `mail.example.com`. To pin the
+  address Wren uses in links, webhook URLs and passkeys, add a variable `PUBLIC_URL =
+  https://mail.example.com` under **Settings → Variables and Secrets**.
+  `keep_vars = true` in `wrangler.toml` keeps it across deploys.
+- **In your own config file**: copy `wrangler.toml` to e.g. `wrangler.mydomain.toml`,
+  add `routes = [{ pattern = "mail.example.com", custom_domain = true }]` and
+  `[vars] PUBLIC_URL = "https://mail.example.com"`, and deploy with
+  `npx wrangler deploy -c wrangler.mydomain.toml` (with Workers Builds, set that as the
+  **Deploy command** under Settings → Build). `wrangler.builtwai.toml` is an example.
+
+Without `PUBLIC_URL`, Wren uses the hostname each request arrives on. Passkeys belong to
+one hostname, so use the same one every time.
 
 ## 2. Receive mail (Email Routing)
 

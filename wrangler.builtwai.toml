@@ -1,16 +1,15 @@
-# Wren on Cloudflare Workers. See docs/cloudflare.md.
+# Wren for mail.builtwai.com: the same as wrangler.toml, plus the custom domain and
+# its public URL. Deploy with:  npx wrangler deploy -c wrangler.builtwai.toml
+# (Cloudflare → Workers & Pages → wren → Settings → Build → Deploy command).
+# Keep the rest in step with wrangler.toml.
 name = "wren"
 main = "src/worker/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
-# Variables set in the dashboard (Settings → Variables and Secrets) survive deploys.
-keep_vars = true
 
-# Your own hostname (optional). Either add it in the dashboard (Workers & Pages → wren →
-# Settings → Domains & Routes → Add → Custom domain), or uncomment this line; then
-# `wrangler deploy` creates the DNS record and certificate. The zone must be on this
-# Cloudflare account. Without a custom domain Wren is served at wren.<you>.workers.dev.
-# routes = [{ pattern = "mail.example.com", custom_domain = true }]
+# Serve Wren from its own hostname. `wrangler deploy` creates the DNS record and certificate.
+# The zone must be on this Cloudflare account and no other Worker may hold the hostname.
+routes = [{ pattern = "mail.builtwai.com", custom_domain = true }]
 
 # Build the web app before bundling/deploying the Worker.
 [build]
@@ -49,11 +48,9 @@ crons = ["*/5 * * * *"]
 [[send_email]]
 name = "EMAIL"
 
-# Optional: pin the public address used in links, webhook URLs and passkeys, for example
-# when Wren is reachable at more than one hostname. Without it, Wren uses the address
-# each request came in on. You can also set PUBLIC_URL in the dashboard instead.
-# [vars]
-# PUBLIC_URL = "https://mail.example.com"
+[vars]
+# Set if your public hostname differs from the Worker URL (used for inbound webhook URLs).
+PUBLIC_URL = "https://mail.builtwai.com"
 
 [observability]
 enabled = true
