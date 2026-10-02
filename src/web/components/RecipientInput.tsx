@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { Addr } from '../../shared/types';
 import { api } from '../lib/api';
@@ -39,6 +39,7 @@ export function RecipientInput({
   label: string;
   trailing?: React.ReactNode;
 }) {
+  const listId = useId();
   const [text, setText] = useState('');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [active, setActive] = useState(0);
@@ -156,16 +157,26 @@ export function RecipientInput({
               setSuggestions([]);
             }
           }}
+          aria-label={`${label} recipients`}
+          aria-controls={listId}
+          aria-activedescendant={focused && suggestions.length > 0 ? `${listId}-${active}` : undefined}
+          role="combobox"
+          aria-expanded={focused && suggestions.length > 0}
+          aria-autocomplete="list"
           className="h-8 min-w-32 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
         />
       </div>
       {trailing}
       {focused && suggestions.length > 0 && (
-        <div className="animate-pop absolute top-full left-10 z-30 mt-1 w-80 overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-float">
+        <div id={listId} role="listbox" aria-label="Suggestions" className="animate-pop absolute top-full left-10 z-30 mt-1 w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-float">
           {suggestions.map((s, i) => (
             <button
               key={s.email}
+              id={`${listId}-${i}`}
               type="button"
+              role="option"
+              aria-selected={i === active}
+              tabIndex={-1}
               onMouseDown={(e) => {
                 e.preventDefault();
                 pick(s);

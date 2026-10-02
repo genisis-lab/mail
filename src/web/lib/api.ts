@@ -59,7 +59,7 @@ export const api = {
   get: <T = any>(url: string) => request<T>('GET', url),
   post: <T = any>(url: string, data?: Json | FormData) => request<T>('POST', url, data ?? {}),
   put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}),
-  del: <T = any>(url: string) => request<T>('DELETE', url),
+  del: <T = any>(url: string, data?: Json) => request<T>('DELETE', url, data),
 };
 
 export type Api = typeof api;
@@ -70,7 +70,7 @@ export function apiFor(mailbox: number | null): Api {
     get: <T = any>(url: string) => request<T>('GET', url, undefined, mailbox),
     post: <T = any>(url: string, data?: Json | FormData) => request<T>('POST', url, data ?? {}, mailbox),
     put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}, mailbox),
-    del: <T = any>(url: string) => request<T>('DELETE', url, undefined, mailbox),
+    del: <T = any>(url: string, data?: Json) => request<T>('DELETE', url, data, mailbox),
   };
 }
 

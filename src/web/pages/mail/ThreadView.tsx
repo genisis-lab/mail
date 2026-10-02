@@ -36,7 +36,7 @@ import {
   Code2,
 } from 'lucide-react';
 import type { Label, MessageDetail, ThreadDetail } from '../../../shared/types';
-import { api } from '../../lib/api';
+import { api, mailboxUrl } from '../../lib/api';
 import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/actions';
 import { fileSize, longDate, relativeTime, shortDate } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
@@ -528,6 +528,7 @@ function MessageCard({
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-sm font-bold">{fromName}</span>
             <span className="truncate text-xs text-muted">&lt;{m.from.address}&gt;</span>
+            {m.sentBy && <span className="rounded bg-accent-soft px-1.5 text-[11px] leading-[18px] font-medium text-accent-ink">sent by {m.sentBy.name || m.sentBy.email}</span>}
           </div>
           <button
             className="flex items-center gap-0.5 text-xs text-muted hover:text-fg"
@@ -544,7 +545,7 @@ function MessageCard({
           <span className="mr-2 text-xs text-muted max-sm:hidden" title={longDate(m.date)}>
             {longDate(m.date)} ({relativeTime(m.date)})
           </span>
-          <IconButton size="sm" label={m.isStarred ? 'Starred' : 'Not starred'} onClick={() => void msgAction(m.isStarred ? 'unstar' : 'star')}>
+          <IconButton size="sm" label={m.isStarred ? 'Remove star' : 'Add star'} aria-pressed={m.isStarred} onClick={() => void msgAction(m.isStarred ? 'unstar' : 'star')}>
             <Star className={cx('size-[18px]', m.isStarred && 'fill-[#f4b400] text-[#f4b400]')} />
           </IconButton>
           <IconButton size="sm" label="Reply" onClick={() => onReply('reply')}>
@@ -563,8 +564,8 @@ function MessageCard({
               { label: 'Forward', icon: <Forward className="size-4" />, onClick: () => onReply('forward') },
               { divider: true },
               { label: 'Print', icon: <Printer className="size-4" />, onClick: () => window.print() },
-              { label: 'Show original', icon: <Code2 className="size-4" />, onClick: () => window.open(`/api/mail/messages/${m.id}/raw`, '_blank') },
-              { label: 'Download message', icon: <Download className="size-4" />, onClick: () => (window.location.href = `/api/mail/messages/${m.id}/raw?download=1`) },
+              { label: 'Show original', icon: <Code2 className="size-4" />, onClick: () => window.open(mailboxUrl(`/api/mail/messages/${m.id}/raw`), '_blank') },
+              { label: 'Download message', icon: <Download className="size-4" />, onClick: () => (window.location.href = mailboxUrl(`/api/mail/messages/${m.id}/raw?download=1`)) },
               { divider: true },
               { label: 'Mark unread from here', icon: <Mail className="size-4" />, onClick: () => void msgAction('unread') },
               ...(m.direction === 'in'
@@ -674,7 +675,7 @@ function MessageCard({
         )}
         {m.direction === 'out' && (m.status === 'queued' || m.status === 'sending') && (
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl bg-accent-softer px-4 py-3 text-[13px]">
-            {scheduled ? <CalendarClock className="size-4 text-accent" /> : <Clock className="size-4 text-accent" />}
+            {scheduled ? <CalendarClock className="size-4 text-accent-ink" /> : <Clock className="size-4 text-accent-ink" />}
             <span className="flex-1">
               {scheduled ? (
                 <>

@@ -69,7 +69,7 @@ export function DomainsPage() {
                   )}
                 </td>
                 <td className="text-right">
-                  <Link to={`/admin/domains/${d.id}`} className="text-sm font-medium text-accent hover:underline" onClick={(e) => e.stopPropagation()}>
+                  <Link to={`/admin/domains/${d.id}`} className="text-sm font-medium text-accent-ink hover:underline" onClick={(e) => e.stopPropagation()}>
                     Configure
                   </Link>
                 </td>

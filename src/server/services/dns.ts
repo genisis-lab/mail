@@ -82,7 +82,7 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
     records.push({
       type: 'MX',
       host: domain.name,
-      value: 'route1.mx.cloudflare.net (+ route2, route3)',
+      value: '(added by Cloudflare: route1, route2 and route3.mx.cloudflare.net)',
       priority: 10,
       purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker. (Receiving through a provider webhook such as Resend instead? Use that provider’s MX records.)',
     });

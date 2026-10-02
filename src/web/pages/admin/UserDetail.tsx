@@ -69,7 +69,7 @@ export function UserDetailPage() {
     return (
       <Card>
         <Empty title="User not found">
-          <Link to="/admin/users" className="text-accent hover:underline">
+          <Link to="/admin/users" className="text-accent-ink hover:underline">
             Back to users
           </Link>
         </Empty>
@@ -215,7 +215,7 @@ export function UserDetailPage() {
               ))}
             </ul>
           )}
-          <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
+          <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent-ink hover:underline">
             Manage aliases and shared mailboxes
           </Link>
         </Card>

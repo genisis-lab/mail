@@ -11,7 +11,7 @@ import { Button, Field, Input, Select, Spinner } from '../components/ui';
 
 function AuthShell({ instance, children, wide }: { instance: Instance; children: ReactNode; wide?: boolean }) {
   return (
-    <div className="flex min-h-full flex-col items-center justify-center bg-bg px-4 py-10">
+    <main className="flex min-h-full flex-col items-center justify-center bg-bg px-4 py-10">
       <div className={`w-full ${wide ? 'max-w-xl' : 'max-w-[420px]'}`}>
         <div className="mb-8 flex justify-center">
           <Logo name={instance.name || APP_NAME} />
@@ -21,7 +21,7 @@ function AuthShell({ instance, children, wide }: { instance: Instance; children:
           {APP_NAME} {instance.version} · {APP_TAGLINE}
         </p>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -71,13 +71,18 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
           <Field label="Password" error={error}>
             <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </Field>
+          <div className="-mt-2 text-right">
+            <Link to={`/forgot${email ? `?email=${encodeURIComponent(email)}` : ''}`} className="text-sm font-medium text-accent-ink hover:underline">
+              Forgot password?
+            </Link>
+          </div>
           <Button type="submit" variant="primary" className="w-full" loading={busy}>
             Sign in
           </Button>
           {instance.registration !== 'closed' && (
             <p className="text-center text-sm text-muted">
               New here?{' '}
-              <Link to="/register" className="font-medium text-accent hover:underline">
+              <Link to="/register" className="font-medium text-accent-ink hover:underline">
                 Create an account
               </Link>
             </p>
@@ -101,7 +106,7 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
           }}
           className="space-y-4"
         >
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+          <div className="flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-ink">
             <ShieldCheck className="size-6" />
           </div>
           <div>
@@ -160,7 +165,7 @@ export function RegisterPage({ instance }: { instance: Instance }) {
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">{invite && !invite.valid ? 'Invitation expired' : 'Registration is invite-only'}</h1>
         <p className="mt-2 text-sm text-muted">Ask an administrator of {instance.name} for an invitation link.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent hover:underline">
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Back to sign in
         </Link>
       </AuthShell>
@@ -218,7 +223,7 @@ export function RegisterPage({ instance }: { instance: Instance }) {
         </Button>
         <p className="text-center text-sm text-muted">
           Already have an account?{' '}
-          <Link to="/login" className="font-medium text-accent hover:underline">
+          <Link to="/login" className="font-medium text-accent-ink hover:underline">
             Sign in
           </Link>
         </p>
@@ -263,7 +268,7 @@ export function ResetPage({ instance }: { instance: Instance }) {
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">Password updated</h1>
         <p className="mt-2 text-sm text-muted">Sign in with your new password to continue.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent hover:underline">
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Go to sign in
         </Link>
       </AuthShell>
@@ -275,7 +280,7 @@ export function ResetPage({ instance }: { instance: Instance }) {
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">This link has expired</h1>
         <p className="mt-2 text-sm text-muted">The link is invalid or was already used. Ask an administrator of {instance.name} for a new one.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent hover:underline">
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Back to sign in
         </Link>
       </AuthShell>
@@ -558,6 +563,115 @@ export function ForceTwoFactorPage({ instance }: { instance: Instance }) {
       >
         Sign out
       </button>
+    </AuthShell>
+  );
+}
+
+/** "Forgot password?": a reset link goes to the account's confirmed recovery email. */
+export function ForgotPage({ instance }: { instance: Instance }) {
+  const [params] = useSearchParams();
+  const [email, setEmail] = useState(params.get('email') ?? '');
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (sent) {
+    return (
+      <AuthShell instance={instance}>
+        <div className="flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-ink">
+          <Mail className="size-6" aria-hidden />
+        </div>
+        <h1 className="mt-4 text-xl font-semibold" role="status">
+          Check your other inbox
+        </h1>
+        <p className="mt-2 text-sm text-muted">
+          If <b className="text-fg">{email}</b> has a confirmed recovery email, a link to choose a new password is on its way there. It works once, for one hour.
+        </p>
+        <p className="mt-3 text-sm text-muted">Nothing arrived? Check spam, or ask an administrator of {instance.name} to send you a sign-in link.</p>
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+          Back to sign in
+        </Link>
+      </AuthShell>
+    );
+  }
+  return (
+    <AuthShell instance={instance}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError(null);
+          try {
+            await api.post('/api/auth/forgot', { email: email.trim() });
+            setSent(true);
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Forgot your password?</h1>
+          <p className="mt-1 text-sm text-muted">Enter your {instance.name} address. We’ll send a reset link to the recovery email you set up.</p>
+        </div>
+        <Field label="Email address" error={error}>
+          <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
+        </Field>
+        <Button type="submit" variant="primary" className="w-full" loading={busy}>
+          Send reset link
+        </Button>
+        <p className="text-center text-sm">
+          <Link to="/login" className="font-medium text-accent-ink hover:underline">
+            Back to sign in
+          </Link>
+        </p>
+      </form>
+    </AuthShell>
+  );
+}
+
+// One-time links must only be redeemed once, even when React runs effects twice in development.
+const redeemed = new Map<string, Promise<{ email: string }>>();
+
+/** The link in the "confirm your recovery email" message. */
+export function VerifyRecoveryPage({ instance, signedIn }: { instance: Instance; signedIn: boolean }) {
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [state, setState] = useState<{ ok: boolean; email?: string; error?: string } | null>(token ? null : { ok: false, error: 'This link is incomplete.' });
+  useEffect(() => {
+    if (!token) return;
+    if (!redeemed.has(token)) redeemed.set(token, api.post<{ email: string }>('/api/auth/verify-recovery', { token }));
+    redeemed
+      .get(token)!
+      .then((r) => setState({ ok: true, email: r.email }))
+      .catch((err) => setState({ ok: false, error: (err as Error).message }));
+  }, [token]);
+  return (
+    <AuthShell instance={instance}>
+      {!state ? (
+        <div className="flex justify-center py-6">
+          <Spinner className="size-6" />
+        </div>
+      ) : state.ok ? (
+        <div role="status">
+          <div className="flex size-12 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-ok">
+            <ShieldCheck className="size-6" aria-hidden />
+          </div>
+          <h1 className="mt-4 text-xl font-semibold">Recovery email confirmed</h1>
+          <p className="mt-2 text-sm text-muted">
+            If you ever forget your password, use “Forgot password?” on the sign-in page and a reset link goes to <b className="text-fg">{state.email}</b>.
+          </p>
+        </div>
+      ) : (
+        <div role="alert">
+          <h1 className="text-xl font-semibold">This link didn’t work</h1>
+          <p className="mt-2 text-sm text-muted">{state.error} You can send a new confirmation from Settings → Security.</p>
+        </div>
+      )}
+      <Link to={signedIn ? '/settings/security' : '/login'} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+        {signedIn ? 'Go to Security settings' : 'Go to sign in'}
+      </Link>
     </AuthShell>
   );
 }

@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Clock,
+  Download,
   File,
   Flag,
   HelpCircle,
@@ -35,6 +36,7 @@ import { api } from '../lib/api';
 import { useHotkeys } from '../lib/hotkeys';
 import { MailboxProvider, useMailbox } from '../lib/mailbox';
 import { useNewMailNotifications, useUnreadTitle } from '../lib/notify';
+import { useInstallPrompt } from '../lib/pwa';
 import { useCounters, useLabels, useSession } from '../lib/session';
 import { Avatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
@@ -103,6 +105,15 @@ function MailShell() {
   useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', counters.data?.inbox, instance.name);
   useNewMailNotifications(prefs.notifications, mailbox.current?.id ?? null);
 
+  // The installed app's "Compose" shortcut opens /inbox?compose=1.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('compose') !== '1') return;
+    params.delete('compose');
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params}` : '' }, { replace: true });
+    compose.open();
+  }, [location.search, location.pathname, navigate, compose]);
+
   useEffect(() => setMobileOpen(false), [location.pathname]);
   useEffect(() => localStorage.setItem('wren.sidebar', collapsed ? 'collapsed' : 'open'), [collapsed]);
 
@@ -159,7 +170,7 @@ function MailShell() {
       {isListPath(location.pathname) && (
         <button
           onClick={() => compose.open()}
-          className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex h-14 items-center gap-3 rounded-2xl bg-accent-soft pr-5 pl-4 text-[15px] font-medium text-fg shadow-float backdrop-blur md:hidden dark:text-accent"
+          className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex h-14 items-center gap-3 rounded-2xl bg-accent-soft pr-5 pl-4 text-[15px] font-medium text-fg shadow-float backdrop-blur md:hidden dark:text-accent-ink"
           style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 18%, var(--panel))' }}
         >
           <Pencil className="size-5" aria-hidden /> Compose
@@ -179,6 +190,7 @@ function ViewGuard({ element }: { element: ReactNode }) {
 
 function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) {
   const { user, instance, isAdmin } = useSession();
+  const installPrompt = useInstallPrompt();
   const navigate = useNavigate();
   const qc = useQueryClient();
   return (
@@ -186,7 +198,7 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
       <IconButton label="Main menu" onClick={onMenu} size="lg">
         <MenuIcon className="size-5" />
       </IconButton>
-      <button onClick={() => navigate('/inbox')} className="mr-4 flex items-center gap-2.5 max-md:mr-1 md:w-[184px]">
+      <button onClick={() => navigate('/inbox')} aria-label={`${instance.name}: go to Inbox`} className="mr-4 flex items-center gap-2.5 max-md:mr-1 md:w-[184px]">
         <LogoMark className="size-9" />
         <span className="truncate text-[20px] font-medium tracking-tight text-fg max-sm:hidden">{instance.name}</span>
       </button>
@@ -227,6 +239,11 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                 <MenuRow icon={<Users className="size-4" />} onClick={() => (close(), navigate('/contacts'))}>
                   Contacts
                 </MenuRow>
+                {installPrompt.available && (
+                  <MenuRow icon={<Download className="size-4" />} onClick={() => (close(), void installPrompt.install())}>
+                    Install app
+                  </MenuRow>
+                )}
                 {isAdmin && (
                   <MenuRow icon={<Shield className="size-4" />} onClick={() => (close(), navigate('/admin'))}>
                     Admin panel
@@ -452,7 +469,7 @@ function MailboxSwitcher({ wide }: { wide: boolean }) {
               wide ? 'w-full px-3 py-2' : 'size-12 justify-center',
             )}
           >
-            <Inbox className={cx('size-[18px] shrink-0', current ? 'text-accent' : 'text-muted')} aria-hidden />
+            <Inbox className={cx('size-[18px] shrink-0', current ? 'text-accent-ink' : 'text-muted')} aria-hidden />
             {wide && (
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{current ? current.name : 'My mailbox'}</span>
@@ -477,7 +494,7 @@ function MailboxSwitcher({ wide }: { wide: boolean }) {
                 }}
                 className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
               >
-                <span className="flex size-4 items-center justify-center">{(current?.id ?? null) === b.id && <Check className="size-4 text-accent" />}</span>
+                <span className="flex size-4 items-center justify-center">{(current?.id ?? null) === b.id && <Check className="size-4 text-accent-ink" />}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{b.name}</span>
                   <span className="block truncate text-xs text-muted">{b.address}</span>
@@ -512,7 +529,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
         <button
           onClick={() => compose.open()}
           className={cx(
-            'flex h-14 items-center gap-3 rounded-2xl bg-accent-soft text-[15px] font-medium text-fg shadow-sm transition-shadow hover:shadow-panel dark:text-accent',
+            'flex h-14 items-center gap-3 rounded-2xl bg-accent-soft text-[15px] font-medium text-fg shadow-sm transition-shadow hover:shadow-panel dark:text-accent-ink',
             wide ? 'pr-6 pl-5' : 'w-14 justify-center',
           )}
           title="Compose"

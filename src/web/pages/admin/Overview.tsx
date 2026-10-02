@@ -54,7 +54,7 @@ export function Overview() {
               {w.level === 'warn' ? <AlertTriangle className="size-4 shrink-0 text-warn" /> : <Info className="size-4 shrink-0 text-muted" />}
               <span className="flex-1">{w.message}</span>
               {w.link && (
-                <Link to={w.link} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
+                <Link to={w.link} className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline">
                   Fix <ArrowRight className="size-3.5" />
                 </Link>
               )}
@@ -91,7 +91,7 @@ export function Overview() {
         <Card
           title="Providers"
           actions={
-            <Link to="/admin/providers" className="text-sm font-medium text-accent hover:underline">
+            <Link to="/admin/providers" className="text-sm font-medium text-accent-ink hover:underline">
               Manage
             </Link>
           }
@@ -99,7 +99,7 @@ export function Overview() {
           {d.providers.length === 0 ? (
             <div className="flex flex-col items-start gap-3">
               <p className="text-sm text-muted">No providers yet. Connect Cloudflare, Resend, SES, Postmark, SMTP or another service to send and receive mail.</p>
-              <Link to="/admin/providers" className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+              <Link to="/admin/providers" className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline">
                 <PlugZap className="size-4" /> Add a provider
               </Link>
             </div>
@@ -147,7 +147,7 @@ export function Overview() {
               </div>
               <span className="text-sm font-semibold">{fileSize(d.storage.blobs)}</span>
             </div>
-            <Link to="/admin/system" className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+            <Link to="/admin/system" className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline">
               Backups & system <ArrowRight className="size-3.5" />
             </Link>
           </div>
@@ -208,7 +208,7 @@ function AlertsCard() {
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
               {a.link && (
-                <Link to={a.link} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+                <Link to={a.link} className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline">
                   Fix <ArrowRight className="size-3.5" />
                 </Link>
               )}
@@ -288,7 +288,7 @@ function SetupChecklist() {
     ) : s === 'warn' ? (
       <AlertTriangle className="size-5 text-warn" aria-label="Needs attention" />
     ) : s === 'pending' ? (
-      <CircleDashed className="size-5 animate-[spin_3s_linear_infinite] text-accent" aria-label="In progress" />
+      <CircleDashed className="size-5 animate-[spin_3s_linear_infinite] text-accent-ink" aria-label="In progress" />
     ) : (
       <Circle className="size-5 text-faint" aria-label="To do" />
     );
@@ -322,7 +322,7 @@ function SetupChecklist() {
             </div>
             {i.action &&
               (i.action.href ? (
-                <Link to={i.action.href} className="shrink-0 text-sm font-medium text-accent hover:underline">
+                <Link to={i.action.href} className="shrink-0 text-sm font-medium text-accent-ink hover:underline">
                   {i.action.label}
                 </Link>
               ) : (
@@ -361,7 +361,7 @@ function VolumeChart({ series }: { series: OverviewData['series'] }) {
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-[3px] bg-[var(--series-2)]" /> Sent
         </span>
-        <button className="ml-auto font-medium text-accent hover:underline" onClick={() => setAsTable((t) => !t)}>
+        <button className="ml-auto font-medium text-accent-ink hover:underline" onClick={() => setAsTable((t) => !t)}>
           {asTable ? 'View as chart' : 'View as table'}
         </button>
       </div>

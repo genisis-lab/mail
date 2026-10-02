@@ -2,10 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { CalendarClock, ChevronDown, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
-import type { Addr, AttachmentInfo, MessageDetail } from '../../shared/types';
-import { api } from '../lib/api';
+import { CalendarClock, ChevronDown, FileText, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../shared/types';
+import { apiFor, getApiMailbox } from '../lib/api';
 import { fileSize } from '../lib/format';
+import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
 import { RecipientInput } from './RecipientInput';
 import { RichEditor, type RichEditorHandle } from './RichEditor';
@@ -24,6 +26,8 @@ export interface ComposeInit {
   replyToId?: number | null;
   forwardOfId?: number | null;
   threadId?: number | null;
+  /** The shared mailbox this message is written in (null: the person's own). */
+  mailbox?: number | null;
 }
 
 interface Window_ extends ComposeInit {
@@ -56,6 +60,32 @@ export function signatureHtml(sig: string): string {
   return `<div class="wren-signature"><br>-- <br>${body}</div>`;
 }
 
+/** The signature for a From address: its own, or the default one. */
+export function signatureFor(prefs: Pick<UserPrefs, 'signature' | 'signatures'>, address: string | undefined): string {
+  const own = address ? prefs.signatures?.[address.toLowerCase()] : undefined;
+  return own !== undefined && own.trim() ? own : prefs.signature;
+}
+
+/** Replace the signature block in a message body (or add one before the quoted text). */
+export function swapSignature(html: string, sig: string): string {
+  const doc = document.createElement('div');
+  doc.innerHTML = html;
+  const current = doc.querySelector('.wren-signature');
+  const next = signatureHtml(sig);
+  if (current) {
+    if (next) current.outerHTML = next;
+    else current.remove();
+  } else if (next) {
+    const quote = doc.querySelector('.wren-quote, .wren-forward');
+    const holder = document.createElement('div');
+    holder.innerHTML = next;
+    const node = holder.firstElementChild!;
+    if (quote) quote.before(node);
+    else doc.append(node);
+  }
+  return doc.innerHTML;
+}
+
 /** Inline images: the editor shows attachment URLs, the message stores cid: references. */
 export function cidToUrl(html: string, atts: AttachmentInfo[]) {
   let out = html;
@@ -71,26 +101,32 @@ function urlToCid(html: string, atts: AttachmentInfo[]) {
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [windows, setWindows] = useState<Window_[]>([]);
   const seq = useRef(0);
-  const { prefs } = useSession();
+  const { prefs, user } = useSession();
 
   const open = useCallback(
     (init: ComposeInit = {}) => {
+      // A window belongs to the mailbox that was open when it was started.
+      const mailbox = init.mailbox !== undefined ? init.mailbox : getApiMailbox();
       setWindows((ws) => {
         if (init.draftId && ws.some((w) => w.draftId === init.draftId)) {
           return ws.map((w) => (w.draftId === init.draftId ? { ...w, minimized: false } : w));
         }
-        const html = init.html ?? (prefs.signature ? `<p><br></p>${signatureHtml(prefs.signature)}` : '');
-        const next = [...ws.map((w) => ({ ...w, minimized: ws.length >= 1 ? true : w.minimized })), { ...init, html, key: ++seq.current, minimized: false, maximized: false }];
+        const from = mailbox ? undefined : init.from || prefs.defaultFrom || user.identities[0]?.address || user.email;
+        const sig = signatureFor(prefs, from);
+        const html = init.html ?? (sig ? `<p><br></p>${signatureHtml(sig)}` : '');
+        const next = [...ws.map((w) => ({ ...w, minimized: ws.length >= 1 ? true : w.minimized })), { ...init, mailbox, html, key: ++seq.current, minimized: false, maximized: false }];
         return next.slice(-3);
       });
     },
-    [prefs.signature],
+    [prefs, user],
   );
 
   const openDraft = useCallback(
     async (draftId: number) => {
-      const d = await api.get<MessageDetail>(`/api/compose/drafts/${draftId}`);
+      const mailbox = getApiMailbox();
+      const d = await apiFor(mailbox).get<MessageDetail>(`/api/compose/drafts/${draftId}`);
       open({
+        mailbox,
         draftId: d.id,
         from: d.identity ?? d.from.address,
         to: d.to,
@@ -106,11 +142,13 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
 
   const openTemplate = useCallback(
     async (messageId: number, mode: 'reply' | 'replyAll' | 'forward') => {
-      const t = await api.get<ComposeInit & { html: string }>(`/api/compose/template?messageId=${messageId}&mode=${mode}`);
-      const sig = prefs.signature && prefs.signatureOnReplies ? signatureHtml(prefs.signature) : '';
-      return { ...t, html: sig ? t.html.replace(/^<p><br><\/p>/, `<p><br></p>${sig}`) : t.html };
+      const mailbox = getApiMailbox();
+      const t = await apiFor(mailbox).get<ComposeInit & { html: string }>(`/api/compose/template?messageId=${messageId}&mode=${mode}`);
+      const own = signatureFor(prefs, mailbox ? undefined : t.from);
+      const sig = own && prefs.signatureOnReplies ? signatureHtml(own) : '';
+      return { ...t, mailbox, html: sig ? t.html.replace(/^<p><br><\/p>/, `<p><br></p>${sig}`) : t.html };
     },
-    [prefs.signature, prefs.signatureOnReplies],
+    [prefs],
   );
 
   const close = (key: number) => setWindows((ws) => ws.filter((w) => w.key !== key));
@@ -201,14 +239,21 @@ export function ComposeForm({
   variant: 'window' | 'inline';
   autoFocusBody?: boolean;
 }) {
-  const { user } = useSession();
+  const { user, prefs } = useSession();
   const toast = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const identities = user.identities;
+  // Pinned for the life of this form, even if the person switches mailbox meanwhile.
+  const [mailboxId] = useState<number | null>(() => (init.mailbox !== undefined ? init.mailbox : getApiMailbox()));
+  const api = useMemo(() => apiFor(mailboxId), [mailboxId]);
+  const boxes = useMailboxes();
+  const box = mailboxId ? boxes.data?.find((b) => b.id === mailboxId) ?? null : null;
+  const identities = useMemo(() => (mailboxId ? (box ? [{ address: box.address, name: box.name, kind: 'mailbox' as const }] : []) : user.identities), [mailboxId, box, user.identities]);
+  const readOnly = !!box && !box.canSend;
 
   const [draftId, setDraftId] = useState<number | null>(init.draftId ?? null);
-  const [from, setFrom] = useState(init.from || user.prefs.defaultFrom || identities[0]?.address || user.email);
+  // In a shared mailbox the server sends from the mailbox's own address.
+  const [from, setFrom] = useState(mailboxId ? '' : init.from || user.prefs.defaultFrom || identities[0]?.address || user.email);
   const [to, setTo] = useState<Addr[]>(init.to ?? []);
   const [cc, setCc] = useState<Addr[]>(init.cc ?? []);
   const [bcc, setBcc] = useState<Addr[]>(init.bcc ?? []);
@@ -317,6 +362,10 @@ export function ComposeForm({
   };
 
   const send = async (sendAt: number | null = null) => {
+    if (readOnly) {
+      toast({ message: `You can read ${box!.address}, but not send from it`, tone: 'error' });
+      return;
+    }
     if (!to.length && !cc.length && !bcc.length) {
       toast({ message: 'Add at least one recipient', tone: 'error' });
       return;
@@ -342,6 +391,7 @@ export function ComposeForm({
           qc.invalidateQueries({ queryKey: ['counters'] });
           const d = await api.get<MessageDetail>(`/api/compose/drafts/${res.draftId}`);
           const reopen: ComposeInit = {
+            mailbox: mailboxId,
             draftId: d.id,
             from: d.identity ?? d.from.address,
             to: d.to,
@@ -404,6 +454,18 @@ export function ComposeForm({
 
   const ownIdentity = identities.find((i) => i.address === from);
 
+  const changeFrom = (next: string) => {
+    const before = signatureFor(prefs, from);
+    const after = signatureFor(prefs, next);
+    setFrom(next);
+    if (before !== after) {
+      const updated = swapSignature(editor.current?.getHtml() ?? html.current, after);
+      editor.current?.setHtml(updated);
+      html.current = updated;
+    }
+    markDirty();
+  };
+
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
@@ -420,15 +482,24 @@ export function ComposeForm({
       }}
     >
       <div className={cx('shrink-0', variant === 'window' ? 'px-3' : 'px-0')}>
-        {identities.length > 1 && (
+        {box && (
+          <div className="flex h-10 items-center gap-2 border-b border-line px-1 text-sm">
+            <span className="text-muted">From</span>
+            <span className="min-w-0 flex-1 truncate">
+              {box.name} &lt;{box.address}&gt;
+            </span>
+            {readOnly && <span className="shrink-0 text-xs text-warn">read only</span>}
+          </div>
+        )}
+        {!mailboxId && identities.length > 1 && (
           <div className="flex h-10 items-center gap-2 border-b border-line px-1">
-            <span className="text-sm text-muted">From</span>
+            <label htmlFor={`from-${draftId ?? 'new'}`} className="text-sm text-muted">
+              From
+            </label>
             <select
+              id={`from-${draftId ?? 'new'}`}
               value={from}
-              onChange={(e) => {
-                setFrom(e.target.value);
-                markDirty();
-              }}
+              onChange={(e) => changeFrom(e.target.value)}
               className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
             >
               {identities.map((i) => (
@@ -490,6 +561,7 @@ export function ComposeForm({
               setSubject(e.target.value);
               markDirty();
             }}
+            aria-label="Subject"
             placeholder="Subject"
             className="h-10 w-full border-b border-line bg-transparent px-1 text-sm outline-none placeholder:text-muted"
           />
@@ -543,7 +615,13 @@ export function ComposeForm({
 
       <div className={cx('flex shrink-0 items-center gap-1 py-2.5', variant === 'window' ? 'px-3' : '')}>
         <div className="flex overflow-hidden rounded-full bg-accent text-accent-fg shadow-sm">
-          <button type="button" disabled={sending} onClick={() => void send()} className="h-9 pr-4 pl-5 text-sm font-semibold hover:brightness-110 disabled:opacity-60">
+          <button
+            type="button"
+            disabled={sending || readOnly}
+            title={readOnly ? 'You can read this shared mailbox, but not send from it' : undefined}
+            onClick={() => void send()}
+            className="h-9 pr-4 pl-5 text-sm font-semibold hover:brightness-110 disabled:opacity-60"
+          >
             {sending ? 'Sending…' : 'Send'}
           </button>
           <Menu
@@ -565,6 +643,14 @@ export function ComposeForm({
         <IconButton size="sm" label="Insert photo" onClick={() => imageInput.current?.click()}>
           <ImageIcon className="size-4" />
         </IconButton>
+        <SavedRepliesMenu
+          onInsert={(h) => {
+            editor.current?.insertHtml(h);
+            markDirty();
+          }}
+          currentHtml={() => editor.current?.getHtml() ?? html.current}
+          subject={subject}
+        />
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => (void upload([...(e.target.files ?? [])]), (e.target.value = ''))} />
         <input ref={imageInput} type="file" accept="image/*" multiple hidden onChange={(e) => (void upload([...(e.target.files ?? [])], true), (e.target.value = ''))} />
         <span className="ml-auto truncate px-2 text-xs text-faint">
@@ -628,5 +714,59 @@ export function ScheduleModal({ open, onClose, onPick, title = 'Schedule send' }
         </div>
       </div>
     </Modal>
+  );
+}
+
+interface SavedReply {
+  id: number;
+  name: string;
+  html: string;
+}
+
+export function useSavedReplies() {
+  return useQuery({ queryKey: ['me', 'saved-replies'], queryFn: () => apiFor(null).get<{ replies: SavedReply[] }>('/api/me/saved-replies').then((r) => r.replies), staleTime: 60_000 });
+}
+
+/** Insert a saved reply, or save what's written as a new one. */
+function SavedRepliesMenu({ onInsert, currentHtml, subject }: { onInsert: (html: string) => void; currentHtml: () => string; subject: string }) {
+  const replies = useSavedReplies();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const navigate = useNavigate();
+  return (
+    <Menu
+      align="left"
+      width="w-64"
+      trigger={({ onClick }) => (
+        <IconButton size="sm" label="Saved replies" onClick={onClick}>
+          <FileText className="size-4" />
+        </IconButton>
+      )}
+      items={[
+        ...(replies.data ?? []).map((r) => ({ label: r.name, onClick: () => onInsert(r.html) })),
+        ...(replies.data?.length ? [{ divider: true }] : []),
+        {
+          label: 'Save this message as a reply…',
+          onClick: async () => {
+            // Without the signature and quoted text: just what was written.
+            const doc = document.createElement('div');
+            doc.innerHTML = currentHtml();
+            doc.querySelectorAll('.wren-signature, .wren-quote, .wren-forward').forEach((n) => n.remove());
+            const body = doc.innerHTML.trim();
+            if (!doc.textContent?.trim()) return void toast({ message: 'Write something first', tone: 'error' });
+            const name = window.prompt('Name this saved reply', subject.replace(/^(re|fwd?):\s*/i, '').slice(0, 60))?.trim();
+            if (!name) return;
+            try {
+              await apiFor(null).post('/api/me/saved-replies', { name, html: body });
+              qc.invalidateQueries({ queryKey: ['me', 'saved-replies'] });
+              toast(`Saved “${name}”`);
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            }
+          },
+        },
+        { label: 'Manage saved replies', onClick: () => navigate('/settings/replies') },
+      ]}
+    />
   );
 }

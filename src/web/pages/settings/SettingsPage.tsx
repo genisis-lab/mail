@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Copy, KeyRound, Laptop, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
-import type { FilterActions, FilterCriteria, Label, UserPrefs } from '../../../shared/types';
+import { ArrowLeft, Bell, Copy, Download, KeyRound, Laptop, LifeBuoy, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
+import type { FilterActions, FilterCriteria, Label, SwipeAction, UserPrefs } from '../../../shared/types';
 import { api } from '../../lib/api';
 import { longDate, relativeTime } from '../../lib/format';
 import { useLabels, useSession } from '../../lib/session';
@@ -11,8 +11,11 @@ import { TwoFactorSetup } from '../../components/TwoFactorSetup';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Checkbox, cx, Empty, Field, IconButton, Input, Modal, Select, Spinner, Switch, Tabs } from '../../components/ui';
 import { LabelDialog } from '../MailLayout';
+import { currentPushSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, useInstallPrompt } from '../../lib/pwa';
+import { ImportExportTab } from './ImportExport';
+import { SavedRepliesTab } from './SavedReplies';
 
-type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'security';
+type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'replies' | 'import' | 'security';
 
 export function SettingsPage() {
   const { tab = 'general' } = useParams();
@@ -34,6 +37,8 @@ export function SettingsPage() {
             { value: 'labels', label: 'Labels' },
             { value: 'filters', label: 'Filters and blocked' },
             { value: 'accounts', label: 'Accounts & forwarding' },
+            { value: 'replies', label: 'Saved replies' },
+            { value: 'import', label: 'Import & export' },
             { value: 'security', label: 'Security' },
           ]}
         />
@@ -44,6 +49,8 @@ export function SettingsPage() {
           {tab === 'labels' && <LabelsTab />}
           {tab === 'filters' && <FiltersTab />}
           {tab === 'accounts' && <AccountsTab />}
+          {tab === 'replies' && <SavedRepliesTab />}
+          {tab === 'import' && <ImportExportTab />}
           {tab === 'security' && <SecurityTab />}
         </div>
       </div>
@@ -75,7 +82,7 @@ function usePrefsForm() {
 
 function Row({ title, help, children }: { title: string; help?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-3 border-b border-line py-5 sm:grid-cols-[220px_1fr]">
+    <div role="group" aria-label={title} className="grid gap-3 border-b border-line py-5 sm:grid-cols-[220px_1fr]">
       <div>
         <p className="text-sm font-semibold">{title}</p>
         {help && <p className="mt-1 text-xs leading-relaxed text-muted">{help}</p>}
@@ -114,7 +121,7 @@ function GeneralTab() {
     <div>
       <Row title="Name" help="Shown to people you email.">
         <div className="flex gap-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
+          <Input value={name} onChange={(e) => setName(e.target.value)} aria-label="Name" />
           <Button
             disabled={name.trim() === user.name || !name.trim()}
             onClick={async () => {
@@ -136,7 +143,7 @@ function GeneralTab() {
                 set('theme', t);
                 void save({ theme: t });
               }}
-              className={cx('rounded-xl border px-4 py-2 text-sm capitalize', draft.theme === t ? 'border-accent bg-accent-soft font-medium text-accent' : 'border-line-strong hover:bg-hover')}
+              className={cx('rounded-xl border px-4 py-2 text-sm capitalize', draft.theme === t ? 'border-accent bg-accent-soft font-medium text-accent-ink' : 'border-line-strong hover:bg-hover')}
             >
               {t === 'system' ? 'Match system' : t}
             </button>
@@ -149,7 +156,7 @@ function GeneralTab() {
             <button
               key={t}
               onClick={() => set('density', t)}
-              className={cx('rounded-xl border px-4 py-2 text-sm capitalize', draft.density === t ? 'border-accent bg-accent-soft font-medium text-accent' : 'border-line-strong hover:bg-hover')}
+              className={cx('rounded-xl border px-4 py-2 text-sm capitalize', draft.density === t ? 'border-accent bg-accent-soft font-medium text-accent-ink' : 'border-line-strong hover:bg-hover')}
             >
               {t}
             </button>
@@ -158,7 +165,7 @@ function GeneralTab() {
       </Row>
       {user.identities.length > 1 && (
         <Row title="Default “From” address">
-          <Select value={draft.defaultFrom} onChange={(e) => set('defaultFrom', e.target.value)}>
+          <Select value={draft.defaultFrom} onChange={(e) => set('defaultFrom', e.target.value)} aria-label="Default From address">
             <option value="">{user.email} (primary)</option>
             {user.identities.map((i) => (
               <option key={i.address} value={i.address}>
@@ -169,7 +176,7 @@ function GeneralTab() {
         </Row>
       )}
       <Row title="Undo send" help="How long you have to take back a message after pressing Send.">
-        <Select value={String(draft.undoSendSeconds)} onChange={(e) => set('undoSendSeconds', Number(e.target.value))} className="w-48">
+        <Select value={String(draft.undoSendSeconds)} onChange={(e) => set('undoSendSeconds', Number(e.target.value))} className="w-48" aria-label="Undo send">
           {[0, 5, 10, 20, 30].map((s) => (
             <option key={s} value={s}>
               {s === 0 ? 'Off' : `${s} seconds`}
@@ -178,7 +185,7 @@ function GeneralTab() {
         </Select>
       </Row>
       <Row title="Maximum page size">
-        <Select value={String(draft.pageSize)} onChange={(e) => set('pageSize', Number(e.target.value))} className="w-48">
+        <Select value={String(draft.pageSize)} onChange={(e) => set('pageSize', Number(e.target.value))} className="w-48" aria-label="Maximum page size">
           {[25, 50, 100].map((s) => (
             <option key={s} value={s}>
               {s} conversations
@@ -199,7 +206,23 @@ function GeneralTab() {
       <Row title="Keyboard shortcuts" help="Press ? anywhere to see them.">
         <Switch checked={draft.keyboardShortcuts} onChange={(v) => set('keyboardShortcuts', v)} label={draft.keyboardShortcuts ? 'On' : 'Off'} />
       </Row>
-      <Row title="Signature" help="Appended to new messages.">
+      <NotificationsRow />
+      <InstallRow />
+      <Row title="Swipe actions" help="On a phone, swipe a conversation in the list.">
+        <div className="grid max-w-md gap-3 sm:grid-cols-2">
+          <Field label="Swipe right">
+            <Select value={draft.swipeRight} onChange={(e) => set('swipeRight', e.target.value as SwipeAction)}>
+              <SwipeOptions />
+            </Select>
+          </Field>
+          <Field label="Swipe left">
+            <Select value={draft.swipeLeft} onChange={(e) => set('swipeLeft', e.target.value as SwipeAction)}>
+              <SwipeOptions />
+            </Select>
+          </Field>
+        </div>
+      </Row>
+      <Row title="Signature" help="Appended to new messages. Addresses can have their own (Accounts & forwarding).">
         <div className="rounded-xl border border-line-strong px-3 py-1">
           <RichEditor key={sigKey.current} initialHtml={draft.signature} onChange={(h) => set('signature', h === '<br>' ? '' : h)} placeholder="No signature" className="min-h-0 [&_.wren-editor]:min-h-24" />
         </div>
@@ -210,7 +233,7 @@ function GeneralTab() {
       <Row title="Vacation responder" help="Sends an automated reply to incoming messages. Each sender gets at most one reply every 4 days.">
         <div className="space-y-4">
           <Switch checked={vac.enabled} onChange={(v) => set('vacation', { ...vac, enabled: v })} label={vac.enabled ? 'Vacation responder on' : 'Vacation responder off'} />
-          <div className={cx('space-y-4', !vac.enabled && 'pointer-events-none opacity-50')}>
+          <fieldset disabled={!vac.enabled} className={cx('space-y-4', !vac.enabled && 'opacity-60')}>
             <div className="grid grid-cols-2 gap-3">
               <Field label="First day">
                 <Input type="date" value={toDate(vac.startAt)} onChange={(e) => set('vacation', { ...vac, startAt: e.target.value ? new Date(`${e.target.value}T00:00`).getTime() : null })} />
@@ -233,11 +256,119 @@ function GeneralTab() {
             </Field>
             <Checkbox checked={vac.contactsOnly} onChange={(v) => set('vacation', { ...vac, contactsOnly: v })} label="Only send a response to people in my Contacts" />
             <span className="ml-1 text-sm">Only send a response to people in my Contacts</span>
-          </div>
+          </fieldset>
         </div>
       </Row>
       <SaveBar dirty={dirty} busy={busy} onSave={() => void save()} onReset={() => ((sigKey.current += 1), reset())} />
     </div>
+  );
+}
+
+function SwipeOptions() {
+  return (
+    <>
+      <option value="archive">Archive</option>
+      <option value="trash">Delete</option>
+      <option value="read">Mark as read / unread</option>
+      <option value="none">Nothing</option>
+    </>
+  );
+}
+
+/** New-mail notifications: Web Push on this device, or alerts while a tab is open. */
+function NotificationsRow() {
+  const { prefs, refresh } = useSession();
+  const toast = useToast();
+  const [push, setPush] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const supported = pushSupported();
+  useEffect(() => {
+    void currentPushSubscription().then((s) => setPush(!!s));
+  }, []);
+  const savePref = async (v: boolean) => {
+    await api.put('/api/account/prefs', { notifications: v });
+    await refresh();
+  };
+  const blocked = typeof Notification !== 'undefined' && Notification.permission === 'denied';
+  return (
+    <Row
+      title="Notifications"
+      help={supported ? 'Get told about new mail on this device, even when Wren is closed. Notifications show the sender and subject.' : 'This browser can’t show notifications.'}
+    >
+      {supported ? (
+        <div className="space-y-3">
+          <Switch
+            checked={!!push}
+            disabled={busy || push === null}
+            onChange={async (v) => {
+              setBusy(true);
+              try {
+                if (v) {
+                  await enablePush();
+                  await savePref(true);
+                  toast('Notifications are on for this device');
+                } else {
+                  await disablePush();
+                  toast('Notifications are off for this device');
+                }
+                setPush(v);
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error', duration: 8000 });
+              } finally {
+                setBusy(false);
+              }
+            }}
+            label="Notify me about new mail on this device"
+            description={blocked ? 'Notifications are blocked for this site. Allow them in your browser’s site settings, then turn this on.' : isIos() && !isStandalone() ? 'On iPhone and iPad, add Wren to your Home Screen first (Share → Add to Home Screen), then turn this on from the app.' : undefined}
+          />
+          {push && (
+            <Button
+              size="sm"
+              icon={<Bell className="size-4" />}
+              onClick={async () => {
+                const r = await api.post<{ delivered: number }>('/api/me/push/test');
+                toast(r.delivered ? 'Test sent. It shows your newest unread mail.' : 'No device took the test. Try turning notifications off and on again.');
+              }}
+            >
+              Send a test
+            </Button>
+          )}
+          {!push && (
+            <Switch
+              checked={prefs.notifications}
+              onChange={async (v) => {
+                if (v && typeof Notification !== 'undefined' && Notification.permission === 'default') await Notification.requestPermission();
+                await savePref(v);
+              }}
+              label="Only while Wren is open in a tab"
+              description="Shows a notification when mail arrives and Wren is in the background."
+            />
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-muted">Try Chrome, Edge, Firefox or Safari 16.4 or later.</p>
+      )}
+    </Row>
+  );
+}
+
+function InstallRow() {
+  const { available, install } = useInstallPrompt();
+  if (isStandalone()) return null;
+  return (
+    <Row title="App" help="Install Wren to open it like an app, with its own window and icon.">
+      {available ? (
+        <Button icon={<Download className="size-4" />} onClick={() => void install()}>
+          Install Wren on this device
+        </Button>
+      ) : isIos() ? (
+        <p className="text-sm text-muted">
+          In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>.
+        </p>
+      ) : (
+        <p className="text-sm text-muted">Use your browser’s “Install app” or “Add to Home Screen” menu item.</p>
+      )}
+    </Row>
   );
 }
 
@@ -547,23 +678,93 @@ function FilterDialog({ filter, labels, onClose }: { filter: Partial<FilterRow> 
   );
 }
 
+interface AliasInfo {
+  policy: { enabled: boolean; limit: number; used: number; domain: string };
+  aliases: { id: number; address: string; name: string; own: boolean }[];
+}
+
 function AccountsTab() {
-  const { user } = useSession();
+  const { user, refresh } = useSession();
+  const toast = useToast();
+  const qc = useQueryClient();
   const { draft, setDraft, dirty, save, busy, reset } = usePrefsForm();
+  const [newAlias, setNewAlias] = useState('');
+  const [aliasBusy, setAliasBusy] = useState(false);
+  const [sigFor, setSigFor] = useState<string | null>(null);
+  const aliases = useQuery({ queryKey: ['me', 'aliases'], queryFn: () => api.get<AliasInfo>('/api/me/aliases') });
   const fwd = draft.forwarding;
+  const policy = aliases.data?.policy;
+  const own = new Map((aliases.data?.aliases ?? []).filter((a) => a.own).map((a) => [a.address, a.id]));
   return (
     <div className="space-y-6">
-      <Card title="Your addresses" description="Addresses you receive mail at and can send from. Administrators manage aliases and groups.">
+      <Card
+        title="Your addresses"
+        description={policy?.enabled ? `Addresses you receive mail at and can send from. You can add up to ${policy.limit} of your own aliases.` : 'Addresses you receive mail at and can send from. Administrators manage aliases and groups.'}
+      >
         <ul className="-my-2 divide-y divide-line">
           {user.identities.map((i) => (
-            <li key={i.address} className="flex items-center gap-3 py-2.5">
-              <span className="flex-1 text-sm">
-                <span className="font-medium">{i.name || user.name}</span> <span className="text-muted">&lt;{i.address}&gt;</span>
+            <li key={i.address} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <span className="min-w-0 flex-1 text-sm">
+                <span className="font-medium">{i.name || user.name}</span> <span className="break-all text-muted">&lt;{i.address}&gt;</span>
+                {draft.signatures?.[i.address] && <span className="ml-2 text-xs text-faint">own signature</span>}
               </span>
               <Badge tone={i.kind === 'mailbox' ? 'accent' : 'neutral'}>{i.kind === 'mailbox' ? 'primary' : i.kind}</Badge>
+              <Button size="sm" variant="ghost" onClick={() => setSigFor(i.address)}>
+                Signature
+              </Button>
+              {own.has(i.address) && (
+                <IconButton
+                  size="sm"
+                  label={`Remove ${i.address}`}
+                  onClick={async () => {
+                    if (!window.confirm(`Remove ${i.address}? Mail sent to it will bounce.`)) return;
+                    try {
+                      await api.del(`/api/me/aliases/${own.get(i.address)}`);
+                      qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
+                      await refresh();
+                      toast(`${i.address} removed`);
+                    } catch (err) {
+                      toast({ message: (err as Error).message, tone: 'error' });
+                    }
+                  }}
+                >
+                  <Trash2 className="size-4" />
+                </IconButton>
+              )}
             </li>
           ))}
         </ul>
+        {policy?.enabled && (
+          <form
+            className="mt-4 flex flex-wrap items-center gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setAliasBusy(true);
+              try {
+                const r = await api.post<{ alias: { address: string } }>('/api/me/aliases', { localPart: newAlias });
+                setNewAlias('');
+                qc.invalidateQueries({ queryKey: ['me', 'aliases'] });
+                await refresh();
+                toast(`${r.alias.address} is ready. Mail to it arrives in your inbox.`);
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setAliasBusy(false);
+              }
+            }}
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <Input value={newAlias} onChange={(e) => setNewAlias(e.target.value.toLowerCase())} placeholder="newsletters" aria-label="New alias, before the @" className="min-w-0" disabled={policy.used >= policy.limit} />
+              <span className="shrink-0 text-sm text-muted">@{policy.domain}</span>
+            </div>
+            <Button type="submit" icon={<Plus className="size-4" />} loading={aliasBusy} disabled={!newAlias.trim() || policy.used >= policy.limit}>
+              Add alias
+            </Button>
+            <span className="w-full text-xs text-muted">
+              {policy.used} of {policy.limit} used
+            </span>
+          </form>
+        )}
         <p className="mt-4 text-xs text-muted">
           Tip: plus-addressing works out of the box — mail to <code className="rounded bg-panel2 px-1">{user.email.replace('@', '+anything@')}</code> lands in your inbox.
         </p>
@@ -571,7 +772,7 @@ function AccountsTab() {
       <Card title="Forwarding" description="Automatically forward a copy of incoming mail to another address.">
         <div className="space-y-4">
           <Switch checked={fwd.enabled} onChange={(v) => setDraft({ ...draft, forwarding: { ...fwd, enabled: v } })} label="Forward incoming mail" />
-          <div className={cx('grid gap-3 sm:grid-cols-2', !fwd.enabled && 'pointer-events-none opacity-50')}>
+          <fieldset disabled={!fwd.enabled} className={cx('grid gap-3 sm:grid-cols-2', !fwd.enabled && 'opacity-60')}>
             <Field label="Forward to">
               <Input type="email" value={fwd.to} onChange={(e) => setDraft({ ...draft, forwarding: { ...fwd, to: e.target.value } })} placeholder="me@elsewhere.com" />
             </Field>
@@ -583,11 +784,62 @@ function AccountsTab() {
                 <option value="trash">Delete the copy</option>
               </Select>
             </Field>
-          </div>
+          </fieldset>
         </div>
       </Card>
-      <SaveBar dirty={dirty} busy={busy} onSave={() => void save({ forwarding: draft.forwarding })} onReset={reset} />
+      <SaveBar dirty={dirty} busy={busy} onSave={() => void save({ forwarding: draft.forwarding, signatures: draft.signatures })} onReset={reset} />
+      <SignatureDialog
+        address={sigFor}
+        value={sigFor ? draft.signatures?.[sigFor] ?? '' : ''}
+        fallback={draft.signature}
+        onClose={() => setSigFor(null)}
+        onSave={async (html) => {
+          const next = { ...(draft.signatures ?? {}) };
+          if (html.trim()) next[sigFor!] = html;
+          else delete next[sigFor!];
+          setSigFor(null);
+          setDraft({ ...draft, signatures: next });
+          await save({ signatures: next });
+        }}
+      />
     </div>
+  );
+}
+
+function SignatureDialog({ address, value, fallback, onClose, onSave }: { address: string | null; value: string; fallback: string; onClose: () => void; onSave: (html: string) => Promise<void> }) {
+  const [html, setHtml] = useState(value);
+  const [key, setKey] = useState<string | null>(null);
+  if (address !== key) {
+    setKey(address);
+    setHtml(value);
+  }
+  return (
+    <Modal
+      open={!!address}
+      onClose={onClose}
+      title={`Signature for ${address ?? ''}`}
+      width="max-w-xl"
+      footer={
+        <>
+          {value && (
+            <Button variant="ghost" className="mr-auto" onClick={() => void onSave('')}>
+              Use the default
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={() => void onSave(html === '<br>' ? '' : html)}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-3 text-[13px] text-muted">{fallback ? 'Leave it empty to use your default signature with this address.' : 'Used when you write from this address.'}</p>
+      <div className="rounded-xl border border-line-strong px-3 py-1">
+        <RichEditor key={key ?? ''} initialHtml={value} onChange={setHtml} placeholder={fallback ? 'Default signature' : 'No signature'} className="min-h-0 [&_.wren-editor]:min-h-24" />
+      </div>
+    </Modal>
   );
 }
 
@@ -642,6 +894,8 @@ function SecurityTab() {
           </div>
         </form>
       </Card>
+
+      <RecoveryCard />
 
       <Card
         title="2-step verification"
@@ -822,6 +1076,130 @@ function SecurityTab() {
         </Field>
       </Modal>
     </div>
+  );
+}
+
+/** A personal address outside this mailbox, for "Forgot password?". */
+function RecoveryCard() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['account', 'recovery'], queryFn: () => api.get<{ email: string | null; verified: boolean }>('/api/account/recovery') });
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const r = q.data;
+  const done = (msg: string) => {
+    qc.invalidateQueries({ queryKey: ['account', 'recovery'] });
+    setEditing(false);
+    setRemoving(false);
+    setPassword('');
+    toast(msg);
+  };
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <LifeBuoy className="size-4 text-muted" aria-hidden /> Recovery email
+        </span>
+      }
+      description="If you forget your password, a reset link goes here. Use an address outside this mailbox."
+      actions={
+        r?.email ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => (setEmail(r.email ?? ''), setEditing(true))}>
+              Change
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRemoving(true)}>
+              Remove
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="primary" onClick={() => (setEmail(''), setEditing(true))}>
+            Add
+          </Button>
+        )
+      }
+    >
+      {!r ? (
+        <Spinner />
+      ) : r.email ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="break-all">{r.email}</span>
+          {r.verified ? (
+            <Badge tone="ok">confirmed</Badge>
+          ) : (
+            <>
+              <Badge tone="warn">waiting for confirmation</Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  try {
+                    await api.post('/api/account/recovery/resend');
+                    toast(`Confirmation sent to ${r.email}`);
+                  } catch (err) {
+                    toast({ message: (err as Error).message, tone: 'error' });
+                  }
+                }}
+              >
+                Send again
+              </Button>
+            </>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-muted">Not set. Without one, only an administrator can help you back in if you forget your password.</p>
+      )}
+      <Modal
+        open={editing || removing}
+        onClose={() => (setEditing(false), setRemoving(false))}
+        title={removing ? 'Remove recovery email?' : r?.email ? 'Change recovery email' : 'Add a recovery email'}
+        width="max-w-md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => (setEditing(false), setRemoving(false))}>
+              Cancel
+            </Button>
+            <Button
+              variant={removing ? 'danger' : 'primary'}
+              loading={busy}
+              disabled={!password || (!removing && !email.trim())}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  if (removing) {
+                    await api.del('/api/account/recovery', { password });
+                    done('Recovery email removed');
+                  } else {
+                    await api.put('/api/account/recovery', { email: email.trim(), password });
+                    done(`Check ${email.trim()} for a confirmation link`);
+                  }
+                } catch (err) {
+                  toast({ message: (err as Error).message, tone: 'error' });
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {removing ? 'Remove' : 'Send confirmation'}
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4">
+          {!removing && (
+            <Field label="Recovery email" help="We send a link there to confirm it’s yours.">
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" autoFocus />
+            </Field>
+          )}
+          <Field label="Your password">
+            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus={removing} />
+          </Field>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 

@@ -11,15 +11,17 @@
   --line-strong: #cfd5df;
   --fg: #1d2129;
   --muted: #5b6270;
-  --faint: #8b919c;
+  --faint: #687080;
   --hover: rgba(29, 33, 41, 0.055);
   --hover-strong: rgba(29, 33, 41, 0.09);
   --sel: #dfe9fd;
   --accent: #2563eb;
   --accent-fg: #ffffff;
-  --danger: #d93025;
-  --warn: #b45309;
-  --ok: #188038;
+  --danger: #c5221f;
+  --warn: #9a4a07;
+  --ok: #137333;
+  /* Accent as text: darker than the fill so it stays readable on tinted backgrounds. */
+  --accent-ink: color-mix(in srgb, var(--accent) 85%, #000);
   --unread-row: #ffffff;
   --read-row: #f7f9fc;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 16px rgba(15, 23, 42, 0.08);
@@ -41,13 +43,14 @@
   --line-strong: #3a404b;
   --fg: #e6e8ec;
   --muted: #a1a7b3;
-  --faint: #737a87;
+  --faint: #8a909c;
   --hover: rgba(255, 255, 255, 0.06);
   --hover-strong: rgba(255, 255, 255, 0.1);
   --sel: #23324d;
   --danger: #f28b82;
   --warn: #fbbf24;
   --ok: #81c995;
+  --accent-ink: color-mix(in srgb, var(--accent) 70%, #fff);
   --unread-row: #1b1f26;
   --read-row: #161920;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -74,6 +77,7 @@
   --color-sel: var(--sel);
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
+  --color-accent-ink: var(--accent-ink);
   --color-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --color-accent-softer: color-mix(in srgb, var(--accent) 8%, transparent);
   --color-danger: var(--danger);

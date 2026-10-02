@@ -146,7 +146,7 @@ export function UsersPage() {
         <Table
           head={[
             <Checkbox key="all" checked={allSelected} indeterminate={selected.size > 0 && !allSelected} onChange={(v) => setSelected(v ? new Set(list.map((u) => u.id)) : new Set())} label="Select all users" />,
-            'User',
+            <span key="user">User</span>,
             'Role',
             'Storage',
             'Last sign-in',
@@ -624,7 +624,7 @@ function ImportUsersModal({ open, onClose, onImported }: { open: boolean; onClos
           <p className="text-muted">
             One user per line. Columns: <code>email</code>, <code>name</code>, and either <code>setup_email</code> (we email them a link to choose a password) or <code>password</code>. Optional: <code>role</code>,{' '}
             <code>quota_mb</code>, <code>send_limit</code>.{' '}
-            <button className="font-medium text-accent hover:underline" onClick={() => download('wren-users-template.csv', SAMPLE)}>
+            <button className="font-medium text-accent-ink hover:underline" onClick={() => download('wren-users-template.csv', SAMPLE)}>
               Download a template
             </button>
           </p>

@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { SessionProvider, useMe, useTheme } from './lib/session';
 import { Spinner } from './components/ui';
 import { ComposeProvider } from './components/Compose';
-import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage } from './pages/AuthPages';
+import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
 import { MailLayout } from './pages/MailLayout';
 import { AdminLayout } from './pages/admin/AdminLayout';
 
@@ -59,6 +59,8 @@ export function App() {
       <Routes>
         <Route path="/register" element={<RegisterPage instance={instance} />} />
         <Route path="/reset" element={<ResetPage instance={instance} />} />
+        <Route path="/forgot" element={<ForgotPage instance={instance} />} />
+        <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn={false} />} />
         <Route path="*" element={<LoginPage instance={instance} mfaPending={me.data.mfaPending} next={location.pathname} />} />
       </Routes>
     );
@@ -76,6 +78,8 @@ export function App() {
           <Route path="/login" element={<Navigate to="/inbox" replace />} />
           <Route path="/register" element={<Navigate to="/inbox" replace />} />
           <Route path="/reset" element={<ResetPage instance={instance} />} />
+          <Route path="/forgot" element={<Navigate to="/settings/security" replace />} />
+          <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn />} />
           <Route path="/admin/*" element={isAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
           <Route path="/*" element={<MailLayout />} />
         </Routes>

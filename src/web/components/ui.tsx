@@ -26,7 +26,7 @@ const variants: Record<Variant, string> = {
   secondary: 'bg-panel text-fg border border-line-strong hover:bg-hover',
   ghost: 'text-fg hover:bg-hover',
   danger: 'bg-danger text-white hover:brightness-110',
-  soft: 'bg-accent-soft text-accent hover:bg-accent-soft hover:brightness-95',
+  soft: 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:brightness-95',
 };
 
 export const Button = forwardRef<
@@ -167,7 +167,7 @@ export function Spinner({ className }: { className?: string }) {
 export function Badge({ children, tone = 'neutral', className }: { children: ReactNode; tone?: 'neutral' | 'accent' | 'ok' | 'warn' | 'danger'; className?: string }) {
   const tones = {
     neutral: 'bg-panel2 text-muted',
-    accent: 'bg-accent-soft text-accent',
+    accent: 'bg-accent-soft text-accent-ink',
     ok: 'bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-ok',
     warn: 'bg-[color-mix(in_srgb,var(--warn)_14%,transparent)] text-warn',
     danger: 'bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] text-danger',
@@ -418,7 +418,7 @@ export function Menu({
                       )}
                     >
                       {it.checked !== undefined ? (
-                        <span className="flex size-4 items-center justify-center">{it.checked && <Check className="size-4 text-accent" />}</span>
+                        <span className="flex size-4 items-center justify-center">{it.checked && <Check className="size-4 text-accent-ink" />}</span>
                       ) : (
                         it.icon && <span className="flex size-4 items-center justify-center text-muted">{it.icon}</span>
                       )}
@@ -447,7 +447,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { valu
           onClick={() => onChange(t.value)}
           className={cx(
             '-mb-px border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors',
-            value === t.value ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-fg',
+            value === t.value ? 'border-accent text-accent-ink' : 'border-transparent text-muted hover:text-fg',
           )}
         >
           {t.label}

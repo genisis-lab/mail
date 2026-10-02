@@ -106,10 +106,10 @@ export function BlockedImagesBanner({ count, onShow, onAlways }: { count: number
     <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-panel2 px-3 py-2 text-[13px]">
       <ImageOff className="size-4 text-muted" />
       <span className="text-muted">Images are hidden to protect your privacy.</span>
-      <button onClick={onShow} className="font-medium text-accent hover:underline">
+      <button onClick={onShow} className="font-medium text-accent-ink hover:underline">
         Display images
       </button>
-      <button onClick={onAlways} className="font-medium text-accent hover:underline">
+      <button onClick={onAlways} className="font-medium text-accent-ink hover:underline">
         Always display images
       </button>
     </div>

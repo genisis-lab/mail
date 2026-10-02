@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Mail, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Download, Mail, MoreVertical, Pencil, Plus, Search, Trash2, Upload, Users } from 'lucide-react';
 import { api } from '../lib/api';
+import { contactsFromFile } from '../lib/contacts-import';
 import { relativeTime } from '../lib/format';
 import { Avatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
 import { useToast } from '../components/toast';
-import { Button, Empty, Field, IconButton, Input, Modal, Spinner, Tabs, Textarea } from '../components/ui';
+import { Button, Empty, Field, IconButton, Input, Menu, Modal, Spinner, Tabs, Textarea } from '../components/ui';
 
 interface Contact {
   id: number;
@@ -29,6 +30,8 @@ export function ContactsPage() {
   const [tab, setTab] = useState<'saved' | 'frequent'>('saved');
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Partial<Contact> | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   const contacts = useQuery({ queryKey: ['contacts'], queryFn: () => api.get<{ contacts: Contact[] }>('/api/contacts').then((r) => r.contacts) });
 
   const list = useMemo(() => {
@@ -51,8 +54,56 @@ export function ContactsPage() {
             <Input className="w-64 pl-9" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search contacts" />
           </div>
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing({ email: '', name: '', phone: '', company: '', notes: '' })}>
-            Create contact
+            <span className="max-sm:sr-only">Create contact</span>
           </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,.vcf,.vcard,text/csv,text/vcard"
+            className="sr-only"
+            aria-label="Import contacts file"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (!f) return;
+              setImporting(true);
+              try {
+                const list = contactsFromFile(f.name, await f.text());
+                if (!list.length) {
+                  toast({ message: 'No contacts with an email address found. Use a CSV (Google, Outlook) or vCard (.vcf) file.', tone: 'error', duration: 8000 });
+                  return;
+                }
+                const sum = { added: 0, updated: 0, skipped: 0 };
+                for (let i = 0; i < list.length; i += 1000) {
+                  const r = await api.post<typeof sum>('/api/contacts/import', { contacts: list.slice(i, i + 1000) });
+                  sum.added += r.added;
+                  sum.updated += r.updated;
+                  sum.skipped += r.skipped;
+                }
+                qc.invalidateQueries({ queryKey: ['contacts'] });
+                toast(`${sum.added} added, ${sum.updated} updated${sum.skipped ? `, ${sum.skipped} skipped` : ''}`);
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setImporting(false);
+              }
+            }}
+          />
+          <Menu
+            align="right"
+            width="w-64"
+            trigger={({ onClick }) => (
+              <IconButton label="Import or export contacts" onClick={onClick} disabled={importing}>
+                {importing ? <Spinner className="size-4" /> : <MoreVertical className="size-[18px]" />}
+              </IconButton>
+            )}
+            items={[
+              { label: 'Import from CSV or vCard…', icon: <Upload className="size-4" />, onClick: () => fileInput.current?.click() },
+              { divider: true },
+              { label: 'Export as vCard (.vcf)', icon: <Download className="size-4" />, onClick: () => (window.location.href = '/api/contacts/export?format=vcf') },
+              { label: 'Export as CSV', icon: <Download className="size-4" />, onClick: () => (window.location.href = '/api/contacts/export?format=csv') },
+            ]}
+          />
         </div>
       </div>
       <div className="px-4">

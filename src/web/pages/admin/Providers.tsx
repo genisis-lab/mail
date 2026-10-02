@@ -105,7 +105,11 @@ export function ProvidersPage() {
                       {p.isDefault && <Badge tone="accent">default</Badge>}
                       {!p.enabled && <Badge>disabled</Badge>}
                     </p>
-                    <p className="text-[13px] text-muted">{p.typeName}</p>
+                    {/* The type only when the name doesn't already say it; then what it's used for. */}
+                    <p className="text-[13px] text-muted">
+                      {p.name.toLowerCase() !== p.typeName.toLowerCase() ? `${p.typeName} · ` : ''}
+                      {p.outbound && p.inbound ? 'Sending and receiving' : p.outbound ? 'Sending' : 'Receiving'}
+                    </p>
                   </div>
                   <StatusDot tone={!p.enabled ? 'muted' : recentError ? 'danger' : 'ok'} />
                 </div>
@@ -256,7 +260,7 @@ function ProviderDialog({ type, id, onClose }: { type: ProviderTypeInfo; id?: nu
             <div className="min-w-0 text-[13px]">
               <p className="text-muted">{type.description}</p>
               {type.website && (
-                <a href={type.website} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 font-medium text-accent hover:underline">
+                <a href={type.website} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 font-medium text-accent-ink hover:underline">
                   {new URL(type.website).hostname} <ExternalLink className="size-3" />
                 </a>
               )}
@@ -359,7 +363,7 @@ function ProviderDialog({ type, id, onClose }: { type: ProviderTypeInfo; id?: nu
                   <p className="mt-2 text-xs text-faint">Keep this URL secret — anyone with it can deliver mail to your users.</p>
                   {savedId && (
                     <button
-                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-ink hover:underline"
                       onClick={async () => {
                         if (!window.confirm('Generate a new URL? The old one stops working immediately.')) return;
                         await api.post(`/api/admin/providers/${savedId}/rotate-token`);

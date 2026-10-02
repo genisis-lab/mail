@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HttpError } from './lib/http.js';
 import { logger } from './lib/log.js';
+import { getSettings } from './settings.js';
 import { actAsMailbox, requireAdmin, requireApiKey, requireUser, requireUserReady, type AppEnv } from './http/context.js';
 import { authRoutes, setupRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
@@ -58,6 +59,39 @@ export function createApp() {
   });
 
   app.get('/api/health', (c) => c.json({ ok: true }));
+
+  // Web app manifest, so the installed app carries the instance's name and colour.
+  app.get('/api/manifest.webmanifest', (c) => {
+    const s = getSettings();
+    const name = s['instance.name'] || 'Wren';
+    const accent = /^#[0-9a-f]{6}$/i.test(s['instance.accent']) ? s['instance.accent'] : '#2563eb';
+    c.header('Content-Type', 'application/manifest+json');
+    c.header('Cache-Control', 'public, max-age=3600');
+    return c.body(
+      JSON.stringify({
+        id: '/',
+        name,
+        short_name: name.length > 12 ? name.slice(0, 12) : name,
+        description: `${name} mail`,
+        start_url: '/inbox',
+        scope: '/',
+        display: 'standalone',
+        background_color: '#f6f8fc',
+        theme_color: accent,
+        categories: ['productivity', 'business'],
+        icons: [
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+        ],
+        shortcuts: [
+          { name: 'Compose', short_name: 'Compose', url: '/inbox?compose=1', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
+          { name: 'Starred', url: '/starred', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
+        ],
+      }),
+    );
+  });
 
   app.route('/api/setup', setupRoutes);
   app.route('/api/auth', authRoutes);

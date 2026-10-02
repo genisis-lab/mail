@@ -36,7 +36,7 @@ export function Table({ head, children, className }: { head: ReactNode[]; childr
           <tr className="border-b border-line text-left text-xs text-muted">
             {head.map((h, i) => (
               <th key={i} className="px-4 py-3 font-medium whitespace-nowrap first:pl-5 last:pr-5">
-                {h}
+                {h === '' ? <span className="sr-only">Actions</span> : h}
               </th>
             ))}
           </tr>
@@ -66,7 +66,7 @@ export function CopyField({ value, onCopy, label }: { value: string; onCopy: () 
         <button
           type="button"
           aria-label={label ? `Copy ${label}` : 'Copy'}
-          className="rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-hover"
+          className="rounded-md px-2 py-1 text-xs font-medium text-accent-ink hover:bg-hover"
           onClick={() => {
             void navigator.clipboard.writeText(value);
             onCopy();

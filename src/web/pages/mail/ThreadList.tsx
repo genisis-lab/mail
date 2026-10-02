@@ -30,12 +30,14 @@ import { api, qs } from '../../lib/api';
 import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/actions';
 import { shortDate, number, relativeTime } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
+import { PHONE, useMediaQuery } from '../../lib/media';
 import { useCounters, useLabels, useSession } from '../../lib/session';
 import { useCompose, ScheduleModal } from '../../components/Compose';
 import { useToast } from '../../components/toast';
 import { Button, Checkbox, cx, Empty, IconButton, Menu, Spinner, type MenuItem } from '../../components/ui';
-import { LabelDialog } from '../MailLayout';
+import { LabelDialog, SaveSearchButton } from '../MailLayout';
 import { setListContext } from './listContext';
+import { PhoneRow } from './PhoneRow';
 
 interface ListResponse {
   threads: ThreadSummary[];
@@ -81,6 +83,7 @@ export function ThreadList() {
   const compose = useCompose();
   const toast = useToast();
   const { run, refresh } = useThreadActions();
+  const phone = useMediaQuery(PHONE);
 
   const view = (params.view as View | undefined) ?? (params.labelId || params.q ? undefined : 'inbox');
   const labelId = params.labelId ? Number(params.labelId) : undefined;
@@ -214,6 +217,7 @@ export function ThreadList() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <h1 className="sr-only">{title}</h1>
       {/* Toolbar */}
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-line px-2">
         <div className="flex items-center">
@@ -380,14 +384,14 @@ export function ThreadList() {
           {allMatching ? (
             <>
               All <b>{number(total)}</b> conversations in {title} are selected.{' '}
-              <button className="font-medium text-accent hover:underline" onClick={() => (setAllMatching(false), setSelected(new Set()))}>
+              <button className="font-medium text-accent-ink hover:underline" onClick={() => (setAllMatching(false), setSelected(new Set()))}>
                 Clear selection
               </button>
             </>
           ) : (
             <>
               All <b>{threads.length}</b> conversations on this page are selected.{' '}
-              <button className="font-medium text-accent hover:underline" onClick={() => setAllMatching(true)}>
+              <button className="font-medium text-accent-ink hover:underline" onClick={() => setAllMatching(true)}>
                 Select all {number(total)} conversations in {title}
               </button>
             </>
@@ -400,7 +404,7 @@ export function ThreadList() {
             ? `Messages that have been in Trash more than ${instance.retention.trashDays} days will be deleted automatically.`
             : `Messages that have been in Spam more than ${instance.retention.spamDays} days will be deleted automatically.`}
           <button
-            className="font-medium text-accent hover:underline"
+            className="font-medium text-accent-ink hover:underline"
             onClick={async () => {
               if (!window.confirm(`Permanently delete all ${inTrash ? 'trash' : 'spam'}?`)) return;
               await api.post('/api/mail/threads/bulk', { view, action: { type: 'delete' } });
@@ -416,8 +420,11 @@ export function ThreadList() {
       {/* List */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {q && (
-          <div className="flex items-center gap-2 border-b border-line px-4 py-2 text-[13px] text-muted">
-            <Search className="size-4" /> Results for <span className="font-medium text-fg">{q}</span>
+          <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 text-[13px] text-muted">
+            <Search className="size-4 shrink-0" aria-hidden /> <span className="min-w-0 truncate">Results for <span className="font-medium text-fg">{q}</span></span>
+            <span className="ml-auto shrink-0">
+              <SaveSearchButton query={q} />
+            </span>
           </div>
         )}
         {list.isLoading ? (
@@ -438,8 +445,33 @@ export function ThreadList() {
               {EMPTY[view ?? 'inbox'].body}
             </Empty>
           )
+        ) : phone ? (
+          <div role="list" aria-label={title}>
+            {threads.map((t) => (
+              <PhoneRow
+                key={t.id}
+                thread={t}
+                labels={labels.data ?? []}
+                view={view}
+                currentLabel={labelId}
+                selected={selected.has(t.id)}
+                selecting={selected.size > 0}
+                onSelect={(v) =>
+                  setSelected((s) => {
+                    const n = new Set(s);
+                    if (v) n.add(t.id);
+                    else n.delete(t.id);
+                    return n;
+                  })
+                }
+                onOpen={() => open(t)}
+                onAction={(a) => void run([t.id], a, { quiet: a.type === 'star' || a.type === 'unstar' })}
+              />
+            ))}
+          </div>
         ) : (
-          threads.map((t, i) => (
+          <div role="list" aria-label={title}>
+          {threads.map((t, i) => (
             <ThreadRow
               key={t.id}
               thread={t}
@@ -460,7 +492,8 @@ export function ThreadList() {
               onOpen={() => open(t)}
               onAction={(a) => void run([t.id], a, { quiet: a.type === 'star' || a.type === 'unstar' || a.type === 'important' || a.type === 'unimportant' })}
             />
-          ))
+          ))}
+          </div>
         )}
         {!list.isLoading && threads.length > 0 && (
           <div className="px-4 py-6 text-center text-xs text-faint">
@@ -524,7 +557,10 @@ function ThreadRow({
 
   return (
     <div
-      role="row"
+      role="listitem"
+      tabIndex={-1}
+      aria-current={cursor || undefined}
+      aria-label={`${t.unread ? 'Unread, ' : ''}${typeof names === 'string' ? names : names.map((p) => p.n).join(', ')}, ${t.subject || 'no subject'}, ${shortDate(t.date)}${t.starred ? ', starred' : ''}`}
       onClick={onOpen}
       className={cx(
         'thread-row group relative flex cursor-pointer items-center gap-1 border-b border-line pr-3 pl-1 text-sm transition-colors',
@@ -536,7 +572,8 @@ function ThreadRow({
       {cursor && <span className="absolute top-0 bottom-0 left-0 w-[3px] bg-accent" />}
       <Checkbox checked={selected} onChange={onSelect} label="Select conversation" />
       <button
-        aria-label={t.starred ? 'Starred' : 'Not starred'}
+        aria-label={t.starred ? 'Remove star' : 'Add star'}
+        aria-pressed={t.starred}
         onClick={(e) => {
           e.stopPropagation();
           onAction({ type: t.starred ? 'unstar' : 'star' });
@@ -546,7 +583,8 @@ function ThreadRow({
         <Star className={cx('size-[18px]', t.starred && 'fill-[#f4b400] text-[#f4b400]')} />
       </button>
       <button
-        aria-label={t.important ? 'Important' : 'Not important'}
+        aria-label={t.important ? 'Mark as not important' : 'Mark as important'}
+        aria-pressed={t.important}
         onClick={(e) => {
           e.stopPropagation();
           onAction({ type: t.important ? 'unimportant' : 'important' });
@@ -580,7 +618,7 @@ function ThreadRow({
           </span>
         ))}
         {t.status === 'failed' && <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium text-danger">Failed</span>}
-        {scheduled && <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[11px] leading-[18px] font-medium text-accent">Scheduled</span>}
+        {scheduled && <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[11px] leading-[18px] font-medium text-accent-ink">Scheduled</span>}
         <span className="min-w-0 truncate">
           <span className={t.unread ? 'font-bold' : ''}>{t.subject || '(no subject)'}</span>
           {t.snippet && <span className="text-muted"> – {t.snippet}</span>}
@@ -593,7 +631,7 @@ function ThreadRow({
         {view === 'snoozed' && t.snoozedUntil ? (
           <span className="text-warn">{relativeTime(t.snoozedUntil)}</span>
         ) : scheduled ? (
-          <span className="text-accent">{shortDate(t.sendAt!)}</span>
+          <span className="text-accent-ink">{shortDate(t.sendAt!)}</span>
         ) : (
           shortDate(t.date)
         )}
