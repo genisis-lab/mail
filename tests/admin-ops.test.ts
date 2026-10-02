@@ -334,10 +334,10 @@ describe('system email sender', () => {
   const lastNotice = async () => (await outbox('notice')).at(-1)!;
   const header = (raw: string, name: string) => new RegExp(`^${name}: (.+)$`, 'mi').exec(raw)?.[1]?.trim();
 
-  it('defaults to no-reply@ and can be set to another hosted address, name and reply-to', async () => {
+  it('defaults to contact@ and can be set to another hosted address, name and reply-to', async () => {
     await h.call('POST', '/api/admin/invites', { sendTo: 'friend@example.org', days: 7 });
     let raw = (await lastNotice()).raw;
-    expect(header(raw, 'From')).toBe('Fernhill <no-reply@wren.test>');
+    expect(header(raw, 'From')).toBe('Fernhill <contact@wren.test>');
     expect(header(raw, 'Reply-To')).toBeUndefined();
 
     expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': 'contact@elsewhere.example' })).body.error).toMatch(/isn’t a domain hosted here/);
@@ -353,6 +353,6 @@ describe('system email sender', () => {
 
     // Back to automatic.
     await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': '', 'mail.systemName': '', 'mail.systemReplyTo': '' });
-    expect((await h.call('GET', '/api/admin/settings')).body.systemSender).toEqual({ address: 'no-reply@wren.test', name: 'Fernhill' });
+    expect((await h.call('GET', '/api/admin/settings')).body.systemSender).toEqual({ address: 'contact@wren.test', name: 'Fernhill' });
   });
 });

@@ -12,7 +12,7 @@ import { logger } from '../lib/log.js';
 import { escapeHtml } from '../mail/compose.js';
 import { storeMessage } from '../mail/store.js';
 import { getSettings } from '../settings.js';
-import { appUrl, sendSystemEmail, systemTemplate } from './system-mail.js';
+import { appUrl, sendSystemEmail, systemSender, systemTemplate } from './system-mail.js';
 import { quotaBytes } from './users.js';
 import { notifyNewMail } from './push.js';
 
@@ -105,7 +105,7 @@ async function notifyAdmins(a: AlertRow) {
       messageId: `alert.${a.id}.${now()}.${admin.id}@${domain}`,
       inReplyTo: null,
       references: [],
-      from: { address: `no-reply@${domain}`, name: `${s['instance.name']} alerts` },
+      from: { address: systemSender(domain)?.address ?? `contact@${domain}`, name: `${s['instance.name']} alerts` },
       to: [{ address: admin.email, name: admin.name }],
       cc: [],
       replyTo: null,

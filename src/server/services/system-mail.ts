@@ -15,8 +15,9 @@ import { enqueue } from '../mail/outbound.js';
 const hosted = (domain: string) => !!get('SELECT 1 FROM domains WHERE name = ? AND enabled = 1', [domain.toLowerCase()]);
 
 /**
- * The From address for system mail: the one chosen in Settings & policies, or
- * no-reply@ a hosted domain (the recipient's, if hosted). A chosen address
+ * The From address for everything Wren sends itself (invites, setup and
+ * password links, welcome messages, alerts): the one chosen in Settings &
+ * policies, or contact@ a hosted domain (the recipient's, if hosted). A chosen address
  * whose domain is no longer hosted falls back to the automatic one, since the
  * provider couldn't send it.
  */
@@ -30,7 +31,7 @@ export function systemSender(domainHint?: string): { address: string; name: stri
     hinted ??
     get<{ name: string }>('SELECT name FROM domains WHERE enabled = 1 ORDER BY verified_at IS NULL, id LIMIT 1');
   if (!d) return null;
-  return { address: `no-reply@${d.name}`, name };
+  return { address: `contact@${d.name}`, name };
 }
 
 /** Minimal, mail-client-safe HTML layout with an optional call-to-action button. */

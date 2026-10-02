@@ -3,7 +3,7 @@ import { get, now, run } from '../db/index.js';
 import { escapeHtml } from '../mail/compose.js';
 import { storeMessage } from '../mail/store.js';
 import { getSettings } from '../settings.js';
-import { appUrl, sendSystemEmail, systemTemplate } from './system-mail.js';
+import { appUrl, sendSystemEmail, systemSender, systemTemplate } from './system-mail.js';
 import { issueToken } from './tokens.js';
 import type { UserRow } from './users.js';
 
@@ -109,7 +109,7 @@ export async function welcomeUser(userId: number) {
     messageId: `welcome.${userId}.${now()}@${domain}`,
     inReplyTo: null,
     references: [],
-    from: { address: `no-reply@${domain}`, name: getSettings()['instance.name'] },
+    from: systemSender(domain) ?? { address: `contact@${domain}`, name: getSettings()['instance.name'] },
     to: [{ address: user.email, name: user.name }],
     cc: [],
     replyTo: null,

@@ -962,8 +962,10 @@ adminRoutes.post('/announce', async (c) => {
   const input = await body(c, z.object({ subject: z.string().min(1).max(200), html: z.string().min(1).max(100_000) }));
   const me = c.get('user');
   const users = all<{ email: string }>(`SELECT email FROM users WHERE status = 'active'`);
-  const { raw } = await buildMime({ from: { address: me.email, name: `${me.name} (${getSettings()['instance.name']})` }, to: [{ address: me.email }], subject: input.subject, html: input.html });
-  enqueue({ kind: 'notice', userId: me.id, mailFrom: me.email, recipients: users.map((u) => u.email), rawBlob: await putBlob(raw), subject: input.subject });
+  // From the system sender (contact@ unless chosen otherwise), with replies to the admin who wrote it.
+  const sender = systemSender(domainOf(me.email)) ?? { address: me.email, name: getSettings()['instance.name'] };
+  const { raw } = await buildMime({ from: sender, to: [{ address: sender.address }], replyTo: me.email, subject: input.subject, html: input.html });
+  enqueue({ kind: 'notice', userId: me.id, mailFrom: sender.address, recipients: users.map((u) => u.email), rawBlob: await putBlob(raw), subject: input.subject });
   act(c, 'admin.announcement', input.subject, { recipients: users.length });
   return c.json({ recipients: users.length });
 });

@@ -223,8 +223,8 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
             Sent as <b>{sender.data.name}</b> &lt;{sender.data.address}&gt;
           </p>
         )}
-        <Field label="Send from" help={`An address on a domain hosted here, so your provider can send it. Blank: no-reply@${firstDomain}.`}>
-          <Input type="email" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`no-reply@${firstDomain}`} />
+        <Field label="Send from" help={`An address on a domain hosted here, so your provider can send it. Blank: contact@${firstDomain}.`}>
+          <Input type="email" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`contact@${firstDomain}`} />
         </Field>
         <Field label="Sender name" help={`Blank: the instance name (${draft['instance.name']}).`}>
           <Input value={draft['mail.systemName']} onChange={(e) => set('mail.systemName', e.target.value)} placeholder={draft['instance.name']} />
