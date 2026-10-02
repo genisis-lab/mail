@@ -45,7 +45,7 @@ export function systemTemplate(opts: { title: string; paragraphs: string[]; butt
   const p = (html: string) => `<p>${html}</p>`;
   const link = opts.button ? p(`${escapeHtml(opts.button.label)}:<br><a href="${escapeHtml(opts.button.url)}">${escapeHtml(opts.button.url)}</a>`) : '';
   return `<html><body>
-${[p(`<b>${escapeHtml(opts.title)}</b>`), ...opts.paragraphs.map(p), link, p(opts.footer ?? `Sent by ${name}.`)].filter(Boolean).join('\n')}
+${[p(`<b>${escapeHtml(opts.title)}</b>`), ...opts.paragraphs.map(p), link, p(`${opts.footer ?? `Sent by ${name}.`}<br>${name} · ${escapeHtml(new URL(config.publicUrl).host)}`)].filter(Boolean).join('\n')}
 </body></html>`;
 }
 

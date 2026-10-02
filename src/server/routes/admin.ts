@@ -817,7 +817,7 @@ adminRoutes.post('/invites', async (c) => {
   ]);
   const url = `${config.publicUrl}/register?invite=${token}`;
   if (sendTo) {
-    await sendInviteEmail({ to: sendTo, url, invitedBy: c.get('user').name || c.get('user').email, mailbox: input.email ? normalizeEmail(input.email) : null, days: input.days });
+    await sendInviteEmail({ to: sendTo, url, invitedBy: c.get('user').name || c.get('user').email, inviterEmail: c.get('user').email, mailbox: input.email ? normalizeEmail(input.email) : null, days: input.days });
     run('UPDATE invites SET emailed_at = ? WHERE id = ?', [now(), id]);
   }
   act(c, 'admin.invite_created', input.email ?? '(open)', { role: input.role, sentTo: sendTo });
@@ -836,7 +836,7 @@ adminRoutes.post('/invites/:id/resend', async (c) => {
   const days = Math.max(1, Math.round((inv.expires_at - inv.created_at) / 86_400_000));
   run('UPDATE invites SET token_hash = ?, sent_to = ?, emailed_at = ?, expires_at = MAX(expires_at, ?) WHERE id = ?', [sha256(token), to, now(), now() + days * 86_400_000, inv.id]);
   const url = `${config.publicUrl}/register?invite=${token}`;
-  await sendInviteEmail({ to, url, invitedBy: c.get('user').name || c.get('user').email, mailbox: inv.email, days });
+  await sendInviteEmail({ to, url, invitedBy: c.get('user').name || c.get('user').email, inviterEmail: c.get('user').email, mailbox: inv.email, days });
   act(c, 'admin.invite_resent', inv.email ?? '(open)', { sentTo: to });
   return c.json({ url, sentTo: to });
 });

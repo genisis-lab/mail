@@ -69,9 +69,11 @@ export async function sendRecoveryVerification(user: Pick<UserRow, 'id' | 'email
   return url;
 }
 
-export async function sendInviteEmail(opts: { to: string; url: string; invitedBy: string; mailbox: string | null; days: number }) {
+export async function sendInviteEmail(opts: { to: string; url: string; invitedBy: string; inviterEmail?: string; mailbox: string | null; days: number }) {
   return sendSystemEmail({
     to: [opts.to],
+    // Replies reach the person who sent the invite (unless replies to system mail have their own address).
+    replyTo: getSettings()['mail.systemReplyTo'].trim() || opts.inviterEmail || null,
     // A personal, plain-ASCII subject: an encoded one (curly quotes) is a small spam signal.
     subject: `${opts.invitedBy} invited you to ${getSettings()['instance.name']}`,
     html: systemTemplate({

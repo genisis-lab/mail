@@ -338,7 +338,7 @@ describe('system email sender', () => {
     await h.call('POST', '/api/admin/invites', { sendTo: 'friend@example.org', days: 7 });
     let raw = (await lastNotice()).raw;
     expect(header(raw, 'From')).toBe('Fernhill <contact@wren.test>');
-    expect(header(raw, 'Reply-To')).toBeUndefined();
+    expect(header(raw, 'Reply-To')).toBe('admin@wren.test'); // the inviter, until replies have their own address
 
     expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': 'contact@elsewhere.example' })).body.error).toMatch(/isn’t a domain hosted here/);
     expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemName': 'Bad\r\nBcc: x' })).status).toBe(400);
@@ -370,15 +370,20 @@ describe('sending from a subdomain', () => {
     expect(txt.optional).toBeFalsy(); // the only way to prove ownership of a domain that never receives mail
     expect(records.find((r: any) => r.type === 'MX')).toMatchObject({ value: '(not needed)', optional: true });
 
-    // Ownership is still proven with Wren's own TXT record.
+    expect(records.find((r: any) => r.host === '_dmarc.contact.wren.test').optional).toBe(true);
+
+    // Ownership is still proven with Wren's own TXT record; DMARC comes from the parent domain.
     const original = platform();
-    setPlatform({ ...original, dns: { txt: async (name: string) => (name === '_wren.contact.wren.test' ? [`wren-verify=${domain.verifyToken}`] : []), cname: async () => [], mx: async () => [] } });
+    const lookup = async (name: string) => (name === '_wren.contact.wren.test' ? [`wren-verify=${domain.verifyToken}`] : name === '_dmarc.wren.test' ? ['v=DMARC1; p=none'] : []);
+    setPlatform({ ...original, dns: { txt: lookup, cname: async () => [], mx: async () => [] } });
     try {
       await h.call('POST', `/api/admin/domains/${added.body.id}/check`);
     } finally {
       setPlatform(original);
     }
-    expect((await h.call('GET', `/api/admin/domains/${added.body.id}`)).body.domain.verified).toBe(true);
+    const checked = (await h.call('GET', `/api/admin/domains/${added.body.id}`)).body.domain;
+    expect(checked.verified).toBe(true);
+    expect(checked.dns.dmarc).toEqual({ ok: true, record: 'v=DMARC1; p=none', policy: 'none', host: 'wren.test' });
 
     expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': 'no-reply@contact.wren.test' })).status).toBe(200);
     await h.call('POST', '/api/admin/invites', { sendTo: 'friend3@example.org', days: 7 });
@@ -436,5 +441,8 @@ describe('system email format', () => {
     expect(url).toMatch(/\/register\?invite=/);
     expect(html).toContain(`>${url}</a>`);
     expect(html).toMatch(/You got this email because Ada Admin entered your address/);
+    expect(html).toContain('Fernhill · localhost:8787');
+    // Replies go to whoever sent the invite.
+    expect(job.raw).toMatch(/^Reply-To: admin@wren\.test$/m);
   });
 });

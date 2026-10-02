@@ -20,7 +20,8 @@ export interface DnsReport {
   mx: { ok: boolean | null; records: { exchange: string; priority: number }[]; hint: string };
   spf: { ok: boolean; record: string | null; includesProvider: boolean | null; expectedInclude: string | null; host?: string };
   dkim: { selector: string; found: boolean; value: string | null }[];
-  dmarc: { ok: boolean; record: string | null; policy: string | null };
+  /** `host` is where the record was found: a subdomain without its own uses its parent domain’s. */
+  dmarc: { ok: boolean; record: string | null; policy: string | null; host?: string };
   errors: string[];
 }
 
@@ -145,7 +146,10 @@ export function recommendedRecords(domain: { id?: number; name: string; verify_t
     type: 'TXT',
     host: `_dmarc.${domain.name}`,
     value: `v=DMARC1; p=quarantine; rua=mailto:postmaster@${domain.name}`,
-    purpose: 'DMARC policy — start with p=none if you are unsure.',
+    purpose: sendingOnly
+      ? `DMARC policy. Optional here: without its own record, ${domain.name} uses its parent domain’s.`
+      : 'DMARC policy — start with p=none if you are unsure.',
+    ...(sendingOnly ? { optional: true } : {}),
   });
   const selectors = (domain.dkim_selector || def?.dkimSelectors?.join(',') || '').split(',').map((s) => s.trim()).filter(Boolean);
   for (const sel of managed ? [] : selectors) {
@@ -213,7 +217,14 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
     dkim.push({ selector: sel, found: !!value, value });
   }
 
-  const dmarcRecord = (await txt(`_dmarc.${d.name}`)).find((t) => t.toLowerCase().startsWith('v=dmarc1')) ?? null;
+  // A subdomain without its own DMARC record is covered by its parent domain's (RFC 7489 §6.6.3).
+  let dmarcRecord: string | null = null;
+  let dmarcHost = d.name;
+  const labels = d.name.split('.');
+  for (let i = 0; i <= labels.length - 2 && !dmarcRecord; i++) {
+    dmarcHost = labels.slice(i).join('.');
+    dmarcRecord = (await txt(`_dmarc.${dmarcHost}`)).find((t) => t.toLowerCase().startsWith('v=dmarc1')) ?? null;
+  }
   const policy = dmarcRecord ? /;\s*p=([a-z]+)/i.exec(dmarcRecord)?.[1]?.toLowerCase() ?? null : null;
 
   // A subdomain used only to send from (contact.example.com next to a hosted example.com): nothing to receive.
@@ -232,7 +243,7 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
       host: spfHost(d.name, providerType),
     },
     dkim,
-    dmarc: { ok: !!dmarcRecord, record: dmarcRecord, policy },
+    dmarc: { ok: !!dmarcRecord, record: dmarcRecord, policy, ...(dmarcRecord ? { host: dmarcHost } : {}) },
     errors,
   };
   run(`UPDATE domains SET dns_report = ?, dns_checked_at = ?, verified_at = CASE WHEN ? THEN COALESCE(verified_at, ?) ELSE verified_at END WHERE id = ?`, [

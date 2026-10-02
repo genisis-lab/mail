@@ -283,7 +283,7 @@ export function DomainDetail() {
                     </Check>
                   ))
                 )}
-                <Check ok={dns.dmarc.ok} label="DMARC">
+                <Check ok={dns.dmarc.ok} label={dns.dmarc.host && dns.dmarc.host !== d.name ? `DMARC (from ${dns.dmarc.host})` : 'DMARC'}>
                   {dns.dmarc.record ? (
                     <>
                       Policy: <b>{dns.dmarc.policy ?? 'unknown'}</b> <span className="font-mono text-xs break-all">{dns.dmarc.record}</span>
