@@ -156,8 +156,28 @@ sessions, appearance, and personal API keys.
    Cloudflare Email Service (`send_email` binding) and Resend are first-class in the
    setup wizard, `npm run setup` deploys from the terminal, and optional self-hosting
    runs the same Worker on workerd (`npm run serve` / Docker).
+10. ✅ **Admin and everyday use:** setup checklist with a round-trip test that works
+    through every provider; alerts; daily DNS checks; one-click Cloudflare setup that
+    asks before moving a domain's MX; emailed invites and setup links; welcome
+    message; user detail page; CSV import and bulk actions; delivery log detail and
+    retry; shared mailboxes. For people: forgot password with a recovery email, saved
+    replies and searches, swipe actions, self-service aliases, per-address signatures,
+    contacts import/export, mail import (Takeout mbox, IMAP) and export, a PWA with
+    payload-less Web Push, and an accessibility pass (axe clean on the main pages).
 
-## Later (post-v1)
+### How the newer pieces work
+- **Background jobs** (`services/jobs.ts`): IMAP import and export run as resumable
+  slices from the Durable Object alarm, a bounded amount of work each, so they stay
+  inside Workers CPU and subrequest limits. Network hiccups are retried; a wrong
+  password or a full mailbox stops the job, and stored credentials are cleared.
+- **Shared mailboxes** are `users.kind = 'shared'` rows that can't sign in, plus
+  `mailbox_members`. The `X-Wren-Mailbox` header (or `?mailbox=`) makes mail routes
+  act on the shared mailbox for its members; `messages.sent_by` records who replied.
+- **Web Push** uses VAPID (ES256) with keys generated on first use. Pushes are empty;
+  the service worker fetches `/api/me/notifications` with the session cookie.
+- **Admins never read mail:** delivery and inbound log details show headers only.
+
+## Later
 JMAP over HTTP for desktop and mobile clients (Workers can't accept IMAP connections),
 calendar and contacts sync over HTTP (CalDAV/CardDAV), delivery/bounce webhooks per
-provider, multi-tenant billing, and mobile PWA push notifications.
+provider, and multi-tenant billing.

@@ -108,6 +108,17 @@ Other options:
 Mail between users on your own domains never leaves the Durable Object, so it's
 instant and free.
 
+### One-click setup
+
+With a Cloudflare API token (Admin → Domains → a domain → **Set up with Cloudflare**),
+Wren can do steps 2 and 3 for you: turn on Email Routing, point the catch-all at this
+Worker, onboard the domain in Email Sending and create the DNS records it needs. The
+token needs Zone: Read, DNS: Edit, Email Routing Rules: Edit, Zone Settings: Edit and
+Email Sending: Edit, and is stored encrypted.
+
+If the domain's MX records point at another service today (for example Resend
+inbound), nothing is changed until you confirm that its mail should move to Cloudflare.
+
 ## 4. Recommended DNS
 
 **Admin → Domains → your domain** lists every record and has a **Check DNS** button

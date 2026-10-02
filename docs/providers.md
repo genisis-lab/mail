@@ -45,7 +45,13 @@ rest. Mail that arrives through Cloudflare Email Routing needs no provider at al
 - Permanent failures put a *Delivery Status Notification* in the sender's inbox,
   threaded with the original. The admin can retry from **Mail queue**.
 - Raw-MIME providers keep Wren's exact message (and Message-ID). JSON providers get
-  structured fields plus the threading headers (`In-Reply-To`, `References`).
+  structured fields plus an allowlist of headers: threading (`In-Reply-To`,
+  `References`), `Auto-Submitted`, `List-Unsubscribe`, and Wren's `X-Wren-Roundtrip`
+  marker for the admin round-trip test.
+- The round-trip test also carries its code in the message body, and a test that comes
+  back from your own address with the test subject counts too, so it works with every
+  provider, including ones that drop custom headers (MailerSend without its paid-plan
+  header option). `tests/roundtrip-providers.test.ts` checks every registered provider.
 
 ## Adding a provider
 

@@ -80,7 +80,21 @@ Drafts, All Mail, Spam and Trash. Coloured labels, bulk actions ("select all 2,3
 archive, snooze, undo send (0–30 s), scheduled send, draft autosave,
 attachments and inline images, rich-text editing, signatures, reply/reply-all/forward
 inline or popped out, contact autocomplete, a sandboxed HTML renderer with remote-image
-blocking, and view original / download `.eml`.
+blocking, and view original / download `.eml`. Saved replies, saved searches in the
+sidebar, a signature per address, and shared mailboxes (support@, sales@) that a team
+reads together, with "sent by" on each reply.
+
+**On your phone.** Installable as an app (PWA) with its own icon and an offline app
+shell. New-mail notifications through Web Push. Pushes carry no data: the app asks Wren
+what's new, so nothing about your mail passes through the push service. Gmail-style
+rows with swipe actions, a floating Compose button, and the unread count in the tab
+title and app badge.
+
+**Moving in and out.** Import from Gmail (a Google Takeout `.mbox` keeps labels, stars
+and read state), from any IMAP account (Gmail, iCloud, Yahoo, Fastmail, Zoho…; copied in
+the background, password forgotten when done), or any `.mbox` file. Messages already
+there are skipped. Export everything as one `.mbox` that imports back as it was.
+Contacts import from Google/Outlook CSV or vCard and export to both.
 
 **Search.** Full text (SQLite FTS5) plus `from:` `to:` `cc:` `subject:` `label:`
 `has:attachment` `filename:` `is:unread|starred|important|snoozed`
@@ -88,19 +102,33 @@ blocking, and view original / download `.eml`.
 `larger:` `smaller:`, "exact phrases" and `-negation`. Includes an advanced search form
 and "create filter from search".
 
-**Settings.** Theme, density, page size, default From, signature, vacation responder
+**Settings.** Theme, density, page size, default From, signatures, vacation responder
 (dates, contacts only, one reply per sender per 4 days), forwarding, filters (label,
-archive, star, forward, delete, never/always spam), blocked senders, labels, password,
-TOTP 2FA with recovery codes, active sessions, and API keys.
+archive, star, forward, delete, never/always spam), blocked senders, labels, swipe
+actions, notifications, self-service aliases (if the admin allows), password, a
+recovery email for "Forgot password?", TOTP 2FA with recovery codes, active sessions,
+and API keys.
 
 **Admin.**
-- Dashboard with volume chart and provider health.
-- Users: roles, suspend, quotas, daily send limits, password and 2FA reset, sign out everywhere.
-- Domains: DNS checklist and checker, provider and fallback, catch-all, DKIM selectors.
-- Aliases and groups.
+- Dashboard with volume chart, provider health, and a "Get Wren ready" checklist built
+  from real state, including a round-trip test that sends a message out through your
+  provider and waits for it to come back.
+- Alerts when a provider keeps failing, the send queue backs up, a mailbox is nearly
+  full, or DNS changes for the worse (checked daily). They go to admins' inboxes, push
+  for critical ones, and optionally an outside address.
+- Users: roles, suspend, quotas, daily send limits, 2FA reset, sign out everywhere;
+  bulk actions; CSV import with a dry-run check; a detail page with storage, addresses,
+  devices and sign-in history. New people get an emailed link to choose their own
+  password, and an optional welcome message.
+- Domains: DNS records that match the sending provider, a DNS checker with health
+  badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
+  setup (Email Routing and Email Sending). It won't move a domain's mail away from its
+  current MX without asking.
+- Aliases, groups and shared mailboxes.
 - Providers: verify credentials, send test email, rotate inbound URLs.
-- Mail queue with retry and cancel; inbound and outbound delivery logs.
-- Invites; registration policy (closed, invite, open).
+- Mail queue with retry and cancel; delivery logs with search, filters, a timeline and
+  retry. Logs show headers only; admins never see message bodies.
+- Invites, emailed for you; registration policy (closed, invite, open).
 - Security policies: required 2FA, password length, session length, lockout.
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
 - Branding; announcement emails; audit log.
@@ -115,8 +143,12 @@ TOTP 2FA with recovery codes, active sessions, and API keys.
 
 **Developer API.** `POST /api/v1/send` with `Authorization: Bearer wren_…`.
 
-**Desktop mail apps.** Wren is a web app (it works on phones too). Workers can't accept
-incoming SMTP or IMAP connections, so Outlook and Apple Mail can't connect to it directly.
+**Accessibility.** Labelled controls, dialogs that keep and return focus, menus with
+arrow keys, announced notifications, and colours that meet WCAG AA contrast.
+
+**Desktop mail apps.** Wren is a web app, installable on phones and desktops. Workers
+can't accept incoming SMTP or IMAP connections, so Outlook and Apple Mail can't connect
+to it directly.
 
 ## Architecture
 
