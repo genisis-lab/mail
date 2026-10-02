@@ -207,15 +207,17 @@ export function AdminSettingsPage() {
   );
 }
 
-/** Who password resets, invites, recovery confirmations and alerts come from. */
+/** Who everything Wren sends itself comes from: invites, password links, welcome messages, alerts, announcements. */
 function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
   const domains = useDomains();
+  // Existing addresses to pick from (any address on a hosted domain works).
+  const addresses = useQuery({ queryKey: ['admin', 'addresses', 'all'], queryFn: () => api.get<{ addresses: { address: string }[] }>('/api/admin/addresses').then((r) => r.addresses.map((a) => a.address)) });
   const sender = useQuery({ queryKey: ['admin', 'settings', 'sender'], queryFn: () => api.get<{ systemSender: { address: string; name: string } | null }>('/api/admin/settings').then((r) => r.systemSender) });
   const firstDomain = domains.data?.find((d) => d.enabled)?.name ?? 'yourdomain.com';
   return (
     <Card
       title="System emails"
-      description="Password resets, sign-in and invite links, recovery-email confirmations and alerts."
+      description="Everything Wren sends by itself: invites, setup and password links, welcome messages, recovery-email confirmations, sign-in alerts, admin alerts and announcements."
     >
       <div className="grid max-w-xl gap-4">
         {sender.data && (
@@ -224,12 +226,17 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
           </p>
         )}
         <Field label="Send from" help={`An address on a domain hosted here, so your provider can send it. Blank: contact@${firstDomain}.`}>
-          <Input type="email" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`contact@${firstDomain}`} />
+          <Input type="email" list="system-from-addresses" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`contact@${firstDomain}`} />
+          <datalist id="system-from-addresses">
+            {(addresses.data ?? []).map((a) => (
+              <option key={a} value={a} />
+            ))}
+          </datalist>
         </Field>
         <Field label="Sender name" help={`Blank: the instance name (${draft['instance.name']}).`}>
           <Input value={draft['mail.systemName']} onChange={(e) => set('mail.systemName', e.target.value)} placeholder={draft['instance.name']} />
         </Field>
-        <Field label="Replies go to" help="Optional. When someone replies to a system email, it goes here (for example contact@ or support@).">
+        <Field label="Replies go to" help="Optional. When someone replies to a system email, it goes here (for example support@). Blank: replies go to the Send from address.">
           <Input type="email" value={draft['mail.systemReplyTo']} onChange={(e) => set('mail.systemReplyTo', e.target.value)} placeholder="No Reply-To" />
         </Field>
       </div>
