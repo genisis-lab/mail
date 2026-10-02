@@ -387,19 +387,19 @@ const UNTYPED_ATTACHMENTS = new Set(['brevo', 'mailersend']);
 
 describe('meeting replies through every provider', () => {
   const ics = ['BEGIN:VCALENDAR', 'METHOD:REQUEST', 'BEGIN:VEVENT', 'UID:uid-1@example', 'DTSTART:20261016T170000Z', 'DTEND:20261016T180000Z', 'ORGANIZER;CN=Maya:mailto:maya@northwind.example', 'SUMMARY:Planning', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
-  const reply = buildReply(parseIcs(ics)!, { email: 'neil@wren.test', name: 'Neil' }, 'ACCEPTED');
+  const reply = buildReply(parseIcs(ics)!, { email: 'sam@wren.test', name: 'Sam' }, 'ACCEPTED');
 
   for (const info of listProviderTypes().filter((t) => t.outbound && getProviderDef(t.type)?.send)) {
     it(`${info.name} sends the reply as a calendar part`, async () => {
       const def = getProviderDef(info.type)!;
       const { raw } = await buildMime({
-        from: { address: 'neil@wren.test', name: 'Neil' },
+        from: { address: 'sam@wren.test', name: 'Sam' },
         to: [{ address: 'maya@northwind.example' }],
         subject: 'Accepted: Planning',
-        html: '<p>Neil has accepted this invitation.</p>',
+        html: '<p>Sam has accepted this invitation.</p>',
         calendar: { method: 'REPLY', content: reply },
       });
-      const email = await toOutboundEmail(raw, { from: 'neil@wren.test', to: ['maya@northwind.example'] });
+      const email = await toOutboundEmail(raw, { from: 'sam@wren.test', to: ['maya@northwind.example'] });
       expect(email.attachments.find((a) => a.contentType === 'text/calendar; method=REPLY')).toBeTruthy();
       const sent: string[] = [];
       const ctx: ProviderContext = {

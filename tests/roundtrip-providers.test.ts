@@ -22,8 +22,8 @@ const TOKEN = 'rt_Abc123-xyz_7890QWERTY';
 /** The message startRoundtrip() builds. */
 async function testMessage() {
   const { raw } = await buildMime({
-    from: { address: 'neil@wren.test', name: 'Neil' },
-    to: [{ address: 'neil@wren.test', name: 'Neil' }],
+    from: { address: 'sam@wren.test', name: 'Sam' },
+    to: [{ address: 'sam@wren.test', name: 'Sam' }],
     subject: 'Wren delivery test',
     html: `<p>This is an automatic delivery test.</p><p style="color:#888;font-size:12px">Delivery test code: ${TOKEN}</p>`,
     headers: { 'X-Wren-Roundtrip': TOKEN },
@@ -57,10 +57,10 @@ const OK = {
   MessageID: 'msg-1',
   MessageId: 'msg-1',
   messageId: 'msg-1',
-  result: { message_id: 'msg-1', delivered: ['neil@wren.test'], queued: [], permanent_bounces: [] },
+  result: { message_id: 'msg-1', delivered: ['sam@wren.test'], queued: [], permanent_bounces: [] },
   results: { id: 'msg-1', total_accepted_recipients: 1 },
   Messages: [{ Status: 'success', To: [{ MessageID: 1, MessageUUID: 'u' }] }],
-  data: { message_id: 'msg-1', messages: { 'neil@wren.test': { id: 1 } }, succeeded: 1 },
+  data: { message_id: 'msg-1', messages: { 'sam@wren.test': { id: 1 } }, succeeded: 1 },
   emails: [{ id: 'msg-1' }],
 };
 
@@ -87,7 +87,7 @@ describe('round-trip test through every provider', () => {
     it(`${info.name} sends the test marker`, async () => {
       const def = getProviderDef(info.type)!;
       const raw = await testMessage();
-      const email = await toOutboundEmail(raw, { from: 'neil@wren.test', to: ['neil@wren.test'] });
+      const email = await toOutboundEmail(raw, { from: 'sam@wren.test', to: ['sam@wren.test'] });
       expect(email.headers['X-Wren-Roundtrip']).toBe(TOKEN);
 
       const sent: string[] = [];
@@ -130,8 +130,8 @@ describe('round-trip test through every provider', () => {
 
     // As a header-dropping provider delivers it: same subject and body, no custom header.
     const { raw } = await buildMime({
-      from: { address: 'neil@wren.test' },
-      to: [{ address: 'neil@wren.test' }],
+      from: { address: 'sam@wren.test' },
+      to: [{ address: 'sam@wren.test' }],
       subject: 'Wren delivery test',
       html: `<p>This is an automatic delivery test.</p><p style="color:#888;font-size:12px">Delivery test code: ${TOKEN}</p>`,
     });
