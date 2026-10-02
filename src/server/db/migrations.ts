@@ -549,4 +549,9 @@ export const migrations: string[] = [
   ALTER TABLE addresses ADD COLUMN throwaway INTEGER NOT NULL DEFAULT 0;
   CREATE INDEX idx_messages_delivered_to ON messages(user_id, delivered_to);
   `,
+
+  // 7: meeting invitations: the answer the user sent.
+  `
+  ALTER TABLE messages ADD COLUMN rsvp TEXT;
+  `,
 ];

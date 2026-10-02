@@ -100,9 +100,11 @@ export async function parseMail(raw: Uint8Array): Promise<Parsed> {
     attachments: m.attachments.map((a) => {
       const content = toBuffer(a.content);
       const contentId = cleanMessageId(a.contentId) ?? null;
+      // Calendar invitations keep their iTIP method (REQUEST, REPLY, CANCEL…), which mail and calendar apps rely on.
+      const calendar = a.mimeType === 'text/calendar' || a.mimeType === 'application/ics';
       return {
-        filename: a.filename || (a.mimeType === 'message/rfc822' ? 'message.eml' : 'attachment'),
-        contentType: a.mimeType || 'application/octet-stream',
+        filename: a.filename || (a.mimeType === 'message/rfc822' ? 'message.eml' : calendar ? 'invite.ics' : 'attachment'),
+        contentType: calendar && a.method ? `text/calendar; method=${a.method}` : a.mimeType || 'application/octet-stream',
         size: content.length,
         contentId,
         inline: (a.disposition === 'inline' || !!a.related) && !!contentId,

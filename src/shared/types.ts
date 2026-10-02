@@ -184,6 +184,10 @@ export interface MessageDetail {
   canUnsubscribe?: boolean;
   /** The user already unsubscribed from this sender. */
   unsubscribed?: boolean;
+  /** Carries a calendar invitation (or reply, or cancellation). */
+  hasInvite?: boolean;
+  /** The answer sent to the invitation from Wren: ACCEPTED, TENTATIVE or DECLINED. */
+  rsvp?: string | null;
 }
 
 export interface ThreadDetail {

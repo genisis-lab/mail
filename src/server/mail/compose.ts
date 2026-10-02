@@ -28,6 +28,7 @@ export interface ComposeInput {
   headers?: Record<string, string>;
   messageId?: string;
   date?: Date;
+  calendar?: { method: string; content: string } | null;
 }
 
 export function newMessageId(fromAddress: string): string {
@@ -53,6 +54,7 @@ export async function buildMime(input: ComposeInput): Promise<{ raw: Buffer; mes
     date: input.date,
     headers: { 'X-Mailer': `${APP_NAME} ${APP_VERSION}`, ...(input.headers ?? {}) },
     attachments: input.attachments,
+    calendar: input.calendar,
   });
   return { raw, messageId };
 }

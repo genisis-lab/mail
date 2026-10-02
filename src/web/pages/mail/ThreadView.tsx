@@ -45,6 +45,7 @@ import { useHotkeys } from '../../lib/hotkeys';
 import { useLabels, useSession } from '../../lib/session';
 import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
+import { InviteCard } from './InviteCard';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
@@ -388,6 +389,7 @@ export function ThreadView() {
                   onReply={(mode) => void startReply(m, mode)}
                   meAddress={mailbox.current?.address ?? user.email}
                   canBlockRecipients={!mailbox.current && (user.role === 'owner' || user.role === 'admin')}
+                  canAnswer={!mailbox.current || mailbox.current.canSend}
                   alwaysShowImages={prefs.showImages === 'always'}
                   onAlwaysShowImages={async () => {
                     await api.put('/api/account/prefs', { showImages: 'always' });
@@ -497,8 +499,10 @@ function MessageCard({
   alwaysShowImages,
   onAlwaysShowImages,
   canBlockRecipients,
+  canAnswer,
 }: {
   canBlockRecipients: boolean;
+  canAnswer: boolean;
   m: MessageDetail;
   isLast: boolean;
   expanded: boolean;
@@ -803,6 +807,7 @@ function MessageCard({
           </p>
         )}
 
+        {m.hasInvite && <InviteCard messageId={m.id} canAnswer={canAnswer} />}
         {!alwaysShowImages && !showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
         <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} onBlockedImages={setBlocked} />
 

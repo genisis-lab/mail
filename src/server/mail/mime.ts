@@ -30,6 +30,8 @@ export interface MimeInput {
   date?: Date;
   headers?: Record<string, string>;
   attachments?: MimeAttachment[];
+  /** An iCalendar part (iMIP), sent as the last alternative of the body. */
+  calendar?: { method: string; content: string } | null;
 }
 
 const CRLF = '\r\n';
@@ -164,6 +166,14 @@ export function buildMimeMessage(input: MimeInput): Buffer {
   if (htmlNode && inline.length) htmlNode = multipart('related', [htmlNode, ...inline.map(attachmentPart)]);
   const text = input.text ?? '';
   let body: Part = htmlNode ? (text ? multipart('alternative', [textPart('plain', text), htmlNode]) : htmlNode) : textPart('plain', text);
+  if (input.calendar) {
+    const cal: Part = {
+      headers: header('Content-Type', `text/calendar; charset=utf-8; method=${input.calendar.method.replace(/[^A-Z]/gi, '').toUpperCase()}`) + header('Content-Transfer-Encoding', 'base64'),
+      body: base64Lines(enc.encode(input.calendar.content)),
+    };
+    const alternatives = [textPart('plain', text), ...(htmlNode ? [htmlNode] : []), cal];
+    body = multipart('alternative', alternatives);
+  }
   if (regular.length) body = multipart('mixed', [body, ...regular.map(attachmentPart)]);
 
   let h = '';

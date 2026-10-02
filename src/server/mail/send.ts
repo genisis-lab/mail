@@ -142,6 +142,8 @@ export interface SendOptions {
   kind?: 'user' | 'api';
   /** Person who pressed Send (differs from the mailbox owner in shared mailboxes). */
   sentBy?: number;
+  /** An iCalendar part to send with it (a meeting reply). */
+  calendar?: { method: string; content: string };
 }
 
 /** Turn a draft into a queued outgoing message. */
@@ -179,6 +181,7 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     text: d.text_body,
     inReplyTo: d.in_reply_to,
     references: refs,
+    calendar: opts.calendar,
     attachments: await Promise.all(
       atts.map(async (a: any) => ({
         filename: a.filename,

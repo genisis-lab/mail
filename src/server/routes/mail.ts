@@ -3,13 +3,15 @@ import { z } from 'zod';
 import type { Category, View } from '../../shared/types.js';
 import { CATEGORIES } from '../mail/categorize.js';
 import { all, get, insert, now, run, tx } from '../db/index.js';
-import { badRequest, notFound } from '../lib/http.js';
+import { badRequest, forbidden, HttpError, notFound } from '../lib/http.js';
 import { isEmail, normalizeEmail } from '../lib/addr.js';
 import { getBlob } from '../mail/blobs.js';
 import { applyThreadAction, counters, getMessage, getThread, listThreads, VIEWS, type ThreadAction } from '../mail/threads.js';
 import { retryOutbox } from '../mail/outbound.js';
 import { purgeMessages } from '../mail/store.js';
 import { unsubscribe } from '../services/unsubscribe.js';
+import { inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
+import type { Rsvp } from '../../shared/ics.js';
 import { body, intParam, type AppEnv } from '../http/context.js';
 
 export const mailRoutes = new Hono<AppEnv>();
@@ -143,6 +145,31 @@ mailRoutes.get('/messages/:id/raw', async (c) => {
       'X-Content-Type-Options': 'nosniff',
     },
   });
+});
+
+// ── Meeting invitations ─────────────────────────────────────────────────────
+
+mailRoutes.get('/messages/:id/invite', async (c) => c.json({ invite: await inviteFor(c.get('user').id, intParam(c, 'id')) }));
+
+mailRoutes.post('/messages/:id/invite/reply', async (c) => {
+  const box = c.get('mailbox');
+  if (box && !box.canSend) throw forbidden('You can read this shared mailbox, but not send from it');
+  const { response, comment } = await body(c, z.object({ response: z.enum(['accepted', 'tentative', 'declined']), comment: z.string().max(2000).default('') }));
+  try {
+    const r = await replyToInvite(c.get('user').id, intParam(c, 'id'), response.toUpperCase() as Rsvp, comment, c.get('actor')?.id ?? c.get('user').id);
+    return c.json(r);
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw badRequest((err as Error).message);
+  }
+});
+
+/** The event as a .ics file, to add to another calendar app. */
+mailRoutes.get('/messages/:id/invite.ics', async (c) => {
+  const f = await inviteFile(c.get('user').id, intParam(c, 'id'));
+  if (!f) throw notFound('This message has no invitation');
+  const name = (f.summary || 'event').replace(/[^\w .-]+/g, '').trim().slice(0, 60) || 'event';
+  return new Response(f.ics, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.ics"` } });
 });
 
 /** Unsubscribe from the mailing list a message came from. */

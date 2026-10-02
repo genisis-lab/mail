@@ -231,6 +231,8 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     category: r.category ?? 'primary',
     canUnsubscribe: r.direction === 'in' && !!r.list_unsubscribe && /<(https:|mailto:)/i.test(r.list_unsubscribe),
     unsubscribed: !!r.unsubscribed,
+    hasInvite: atts.some((a) => /^(text\/calendar|application\/ics)\b/i.test(a.contentType) || /\.ics$/i.test(a.filename)),
+    rsvp: r.rsvp ?? null,
   };
 }
 
