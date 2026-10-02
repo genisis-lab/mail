@@ -176,8 +176,27 @@ sessions, appearance, and personal API keys.
 - **Web Push** uses VAPID (ES256) with keys generated on first use. Pushes are empty;
   the service worker fetches `/api/me/notifications` with the session cookie.
 - **Admins never read mail:** delivery and inbound log details show headers only.
+- **Delivery status** (`providers/events.ts`, `mail/dsn.ts`, `services/delivery-events.ts`):
+  each provider's event webhook posts to the provider's existing secret URL and is
+  turned into delivered / bounced / complained / delayed events; bounce emails (RFC
+  3464) and ARF spam reports are read on the way in, which covers SMTP relays and
+  Cloudflare Email Service. Events match outbox rows by provider id or Message-ID,
+  scoped to that provider and to the message's own recipients. Hard bounces of a missing
+  mailbox and complaints go on `suppressions`, which `deliver()` checks before sending.
+- **Inbox tabs** (`mail/categorize.ts`) are decided once, at delivery, into
+  `messages.category`: bulk and automation headers, sender names and subjects, with
+  "a person wrote this" winning; moving a conversation writes a `category_rules` row
+  for the sender. `messages.delivered_to` records the address mail came through.
+- **Passkeys** (`lib/webauthn.ts`) are verified on WebCrypto with a small CBOR reader;
+  "none" attestation; the relying party is `PUBLIC_URL`. Sign-in alerts key devices by a
+  long-lived cookie (`known_devices`).
+- **Automatic backups** (`services/auto-backup.ts`) write the portable export to R2 in
+  8 MB parts from the alarm, resuming by table and rowid; parts count as referenced for
+  blob garbage collection until the backup is deleted.
+- **Invitations** (`shared/ics.ts`, `services/calendar.ts`): the first VEVENT of a
+  text/calendar part, times converted with `Intl` (IANA and Windows zone names); replies
+  are iTIP REPLY parts sent through the normal send path.
 
 ## Later
 JMAP over HTTP for desktop and mobile clients (Workers can't accept IMAP connections),
-calendar and contacts sync over HTTP (CalDAV/CardDAV), delivery/bounce webhooks per
-provider, and multi-tenant billing.
+calendar and contacts sync over HTTP (CalDAV/CardDAV), and multi-tenant billing.

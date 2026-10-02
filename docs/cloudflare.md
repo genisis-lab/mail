@@ -144,7 +144,12 @@ recovery only works once deployed.
 
 ## Backups
 
-**Admin → System & backup** has three tools:
+**Admin → System & backup** has these tools:
+
+- **Automatic backups.** Every day (03:00 UTC by default) a copy of the database is
+  written to the R2 bucket, and the last 7 are kept (choose 3–60). An admin alert goes
+  out if one fails, and it's retried an hour later. Back up now, download any backup,
+  and (owner only) restore one from the same page.
 
 - **Point-in-time recovery.** Roll the whole database back to any moment in the last 30
   days, for example after an accidental bulk delete. Message files that were deleted in

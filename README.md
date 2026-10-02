@@ -23,15 +23,20 @@ Send with Cloudflare Email Service (no API key) or Resend, and receive with Emai
   Postal, SMTP relays (Gmail, Microsoft 365, Fastmail…) and more, with a fallback provider per
   domain. See [docs/providers.md](docs/providers.md).
 - **Feels like Gmail.** Conversations, labels, stars, snooze, undo send, scheduled send,
-  search operators, keyboard shortcuts, a floating compose window, inline replies, and dark mode.
+  Primary / Updates / Promotions tabs, one-click unsubscribe, meeting invitations you can
+  answer, attachment previews, search operators, keyboard shortcuts, a floating compose
+  window, inline replies, and dark mode.
 - **A real admin panel.** Users, quotas, domains with DNS health checks, providers with
-  test sends, the mail queue, delivery logs, policies, invites, audit log, and backups.
+  test sends, the mail queue, delivery logs with bounces and a suppression list (from every
+  provider), catch-all control, policies, invites, audit log, and daily backups to R2.
 
 | Conversation | Compose |
 |---|---|
 | ![Conversation](docs/screenshots/conversation.png) | ![Compose](docs/screenshots/compose.png) |
 | **Admin overview** | **20+ providers** |
 | ![Admin](docs/screenshots/admin.png) | ![Providers](docs/screenshots/providers.png) |
+| **Meeting invitations** | **On your phone** |
+| ![Invitation](docs/screenshots/invitation.png) | <img src="docs/screenshots/phone.png" alt="Wren on a phone" width="300"> |
 
 ## Quick start
 
@@ -84,6 +89,28 @@ blocking, and view original / download `.eml`. Saved replies, saved searches in 
 sidebar, a signature per address, and shared mailboxes (support@, sales@) that a team
 reads together, with "sent by" on each reply.
 
+**Inbox tabs.** Primary, Updates (receipts, alerts, notifications, discussion lists) and
+Promotions (newsletters, offers), with unread counts. Mail written by a person always
+stays in Primary; move a conversation to another tab and that sender's mail follows.
+Can be turned off. **Unsubscribe** sits next to the sender of mailing-list mail: Wren
+uses the list's one-click unsubscribe (RFC 8058), or emails the list's unsubscribe
+address from the address it mails, or opens the list's page.
+
+**Which address it came to.** Mail that reached you through an alias, a group, a
+sign-up address or the catch-all shows a small "@hello" chip; click it to see
+everything sent there (`deliveredto:`). Turn an alias off from the message menu or
+Settings → Accounts, and mail to it bounces. **Sign-up addresses** (like
+`shoe-shop.k3x9@yourdomain`): one per site, with how much mail each received, so a
+leaked one is easy to spot and switch off.
+
+**Meeting invitations.** Invitations from Google Calendar, Outlook, Apple Calendar and
+others show as an event card: the time in your zone (and the organizer's), place,
+guests, Join, Add to calendar, and Yes / Maybe / No, which sends a proper calendar reply
+to the organizer.
+
+**Attachment previews.** Images, PDFs, text files, audio and video open in a viewer with
+previous / next, download and open in a new tab.
+
 **On your phone.** Installable as an app (PWA) with its own icon and an offline app
 shell. New-mail notifications through Web Push. Pushes carry no data: the app asks Wren
 what's new, so nothing about your mail passes through the push service. Gmail-style
@@ -99,15 +126,16 @@ Contacts import from Google/Outlook CSV or vCard and export to both.
 **Search.** Full text (SQLite FTS5) plus `from:` `to:` `cc:` `subject:` `label:`
 `has:attachment` `filename:` `is:unread|starred|important|snoozed`
 `in:inbox|sent|spam|trash|anywhere` `before:` `after:` `older_than:` `newer_than:`
-`larger:` `smaller:`, "exact phrases" and `-negation`. Includes an advanced search form
-and "create filter from search".
+`larger:` `smaller:` `deliveredto:` `category:primary|updates|promotions`,
+"exact phrases" and `-negation`. Includes an advanced search form and "create filter
+from search".
 
 **Settings.** Theme, density, page size, default From, signatures, vacation responder
 (dates, contacts only, one reply per sender per 4 days), forwarding, filters (label,
 archive, star, forward, delete, never/always spam), blocked senders, labels, swipe
-actions, notifications, self-service aliases (if the admin allows), password, a
-recovery email for "Forgot password?", TOTP 2FA with recovery codes, active sessions,
-and API keys.
+actions, notifications, inbox tabs, self-service aliases and sign-up addresses (if the
+admin allows), password, a recovery email for "Forgot password?", passkeys, TOTP 2FA
+with recovery codes, sign-in alerts, active sessions, and API keys.
 
 **Admin.**
 - Dashboard with volume chart, provider health, and a "Get Wren ready" checklist built
@@ -123,19 +151,28 @@ and API keys.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
   setup (Email Routing and Email Sending). It won't move a domain's mail away from its
-  current MX without asking.
+  current MX without asking. Catch-all activity lists the addresses the catch-all has
+  been taking, so you can block one or make it a real alias.
 - Aliases, groups and shared mailboxes.
 - Providers: verify credentials, send test email, rotate inbound URLs.
 - Mail queue with retry and cancel; delivery logs with search, filters, a timeline and
   retry. Logs show headers only; admins never see message bodies.
+- Delivery status from every provider: bounces, spam complaints, delays and deliveries,
+  from each provider's event webhook (Resend, SES, Postmark, SendGrid, Mailgun, Brevo,
+  Mailjet, SparkPost, MailerSend and more) or from bounce emails (SMTP relays, Cloudflare
+  Email Service). Addresses that hard-bounce or complain go on a suppression list and
+  aren't mailed again until removed. See [docs/providers.md](docs/providers.md).
 - Invites, emailed for you; registration policy (closed, invite, open).
 - Security policies: required 2FA, password length, session length, lockout.
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
 - Branding; announcement emails; audit log.
-- Backups: portable export and restore, plus point-in-time recovery on Cloudflare.
+- Backups: a daily backup of the database to R2 (keep the last 7, or as many as you
+  like; an alert if one fails), back up now, download, restore; portable export and
+  restore; point-in-time recovery on Cloudflare.
 
 **Security.**
-- Passwords hashed with scrypt; TOTP 2FA.
+- Passwords hashed with scrypt; passkeys (WebAuthn); TOTP 2FA.
+- An email when your account is signed in to from a new device.
 - Provider secrets encrypted with AES-256-GCM.
 - HttpOnly SameSite cookies plus a CSRF header.
 - Login rate limiting and an audit trail.
@@ -170,7 +207,7 @@ The design notes are in [docs/PLAN.md](docs/PLAN.md).
 npm install
 npm run dev         # the Worker on the real Workers runtime (workerd) at http://localhost:8787
 npm run dev:web     # optional: hot-reloading UI at http://localhost:5173 (API proxied to 8787)
-npm test            # vitest: MIME, SMTP client, providers, mail flow, backups, HTTP API
+npm test            # vitest: MIME, SMTP client, every provider, mail flow, passkeys, backups, HTTP API
 npm run typecheck
 ```
 
