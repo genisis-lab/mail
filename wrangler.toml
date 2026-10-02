@@ -4,6 +4,10 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Serve Wren from its own hostname. `wrangler deploy` creates the DNS record and certificate.
+# The zone must be on this Cloudflare account and no other Worker may hold the hostname.
+routes = [{ pattern = "mail.builtwai.com", custom_domain = true }]
+
 # Build the web app before bundling/deploying the Worker.
 [build]
 command = "npx vite build"
@@ -43,7 +47,7 @@ name = "EMAIL"
 
 [vars]
 # Set if your public hostname differs from the Worker URL (used for inbound webhook URLs).
-# PUBLIC_URL = "https://mail.example.com"
+PUBLIC_URL = "https://mail.builtwai.com"
 
 [observability]
 enabled = true
