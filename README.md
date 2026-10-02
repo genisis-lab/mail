@@ -25,16 +25,21 @@ Send with Cloudflare Email Service (no API key) or Resend, and receive with Emai
 - **Feels like Gmail.** Conversations, labels, stars, snooze, undo send, scheduled send,
   Primary / Updates / Promotions tabs, one-click unsubscribe, meeting invitations you can
   answer, attachment previews, search operators, keyboard shortcuts, a floating compose
-  window, inline replies, and dark mode.
+  window, inline replies, a "did you mean to attach files?" check, and a dark mode that
+  turns ordinary emails dark while newsletters keep their own colours.
 - **A real admin panel.** Users, quotas, domains with DNS health checks, providers with
   test sends, the mail queue, delivery logs with bounces and a suppression list (from every
   provider), catch-all control, policies, invites, audit log, and daily backups to R2.
+  Change someone's address, require a new password, unlock an account, and handle
+  someone leaving: out-of-office, forwarding, a mail export, and their addresses passed on.
 
 | Conversation | Compose |
 |---|---|
 | ![Conversation](docs/screenshots/conversation.png) | ![Compose](docs/screenshots/compose.png) |
 | **Admin overview** | **20+ providers** |
 | ![Admin](docs/screenshots/admin.png) | ![Providers](docs/screenshots/providers.png) |
+| **Managing people** | **Dark mode** |
+| ![A user's page in the admin panel](docs/screenshots/admin-user.png) | ![A conversation in dark mode](docs/screenshots/conversation-dark.png) |
 | **Meeting invitations** | **On your phone** |
 | ![Invitation](docs/screenshots/invitation.png) | <img src="docs/screenshots/phone.png" alt="Wren on a phone" width="300"> |
 
@@ -85,7 +90,9 @@ Drafts, All Mail, Spam and Trash. Coloured labels, bulk actions ("select all 2,3
 archive, snooze, undo send (0–30 s), scheduled send, draft autosave,
 attachments and inline images, rich-text editing, signatures, reply/reply-all/forward
 inline or popped out, contact autocomplete, a sandboxed HTML renderer with remote-image
-blocking, and view original / download `.eml`. Saved replies, saved searches in the
+blocking, and view original / download `.eml`. Before sending, Wren asks "Did you mean
+to attach files?" if what you wrote says "see attached" (or "enclosed", "PFA"…) and
+nothing is attached. Saved replies, saved searches in the
 sidebar, a signature per address, and shared mailboxes (support@, sales@) that a team
 reads together, with "sent by" on each reply.
 
@@ -102,6 +109,11 @@ everything sent there (`deliveredto:`). Turn an alias off from the message menu 
 Settings → Accounts, and mail to it bounces. **Sign-up addresses** (like
 `shoe-shop.k3x9@yourdomain`): one per site, with how much mail each received, so a
 leaked one is easy to spot and switch off.
+
+**Dark mode.** Ordinary emails (replies, notes, personal mail) take the dark theme,
+with text colours meant for white paper made readable. Designed emails such as
+newsletters and receipts keep a white background so logos and brand colours survive.
+Every message has a switch to flip it.
 
 **Meeting invitations.** Invitations from Google Calendar, Outlook, Apple Calendar and
 others show as an event card: the time in your zone (and the organizer's), place,
@@ -144,15 +156,25 @@ with recovery codes, sign-in alerts, active sessions, and API keys.
 - Alerts when a provider keeps failing, the send queue backs up, a mailbox is nearly
   full, or DNS changes for the worse (checked daily). They go to admins' inboxes, push
   for critical ones, and optionally an outside address.
-- Users: roles, suspend, quotas, daily send limits, 2FA reset, sign out everywhere;
-  bulk actions; CSV import with a dry-run check; a detail page with storage, addresses,
-  devices and sign-in history. New people get an emailed link to choose their own
-  password, and an optional welcome message.
+- Users: roles, suspend, quotas, daily send limits, 2FA and passkey reset, sign out
+  everywhere; bulk actions; CSV import with a dry-run check and CSV export; a detail page
+  with storage, addresses, devices and sign-in history. New people get an emailed link to
+  choose their own password, and an optional welcome message.
+  - **Change someone's address** (their sign-in name) on any hosted domain, keeping the
+    old one as an alias if you like; they get a note in their inbox.
+  - **Require a new password** at next sign-in, with a temporary password, for one person
+    or in bulk. **Unlock** an account that too many wrong passwords locked.
+  - **When someone is away or leaves:** set their out-of-office reply and forwarding,
+    export their mail as `.mbox`, and on delete pass their addresses and catch-alls to
+    someone else so nothing bounces.
+  - Only the owner can change, sign out or reset the owner account.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
   setup (Email Routing and Email Sending). It won't move a domain's mail away from its
   current MX without asking. Catch-all activity lists the addresses the catch-all has
-  been taking, so you can block one or make it a real alias.
+  been taking, so you can block one or make it a real alias. A sending-only subdomain
+  (say `contact.example.com`) needs no MX, takes its DMARC from the parent domain, and
+  shows whether your provider has it verified.
 - Aliases, groups and shared mailboxes.
 - Providers: verify credentials, send test email, rotate inbound URLs.
 - Mail queue with retry and cancel; delivery logs with search, filters, a timeline and
@@ -165,6 +187,8 @@ with recovery codes, sign-in alerts, active sessions, and API keys.
 - Invites, emailed for you; registration policy (closed, invite, open).
 - Security policies: required 2FA, password length, session length, lockout.
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
+- System emails (invites, password links, alerts) from the address you choose, plain
+  and personal so they stay out of spam; invites reply to the admin who sent them.
 - Branding; announcement emails; audit log.
 - Backups: a daily backup of the database to R2 (keep the last 7, or as many as you
   like; an alert if one fails), back up now, download, restore; portable export and

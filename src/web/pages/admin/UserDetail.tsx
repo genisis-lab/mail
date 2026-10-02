@@ -130,7 +130,7 @@ export function UserDetailPage() {
             </Button>
             <Menu
               align="right"
-              width="w-64"
+              width="w-72"
               trigger={({ onClick }) => <Button onClick={onClick}>More</Button>}
               items={[
                 { label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) },
@@ -151,7 +151,7 @@ export function UserDetailPage() {
                       u.mustChangePassword
                         ? { label: 'Don’t require a new password', icon: <KeyRound className="size-4" />, onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { requirePasswordChange: false }), 'They no longer need a new password') }
                         : {
-                            label: 'Require a new password at next sign-in',
+                            label: 'Require a new password',
                             icon: <KeyRound className="size-4" />,
                             onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { requirePasswordChange: true }), 'They’ll choose a new password before they can continue'),
                           },
