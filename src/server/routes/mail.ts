@@ -105,7 +105,7 @@ mailRoutes.get('/recent', (c) => {
   if (!after) return c.json({ latestId: latest, messages: [] });
   const rows = all<any>(
     `SELECT id, thread_id, from_addr, from_name, subject, snippet, date FROM messages
-      WHERE user_id = ? AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND id > ? ORDER BY id DESC LIMIT 10`,
+      WHERE user_id = ? AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND id > ? AND COALESCE(source, '') <> 'import' ORDER BY id DESC LIMIT 10`,
     [user.id, after],
   );
   return c.json({

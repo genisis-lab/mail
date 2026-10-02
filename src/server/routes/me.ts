@@ -1,4 +1,4 @@
-/** Per-user features: saved replies, saved searches, self-service aliases. Mounted on /api/me. */
+/** Per-user features: saved replies, saved searches, self-service aliases, push, import and export. Mounted on /api/me. */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { all, get, insert, now, run } from '../db/index.js';
@@ -6,8 +6,12 @@ import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
 import { domainOf, normalizeEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 import { pushToUsers, saveSubscription, validEndpoint, vapidPublicKey } from '../services/push.js';
+import { jobDto, type JobRow } from '../services/jobs.js';
+import { deleteJob, exportStream, importMboxBatch, startExport, startImapImport } from '../services/mail-import.js';
+import { ImapError } from '../mail/imap-client.js';
+import { HttpError } from '../lib/http.js';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -165,13 +169,13 @@ meRoutes.get('/notifications', (c) => {
   const rows = all<any>(
     `SELECT m.id, m.user_id, m.thread_id, m.from_addr, m.from_name, m.subject, m.date, m.created_at, u.name AS box_name, u.email AS box_email
        FROM messages m JOIN users u ON u.id = m.user_id
-      WHERE m.user_id IN (SELECT value FROM json_each(?)) AND m.direction = 'in' AND m.folder = 'inbox' AND m.is_read = 0 AND m.created_at > ?
+      WHERE m.user_id IN (SELECT value FROM json_each(?)) AND m.direction = 'in' AND m.folder = 'inbox' AND m.is_read = 0 AND m.created_at > ? AND COALESCE(m.source, '') <> 'import'
       ORDER BY m.created_at DESC LIMIT 5`,
     [JSON.stringify(boxes), since],
   );
   const total =
     get<{ c: number }>(
-      `SELECT COUNT(*) AS c FROM messages WHERE user_id IN (SELECT value FROM json_each(?)) AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND created_at > ?`,
+      `SELECT COUNT(*) AS c FROM messages WHERE user_id IN (SELECT value FROM json_each(?)) AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND created_at > ? AND COALESCE(source, '') <> 'import'`,
       [JSON.stringify(boxes), since],
     )?.c ?? 0;
   return c.json({
@@ -184,5 +188,101 @@ meRoutes.get('/notifications', (c) => {
       subject: r.subject,
       arrivedAt: r.created_at,
     })),
+  });
+});
+
+// ── Import and export ───────────────────────────────────────────────────────
+
+/** One upload from the browser: up to 50 messages split out of an mbox file. */
+const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+
+meRoutes.post('/import/messages', async (c) => {
+  const user = c.get('user');
+  const input = await body(c, z.object({ messages: z.array(z.string().max(34_000_000)).min(1).max(50) }));
+  let total = 0;
+  const raws = input.messages.map((b64) => {
+    const buf = Buffer.from(b64, 'base64');
+    total += buf.length;
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  });
+  if (total > MAX_UPLOAD_BYTES) throw badRequest('Upload at most 24 MB at a time');
+  return c.json(await importMboxBatch(user.id, raws));
+});
+
+const imapSchema = z.object({
+  host: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(3)
+    .max(253)
+    .refine((h) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h) && !/^[\d.]+$/.test(h) && !/\.(local|localhost|internal|lan|home|arpa)$/.test(h), 'Enter the server name, like imap.gmail.com'),
+  port: z.number().int().refine((p) => p === 993 || p === 143, 'Use port 993 (SSL/TLS) or 143 (STARTTLS)'),
+  security: z.enum(['tls', 'starttls']),
+  username: z.string().trim().min(1).max(320),
+  password: z.string().min(1).max(1000),
+});
+
+meRoutes.post('/import/imap', async (c) => {
+  const user = c.get('user');
+  const input = await body(c, imapSchema);
+  rateLimit(`imap-import:${user.id}`, 10, 15 * 60_000);
+  try {
+    const id = await startImapImport(user.id, { ...input, timeoutMs: 20_000 });
+    audit(user.id, 'account.import_started', `${input.username} (${input.host})`, undefined, clientIp(c));
+    return c.json({ job: jobDto(get<JobRow>('SELECT * FROM jobs WHERE id = ?', [id])!) });
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    if (err instanceof ImapError && err.authFailed) {
+      throw badRequest(`${input.host} didn’t accept the username or password. For Gmail, iCloud and Yahoo use an app password.`, 'imap_auth');
+    }
+    throw badRequest(`Couldn’t connect to ${input.host}:${input.port}: ${(err as Error).message}`, 'imap_connect');
+  }
+});
+
+meRoutes.get('/jobs', (c) => c.json({ jobs: all<JobRow>('SELECT * FROM jobs WHERE user_id = ? ORDER BY id DESC LIMIT 20', [c.get('user').id]).map(jobDto) }));
+
+function ownJob(c: { get(k: 'user'): { id: number } }, id: number): JobRow {
+  const job = get<JobRow>('SELECT * FROM jobs WHERE id = ? AND user_id = ?', [id, c.get('user').id]);
+  if (!job) throw notFound();
+  return job;
+}
+
+meRoutes.post('/jobs/:id/cancel', async (c) => {
+  const job = ownJob(c, intParam(c, 'id'));
+  if (job.status === 'queued' || job.status === 'running') {
+    run(`UPDATE jobs SET status = 'cancelled', config = NULL, updated_at = ? WHERE id = ?`, [now(), job.id]);
+  }
+  if (job.kind === 'export') await deleteJob(job);
+  return c.json({ ok: true });
+});
+
+meRoutes.delete('/jobs/:id', async (c) => {
+  const job = ownJob(c, intParam(c, 'id'));
+  if (job.status === 'queued' || job.status === 'running') throw conflict('Cancel the job first');
+  await deleteJob(job);
+  return c.json({ ok: true });
+});
+
+meRoutes.post('/export', (c) => {
+  const user = c.get('user');
+  const id = startExport(user.id);
+  audit(user.id, 'account.export_started', undefined, undefined, clientIp(c));
+  return c.json({ job: jobDto(get<JobRow>('SELECT * FROM jobs WHERE id = ?', [id])!) });
+});
+
+meRoutes.get('/export/:id/download', (c) => {
+  const job = ownJob(c, intParam(c, 'id'));
+  if (job.kind !== 'export') throw notFound();
+  if (job.status !== 'done') throw conflict('The export isn’t ready yet');
+  const bytes = (JSON.parse(job.state) as { bytes?: number }).bytes ?? 0;
+  const day = new Date(job.created_at).toISOString().slice(0, 10);
+  return new Response(exportStream(job), {
+    headers: {
+      'Content-Type': 'application/mbox',
+      'Content-Disposition': `attachment; filename="wren-mail-${day}.mbox"`,
+      'Content-Length': String(bytes),
+      'Cache-Control': 'private, no-store',
+    },
   });
 });

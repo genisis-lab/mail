@@ -10,6 +10,7 @@ import { pruneTokens } from './services/tokens.js';
 import { runAlertChecks } from './services/alerts.js';
 import { autoCheckDomains } from './services/dns.js';
 import { jobsDueAt, runJobs } from './services/jobs.js';
+import { pruneJobs } from './services/mail-import.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
@@ -49,6 +50,7 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
   if (ts - lastRun('maintenance') > HOUR) {
     setMeta('last_maintenance', ts);
     runMaintenance();
+    await pruneJobs().catch((err) => log.warn('Pruning jobs failed', err));
   }
   if (ts - lastRun('alerts') > 10 * 60_000) {
     setMeta('last_alerts', ts);

@@ -37,6 +37,11 @@ export function harness() {
   return {
     app,
     call,
+    /** A raw request as the current identity, for downloads. */
+    request(path: string, init: RequestInit = {}) {
+      const cookie = jars[current];
+      return app.request(path, { ...init, headers: { 'X-Wren': '1', ...(cookie ? { cookie } : {}), ...((init.headers as Record<string, string>) ?? {}) } });
+    },
     /** Switch to another signed-in identity (separate cookie jar). */
     as(name: string) {
       current = name;

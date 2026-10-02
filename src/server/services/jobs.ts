@@ -53,6 +53,7 @@ export function jobsDueAt(): number {
   return get<{ t: number | null }>(`SELECT MIN(next_run_at) AS t FROM jobs WHERE status IN ('queued','running')`)?.t ?? Infinity;
 }
 
+const MAX_RETRIES = 3;
 let busy = false;
 
 /** Run one slice of every due job. */
@@ -69,7 +70,8 @@ export async function runJobs() {
         const r = await step(job, JSON.parse(job.state || '{}'));
         // The job may have been cancelled while the step ran.
         const current = get<{ status: string }>('SELECT status FROM jobs WHERE id = ?', [job.id]);
-        if (current?.status === 'cancelled') continue;
+        if (!current || current.status === 'cancelled') continue;
+        if (r.state && typeof r.state === 'object') delete r.state._retries;
         run('UPDATE jobs SET status = ?, state = ?, progress = ?, error = NULL, next_run_at = ?, updated_at = ? WHERE id = ?', [
           r.done ? 'done' : 'running',
           JSON.stringify(r.state),
@@ -79,8 +81,21 @@ export async function runJobs() {
           job.id,
         ]);
       } catch (err) {
-        log.warn(`Job ${job.id} (${job.kind}) failed`, err);
-        run(`UPDATE jobs SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`, [(err as Error).message.slice(0, 500), now(), job.id]);
+        const message = (err as Error).message.slice(0, 500);
+        const current = get<JobRow>('SELECT * FROM jobs WHERE id = ?', [job.id]);
+        if (!current || current.status === 'cancelled') continue;
+        // Network hiccups get a few retries; anything marked permanent (bad password, full mailbox) fails now.
+        const state = JSON.parse(current.state || '{}');
+        const retries = (state._retries ?? 0) + 1;
+        if (!(err as { permanent?: boolean }).permanent && retries <= MAX_RETRIES) {
+          log.warn(`Job ${job.id} (${job.kind}) failed, retrying (${retries}/${MAX_RETRIES})`, err);
+          state._retries = retries;
+          run('UPDATE jobs SET state = ?, error = ?, next_run_at = ?, updated_at = ? WHERE id = ?', [JSON.stringify(state), message, now() + retries * 60_000, now(), job.id]);
+        } else {
+          log.warn(`Job ${job.id} (${job.kind}) failed`, err);
+          // Forget stored credentials once a job can no longer use them.
+          run(`UPDATE jobs SET status = 'failed', error = ?, config = NULL, updated_at = ? WHERE id = ?`, [message, now(), job.id]);
+        }
       }
     }
   } finally {
