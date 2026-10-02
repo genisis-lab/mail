@@ -85,6 +85,12 @@ export const resend: ProviderDefinition<ResendConfig> = {
     return { providerMessageId: data?.id ?? null };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiKey']);
+    const { data } = await request<{ data: { name: string; status: string }[] }>(ctx, `${API}/domains`, { headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+    return (data?.data ?? []).map((d) => ({ name: d.name.toLowerCase(), verified: d.status === 'verified' }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiKey']);
     const { data } = await request<{ data: { name: string; status: string }[] }>(ctx, `${API}/domains`, {

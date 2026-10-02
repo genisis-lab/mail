@@ -356,3 +356,70 @@ describe('system email sender', () => {
     expect((await h.call('GET', '/api/admin/settings')).body.systemSender).toEqual({ address: 'contact@wren.test', name: 'Fernhill' });
   });
 });
+
+describe('sending from a subdomain', () => {
+  it('asks only for the TXT record on a sending-only subdomain, and can send system mail from it', async () => {
+    const added = await h.call('POST', '/api/admin/domains', { name: 'contact.wren.test' });
+    expect(added.status).toBe(200);
+    const { domain, records } = (await h.call('GET', `/api/admin/domains/${added.body.id}`)).body;
+    // No address on it receives mail, so a missing MX is fine.
+    expect(domain.dns.mx).toMatchObject({ ok: null, records: [] });
+    expect(domain.dns.mx.hint).toMatch(/Not needed/);
+    const txt = records.find((r: any) => r.type === 'TXT' && r.host === '_wren.contact.wren.test');
+    expect(txt.value).toBe(`wren-verify=${domain.verifyToken}`);
+    expect(txt.optional).toBeFalsy(); // the only way to prove ownership of a domain that never receives mail
+    expect(records.find((r: any) => r.type === 'MX')).toMatchObject({ value: '(not needed)', optional: true });
+
+    // Ownership is still proven with Wren's own TXT record.
+    const original = platform();
+    setPlatform({ ...original, dns: { txt: async (name: string) => (name === '_wren.contact.wren.test' ? [`wren-verify=${domain.verifyToken}`] : []), cname: async () => [], mx: async () => [] } });
+    try {
+      await h.call('POST', `/api/admin/domains/${added.body.id}/check`);
+    } finally {
+      setPlatform(original);
+    }
+    expect((await h.call('GET', `/api/admin/domains/${added.body.id}`)).body.domain.verified).toBe(true);
+
+    expect((await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': 'no-reply@contact.wren.test' })).status).toBe(200);
+    await h.call('POST', '/api/admin/invites', { sendTo: 'friend3@example.org', days: 7 });
+    expect((await outbox('notice')).at(-1)!.raw).toMatch(/^From: Fernhill <no-reply@contact\.wren\.test>$/m);
+    await h.call('PUT', '/api/admin/settings', { 'mail.systemFrom': '' });
+
+    // Once an address on it can receive mail, MX matters again.
+    await h.call('POST', '/api/admin/addresses', { address: 'help@contact.wren.test', kind: 'alias', userId: adminId });
+    await h.call('POST', `/api/admin/domains/${added.body.id}/check`);
+    expect((await h.call('GET', `/api/admin/domains/${added.body.id}`)).body.domain.dns.mx.ok).toBe(false);
+    run('DELETE FROM addresses WHERE address = ?', ['help@contact.wren.test']);
+    await h.call('DELETE', `/api/admin/domains/${added.body.id}`);
+  });
+
+  it('still needs MX on a domain of its own', async () => {
+    const added = await h.call('POST', '/api/admin/domains', { name: 'standalone.example' });
+    const { domain, records } = (await h.call('GET', `/api/admin/domains/${added.body.id}`)).body;
+    expect(domain.dns.mx.ok).toBe(false);
+    expect(records.find((r: any) => r.type === 'MX').value).not.toBe('(not needed)');
+    // Mail arriving through Email Routing can verify it instead.
+    expect(records.find((r: any) => r.type === 'TXT' && r.host === '_wren.standalone.example').optional).toBe(true);
+    await h.call('DELETE', `/api/admin/domains/${added.body.id}`);
+  });
+
+  it('shows whether the sending provider has the domain verified', async () => {
+    const p = await h.call('POST', '/api/admin/providers', { name: 'Resend', type: 'resend', isDefault: true, config: { apiKey: 're_test_key' } });
+    expect(p.status).toBe(200);
+    let reply: () => Response = () => Response.json({ data: [{ name: 'contact.wren.test', status: 'verified' }, { name: 'wren.test', status: 'pending' }] });
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      expect(url).toBe('https://api.resend.com/domains');
+      expect(new Headers(init.headers).get('authorization')).toBe('Bearer re_test_key');
+      return reply();
+    });
+    const check = async (domain: string) => (await h.call('GET', `/api/admin/sending-check?domain=${domain}`)).body;
+    expect(await check('Contact.Wren.test')).toMatchObject({ domain: 'contact.wren.test', verified: true, detail: 'Verified in Resend.', provider: { name: 'Resend', type: 'resend' } });
+    expect(await check('wren.test')).toMatchObject({ verified: false, detail: expect.stringMatching(/not verified yet/) });
+    expect(await check('other.wren.test')).toMatchObject({ verified: false, detail: expect.stringMatching(/isn’t set up in Resend/) });
+    // A key that may only send can't list domains: say so rather than guess.
+    reply = () => Response.json({ name: 'restricted_api_key', message: 'This API key is restricted to only send emails' }, { status: 401 });
+    expect(await check('contact.wren.test')).toMatchObject({ verified: null, detail: expect.stringMatching(/may only be allowed to send/) });
+    expect((await h.call('GET', '/api/admin/sending-check?domain=not a domain')).status).toBe(400);
+    await h.call('DELETE', `/api/admin/providers/${p.body.id}`);
+  });
+});

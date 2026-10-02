@@ -16,6 +16,7 @@ import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
+import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
 import { ProviderError } from '../providers/types.js';
 import { blobStoreSize, putBlob } from '../mail/blobs.js';
@@ -392,6 +393,13 @@ adminRoutes.put('/domains/:id', async (c) => {
   if (sets.length) run(`UPDATE domains SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
   act(c, 'admin.domain_updated', d.name, input);
   return c.json({ ok: true });
+});
+
+/** Whether the provider that sends for a domain has it verified (shown next to the domain and the system sender). */
+adminRoutes.get('/sending-check', async (c) => {
+  const parsed = domainName.safeParse(c.req.query('domain') ?? '');
+  if (!parsed.success) throw badRequest('Enter a valid domain like example.com');
+  return c.json(await checkSendingDomain(parsed.data));
 });
 
 adminRoutes.post('/domains/:id/check', async (c) => {

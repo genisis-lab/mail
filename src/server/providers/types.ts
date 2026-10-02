@@ -101,4 +101,6 @@ export interface ProviderDefinition<C = Record<string, any>> extends Omit<Provid
   /** Optional lightweight credential check; returns a human-readable status. */
   verify?(cfg: C, ctx: ProviderContext): Promise<string>;
   receive?(cfg: C, req: InboundRequest, ctx: ProviderContext): Promise<InboundResult>;
+  /** Domains set up for sending at the provider, and whether each is verified (for picking a sender address). */
+  sendingDomains?(cfg: C, ctx: ProviderContext): Promise<{ name: string; verified: boolean }[]>;
 }

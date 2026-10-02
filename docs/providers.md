@@ -53,6 +53,23 @@ rest. Mail that arrives through Cloudflare Email Routing needs no provider at al
   provider, including ones that drop custom headers (MailerSend without its paid-plan
   header option). `tests/roundtrip-providers.test.ts` checks every registered provider.
 
+## Sending from a subdomain
+
+System mail (invites, setup and password links, alerts) can come from a subdomain such
+as `contact.example.com` while people's mailboxes stay on `example.com`:
+
+1. Set the subdomain up with your provider (in Resend: **Domains → Add domain**) and add
+   the DNS records it shows.
+2. In Wren, add it under **Admin → Domains**. Add the `_wren` TXT record the domain page
+   shows, then press **Check DNS**. This is how Wren knows you own it. A subdomain with no
+   addresses on it doesn't need an MX record, and the page says so.
+3. Under **Admin → Settings → General → System emails**, set **Send from** to an address
+   on it, for example `no-reply@contact.example.com`.
+
+The domain page and the System emails card show whether your provider has the domain
+verified. Resend, Mailgun, SendGrid, SparkPost, Brevo and MailerSend can be asked. A
+Resend key that may only send can't list domains, so Wren tells you to check by hand.
+
 ## Delivery status, bounces and the suppression list
 
 After a provider accepts a message, Wren still finds out what happened to it, and

@@ -91,6 +91,13 @@ export const sendgrid: ProviderDefinition<SendgridConfig> = {
     return { providerMessageId: res.headers.get('x-message-id') };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiKey']);
+    const base = cfg.region === 'eu' ? 'https://api.eu.sendgrid.com' : 'https://api.sendgrid.com';
+    const { data } = await request<{ domain: string; subdomain?: string; valid: boolean }[]>(ctx, `${base}/v3/whitelabel/domains?limit=100`, { headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+    return (Array.isArray(data) ? data : []).map((d) => ({ name: d.domain.toLowerCase(), verified: !!d.valid }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiKey']);
     const base = cfg.region === 'eu' ? 'https://api.eu.sendgrid.com' : 'https://api.sendgrid.com';

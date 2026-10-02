@@ -59,6 +59,13 @@ export const mailgun: ProviderDefinition<MailgunConfig> = {
     return { providerMessageId: data?.id ? String(data.id).replace(/[<>]/g, '') : null, detail: data?.message };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiKey']);
+    const base = cfg.region === 'eu' ? 'https://api.eu.mailgun.net' : 'https://api.mailgun.net';
+    const { data } = await request<{ items: { name: string; state: string }[] }>(ctx, `${base}/v4/domains?limit=100`, { headers: { Authorization: basicAuth('api', cfg.apiKey) } });
+    return (data?.items ?? []).map((d) => ({ name: d.name.toLowerCase(), verified: d.state === 'active' }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiKey', 'domain']);
     const base = cfg.region === 'eu' ? 'https://api.eu.mailgun.net' : 'https://api.mailgun.net';

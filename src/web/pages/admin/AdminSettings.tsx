@@ -8,6 +8,7 @@ import { useToast } from '../../components/toast';
 import { Button, Card, Checkbox, Field, IconButton, Input, Select, Spinner, Switch, Tabs, Textarea } from '../../components/ui';
 import { PageHeader } from './common';
 import { useDomains } from './Users';
+import { SenderStatus } from './Domains';
 
 type S = Record<string, any>;
 type Tab = 'general' | 'registration' | 'security' | 'limits' | 'spam' | 'alerts' | 'retention';
@@ -213,7 +214,12 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
   // Existing addresses to pick from (any address on a hosted domain works).
   const addresses = useQuery({ queryKey: ['admin', 'addresses', 'all'], queryFn: () => api.get<{ addresses: { address: string }[] }>('/api/admin/addresses').then((r) => r.addresses.map((a) => a.address)) });
   const sender = useQuery({ queryKey: ['admin', 'settings', 'sender'], queryFn: () => api.get<{ systemSender: { address: string; name: string } | null }>('/api/admin/settings').then((r) => r.systemSender) });
-  const firstDomain = domains.data?.find((d) => d.enabled)?.name ?? 'yourdomain.com';
+  const enabled = (domains.data ?? []).filter((d) => d.enabled).map((d) => d.name);
+  const firstDomain = enabled[0] ?? 'yourdomain.com';
+  // Suggestions: the usual sender names on every hosted domain (sending subdomains such as contact.example.com included), then existing aliases.
+  const suggestions = [...new Set([...enabled.flatMap((d) => [`contact@${d}`, `no-reply@${d}`]), ...(addresses.data ?? [])])];
+  const typed = String(draft['mail.systemFrom'] ?? '').trim().toLowerCase();
+  const senderDomain = (/^[^@\s]+@([a-z0-9.-]+\.[a-z]{2,})$/.exec(typed)?.[1] ?? sender.data?.address.split('@')[1]) || null;
   return (
     <Card
       title="System emails"
@@ -225,13 +231,21 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
             Sent as <b>{sender.data.name}</b> &lt;{sender.data.address}&gt;
           </p>
         )}
-        <Field label="Send from" help={`An address on a domain hosted here, so your provider can send it. Blank: contact@${firstDomain}.`}>
+        <Field
+          label="Send from"
+          help={`An address on a domain hosted here, so your provider can send it. To send from a subdomain such as contact.${firstDomain}, add it under Domains and verify it with its TXT record first. Blank: contact@${firstDomain}.`}
+        >
           <Input type="email" list="system-from-addresses" value={draft['mail.systemFrom']} onChange={(e) => set('mail.systemFrom', e.target.value)} placeholder={`contact@${firstDomain}`} />
           <datalist id="system-from-addresses">
-            {(addresses.data ?? []).map((a) => (
+            {suggestions.map((a) => (
               <option key={a} value={a} />
             ))}
           </datalist>
+          {senderDomain && (
+            <div className="mt-2">
+              <SenderStatus domain={senderDomain} />
+            </div>
+          )}
         </Field>
         <Field label="Sender name" help={`Blank: the instance name (${draft['instance.name']}).`}>
           <Input value={draft['mail.systemName']} onChange={(e) => set('mail.systemName', e.target.value)} placeholder={draft['instance.name']} />

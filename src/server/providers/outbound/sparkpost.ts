@@ -57,6 +57,15 @@ export const sparkpost: ProviderDefinition<SparkpostConfig> = {
     return { providerMessageId: data?.results?.id ?? null };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiKey']);
+    const base = cfg.region === 'eu' ? 'https://api.eu.sparkpost.com' : 'https://api.sparkpost.com';
+    const { data } = await request<{ results: { domain: string; status?: { ownership_verified?: boolean; dkim_status?: string } }[] }>(ctx, `${base}/api/v1/sending-domains`, {
+      headers: { Authorization: cfg.apiKey },
+    });
+    return (data?.results ?? []).map((d) => ({ name: d.domain.toLowerCase(), verified: !!d.status?.ownership_verified || d.status?.dkim_status === 'valid' }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiKey']);
     const base = cfg.region === 'eu' ? 'https://api.eu.sparkpost.com' : 'https://api.sparkpost.com';

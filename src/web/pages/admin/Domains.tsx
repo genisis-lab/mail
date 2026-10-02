@@ -142,7 +142,7 @@ function DnsBadges({ dns }: { dns: any }) {
       {items.map(([name, ok]) => (
         <Badge key={name} tone={ok === null ? 'neutral' : ok ? 'ok' : name === 'DMARC' ? 'warn' : 'danger'}>
           <span aria-hidden>{ok === null ? '·' : ok ? '✓' : '✕'}</span> {name}
-          <span className="sr-only">{ok === null ? 'not checked' : ok ? 'OK' : 'missing'}</span>
+          <span className="sr-only">{ok === null ? (name === 'MX' ? 'not needed, sending only' : 'not checked') : ok ? 'OK' : 'missing'}</span>
         </Badge>
       ))}
     </span>
@@ -322,6 +322,7 @@ export function DomainDetail() {
                 </Select>
               </Field>
               <DkimField value={d.dkimSelector ?? ''} onSave={(v) => void update({ dkimSelector: v || null })} />
+              <SenderStatus domain={d.name} />
             </div>
           </Card>
           <Card title="Receiving">
@@ -344,6 +345,36 @@ export function DomainDetail() {
         </div>
       </div>
     </div>
+  );
+}
+
+export interface SenderCheck {
+  domain: string;
+  provider: { id: number; name: string; type: string } | null;
+  verified: boolean | null;
+  detail: string;
+}
+
+/** What the sending provider says about a domain: verified there, missing, or unknown. */
+export function useSenderCheck(domain: string | null | undefined) {
+  return useQuery({
+    queryKey: ['admin', 'sending-check', domain],
+    queryFn: () => api.get<SenderCheck>(`/api/admin/sending-check?domain=${encodeURIComponent(domain ?? '')}`),
+    enabled: !!domain,
+    staleTime: 60_000,
+  });
+}
+
+export function SenderStatus({ domain }: { domain: string | null | undefined }) {
+  const q = useSenderCheck(domain);
+  if (!domain || !q.data) return null;
+  const { verified, detail } = q.data;
+  const Icon = verified === null ? Circle : verified ? CheckCircle2 : AlertTriangle;
+  return (
+    <p className="flex gap-2 text-[13px] text-muted" role="status">
+      <Icon className={cx('mt-0.5 size-4 shrink-0', verified === null ? 'text-faint' : verified ? 'text-ok' : 'text-warn')} aria-hidden />
+      <span>{detail}</span>
+    </p>
   );
 }
 

@@ -3,6 +3,7 @@ import { raiseAlert, resolveAlert } from './alerts.js';
 import { config } from '../config.js';
 import { getProviderDef } from '../providers/registry.js';
 import { platform } from '../platform.js';
+import { parentHostedDomain } from './sending-domains.js';
 
 export interface DnsRecordHint {
   type: 'MX' | 'TXT' | 'CNAME';
@@ -56,21 +57,38 @@ function spfHost(domain: string, providerType: string | null): string {
 }
 
 /** DNS records an admin should create for this domain. */
-export function recommendedRecords(domain: { name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }): DnsRecordHint[] {
+export function recommendedRecords(domain: { id?: number; name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }): DnsRecordHint[] {
+  // A sending-only subdomain never receives mail, so it can only be verified with this record.
+  const sendingOnly = domain.id !== undefined && sendingOnlyDomain(domain.id, domain.name);
   const records: DnsRecordHint[] = [
-    {
-      type: 'TXT',
-      host: `_wren.${domain.name}`,
-      value: `wren-verify=${domain.verify_token}`,
-      purpose: 'Proves you own the domain. Not needed if the domain receives mail through Cloudflare Email Routing: it’s verified automatically when the first message arrives.',
-      optional: true,
-    },
+    sendingOnly
+      ? {
+          type: 'TXT',
+          host: `_wren.${domain.name}`,
+          value: `wren-verify=${domain.verify_token}`,
+          purpose: `Proves you own ${domain.name}. Add it next to the records your sending provider asked for, then press Check DNS.`,
+        }
+      : {
+          type: 'TXT',
+          host: `_wren.${domain.name}`,
+          value: `wren-verify=${domain.verify_token}`,
+          purpose: 'Proves you own the domain. Not needed if the domain receives mail through Cloudflare Email Routing: it’s verified automatically when the first message arrives.',
+          optional: true,
+        },
   ];
   const type = sendingProviderType(domain);
   const def = type ? getProviderDef(type) : undefined;
   const managed = !!type && MANAGED_RECORDS.has(type);
   const returnPath = type ? RETURN_PATH[type] : undefined;
-  if (def?.inbound && !managed) {
+  if (sendingOnly) {
+    records.push({
+      type: 'MX',
+      host: domain.name,
+      value: '(not needed)',
+      purpose: `Only for receiving. Nothing on ${domain.name} receives mail, so leave it out unless you create an address here.`,
+      optional: true,
+    });
+  } else if (def?.inbound && !managed) {
     records.push({
       type: 'MX',
       host: domain.name,
@@ -141,6 +159,13 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
   return records;
 }
 
+/** A subdomain of another hosted domain with no address, group or catch-all on it: used only for sending. */
+export function sendingOnlyDomain(domainId: number, name: string): boolean {
+  if (!parentHostedDomain(name)) return false;
+  const d = get<{ catch_all_user_id: number | null }>('SELECT catch_all_user_id FROM domains WHERE id = ?', [domainId]);
+  return !d?.catch_all_user_id && !get('SELECT 1 FROM addresses WHERE domain_id = ? LIMIT 1', [domainId]) && !get('SELECT 1 FROM users WHERE lower(email) LIKE ? LIMIT 1', [`%@${name.toLowerCase()}`]);
+}
+
 export async function checkDomainDns(domainId: number): Promise<DnsReport> {
   const d = get<{ id: number; name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }>(
     'SELECT id, name, verify_token, provider_id, dkim_selector FROM domains WHERE id = ?',
@@ -191,10 +216,14 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
   const dmarcRecord = (await txt(`_dmarc.${d.name}`)).find((t) => t.toLowerCase().startsWith('v=dmarc1')) ?? null;
   const policy = dmarcRecord ? /;\s*p=([a-z]+)/i.exec(dmarcRecord)?.[1]?.toLowerCase() ?? null : null;
 
+  // A subdomain used only to send from (contact.example.com next to a hosted example.com): nothing to receive.
+  const sendingOnly = !mxRecords.length && sendingOnlyDomain(d.id, d.name);
   const report: DnsReport = {
     checkedAt: now(),
     verification: { ok: verifyTxt.includes(expected), expected, found: verifyTxt },
-    mx: { ok: mxRecords.length ? true : false, records: mxRecords, hint: mxHint },
+    mx: sendingOnly
+      ? { ok: null, records: [], hint: `Not needed: no address on ${d.name} receives mail, so it’s only used to send from. Add an MX record if you create an address here.` }
+      : { ok: mxRecords.length ? true : false, records: mxRecords, hint: mxHint },
     spf: {
       ok: !!spfRecord,
       record: spfRecord,

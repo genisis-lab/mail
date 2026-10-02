@@ -46,6 +46,12 @@ export const brevo: ProviderDefinition<BrevoConfig> = {
     return { providerMessageId: data?.messageId ? String(data.messageId).replace(/[<>]/g, '') : null };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiKey']);
+    const { data } = await request<{ domains: { domain_name: string; authenticated: boolean; verified?: boolean }[] }>(ctx, 'https://api.brevo.com/v3/senders/domains', { headers: { 'api-key': cfg.apiKey } });
+    return (data?.domains ?? []).map((d) => ({ name: d.domain_name.toLowerCase(), verified: !!d.authenticated }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiKey']);
     const { data } = await request<any>(ctx, 'https://api.brevo.com/v3/account', { headers: { 'api-key': cfg.apiKey } });

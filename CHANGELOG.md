@@ -22,7 +22,8 @@ throwaway sign-up addresses; catch-all activity with block or make-an-alias.
 everything as `.mbox`; contacts from CSV or vCard.
 
 **Admin.** Setup checklist with a round-trip test, one-click Cloudflare setup, DNS
-checks, users with quotas and bulk actions, invites, delivery logs, delivery status and
+checks, system mail from any hosted address (including a sending-only subdomain, with
+its provider verification shown), users with quotas and bulk actions, invites, delivery logs, delivery status and
 a suppression list from every provider (webhooks or bounce emails), alerts, daily
 backups to R2, point-in-time recovery, audit log.
 

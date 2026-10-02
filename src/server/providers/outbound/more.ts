@@ -56,6 +56,12 @@ export const mailersend: ProviderDefinition<{ apiToken: string; customHeaders?: 
     return { providerMessageId: res.headers.get('x-message-id') };
   },
 
+  async sendingDomains(cfg, ctx) {
+    requireFields(cfg, ['apiToken']);
+    const { data } = await request<{ data: { name: string; is_verified: boolean }[] }>(ctx, 'https://api.mailersend.com/v1/domains?limit=100', { headers: { Authorization: `Bearer ${cfg.apiToken}` } });
+    return (data?.data ?? []).map((d) => ({ name: d.name.toLowerCase(), verified: !!d.is_verified }));
+  },
+
   async verify(cfg, ctx) {
     requireFields(cfg, ['apiToken']);
     const { data } = await request<any>(ctx, 'https://api.mailersend.com/v1/domains', { headers: { Authorization: `Bearer ${cfg.apiToken}` } });
