@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Admin.** Change a user's address (their sign-in name), optionally keeping the old one
+as an alias; they get a note in their inbox. Unlock an account locked by wrong
+passwords. Set an out-of-office reply and forwarding for someone who's away or has
+left. Export a user's mail as `.mbox`. When deleting a user, hand their addresses and
+catch-alls to another account so nothing bounces. Export the user list as CSV, with
+locked-out accounts flagged. Only the owner can sign out or manage the owner account.
+
+**Mail.** System emails are plain, with the link written out; invites reply to the
+admin who sent them. Sending-only subdomains don't need MX, and their DMARC comes from
+the parent domain.
+
 ## v0.1.0 — first public release
 
 Wren is a Gmail-style webmail for your own domains that runs entirely on Cloudflare

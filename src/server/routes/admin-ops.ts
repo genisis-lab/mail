@@ -20,7 +20,9 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, getPrefs, getUser, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { jobDto, type JobRow } from '../services/jobs.js';
+import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
 
@@ -403,6 +405,8 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
     return { action: r.action, ip: r.ip, at: r.created_at, mfa: !!d.mfa, passkey: typeof d.passkey === 'string' };
   });
   const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
+  const prefs = getPrefs(id);
+  const exports = all<JobRow>(`SELECT * FROM jobs WHERE user_id = ? AND kind = 'export' ORDER BY id DESC LIMIT 5`, [id]).map(jobDto);
   return c.json({
     user: {
       id: u.id,
@@ -423,7 +427,10 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       sendLimitPerDay: sendLimit(u),
       customSendLimit: u.send_limit_per_day !== null,
       sentToday,
+      lockedUntil: lockedUntil(u.email),
     },
+    mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
+    exports,
     storage: { folders, attachments },
     addresses,
     shared: shared.map((b) => ({ id: b.id, email: b.email, name: b.name, canSend: !!b.can_send })),
@@ -432,13 +439,113 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
   });
 });
 
+/** The user, if this admin may manage them (only the owner manages the owner). */
+function managed(c: any): NonNullable<ReturnType<typeof getUser>> {
+  const u = getUser(intParam(c, 'id'));
+  if (!u) throw notFound();
+  if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden('Only the owner can do that to the owner account');
+  return u;
+}
+
 adminOpsRoutes.delete('/users/:id/sessions/:sid', (c) => {
-  const id = intParam(c, 'id');
+  const u = managed(c);
   const sid = c.req.param('sid');
   if (!/^[a-f0-9]{16}$/.test(sid)) throw badRequest('Invalid session');
-  const r = run('DELETE FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ?', [id, sid]);
-  act(c, 'admin.user_session_revoked', String(id));
+  const r = run('DELETE FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ?', [u.id, sid]);
+  act(c, 'admin.user_session_revoked', u.email);
   return c.json({ revoked: r.changes });
+});
+
+// ── Lockouts ────────────────────────────────────────────────────────────────
+
+/** When too many failed sign-ins locked this address out, until when (else null). */
+function lockedUntil(email: string): number | null {
+  const row = get<{ count: number; reset_at: number }>('SELECT count, reset_at FROM login_attempts WHERE key = ?', [`login:user:${normalizeEmail(email)}`]);
+  return row && row.reset_at > now() && row.count >= getSettings()['security.maxLoginAttempts'] ? row.reset_at : null;
+}
+
+adminOpsRoutes.post('/users/:id/unlock', (c) => {
+  const u = managed(c);
+  run('DELETE FROM login_attempts WHERE key = ?', [`login:user:${normalizeEmail(u.email)}`]);
+  act(c, 'admin.user_unlocked', u.email);
+  return c.json({ ok: true });
+});
+
+// ── Out of office and forwarding, set for someone (an absence, someone who left) ──
+
+const mailHandlingSchema = z.object({
+  vacation: z
+    .object({
+      enabled: z.boolean(),
+      subject: z.string().max(200),
+      message: z.string().max(20_000),
+      startAt: z.number().nullable(),
+      endAt: z.number().nullable(),
+      contactsOnly: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  forwarding: z.object({ enabled: z.boolean(), to: z.string().max(254), keep: z.enum(['inbox', 'archive', 'read', 'trash']) }).partial().optional(),
+});
+
+adminOpsRoutes.put('/users/:id/mail-handling', async (c) => {
+  const u = managed(c);
+  const input = await body(c, mailHandlingSchema);
+  const prefs = getPrefs(u.id);
+  const vacation = { ...prefs.vacation, ...(input.vacation ?? {}) };
+  const forwarding = { ...prefs.forwarding, ...(input.forwarding ?? {}) };
+  forwarding.to = normalizeEmail(forwarding.to);
+  if (vacation.enabled && !vacation.message.trim()) throw badRequest('Write the automatic reply');
+  if (forwarding.enabled) {
+    if (!isEmail(forwarding.to)) throw badRequest('Enter a valid forwarding address');
+    if (forwarding.to === u.email.toLowerCase()) throw badRequest('Mail can’t be forwarded to the same mailbox');
+    // Policy is about mail leaving the server; forwarding to a hosted address is always fine.
+    const hosted = !!get('SELECT 1 FROM domains WHERE name = ? AND enabled = 1', [domainOf(forwarding.to)]);
+    if (!hosted && !getSettings()['mail.allowExternalForwarding']) throw badRequest('Forwarding outside this server is turned off in Settings → Security');
+  }
+  savePrefs(u.id, { ...prefs, vacation, forwarding });
+  if (input.vacation) act(c, 'admin.user_vacation', u.email, { enabled: vacation.enabled });
+  if (input.forwarding) act(c, 'admin.user_forwarding', u.email, { to: forwarding.enabled ? forwarding.to : null });
+  return c.json({ mailHandling: { vacation, forwarding } });
+});
+
+// ── Mail export for someone (offboarding, a legal hold) ─────────────────────
+
+adminOpsRoutes.post('/users/:id/export', (c) => {
+  const u = managed(c);
+  const id = startExport(u.id);
+  act(c, 'admin.user_export_started', u.email);
+  return c.json({ job: jobDto(get<JobRow>('SELECT * FROM jobs WHERE id = ?', [id])!) });
+});
+
+function userExport(c: any, u: { id: number }): JobRow {
+  const job = get<JobRow>(`SELECT * FROM jobs WHERE id = ? AND user_id = ? AND kind = 'export'`, [intParam(c, 'job'), u.id]);
+  if (!job) throw notFound();
+  return job;
+}
+
+adminOpsRoutes.get('/users/:id/export/:job/download', (c) => {
+  const u = managed(c);
+  const job = userExport(c, u);
+  if (job.status !== 'done') throw badRequest('The export isn’t ready yet');
+  const bytes = (JSON.parse(job.state) as { bytes?: number }).bytes ?? 0;
+  act(c, 'admin.user_export_downloaded', u.email);
+  return new Response(exportStream(job), {
+    headers: {
+      'Content-Type': 'application/mbox',
+      'Content-Disposition': `attachment; filename="${u.email.replace(/[^a-z0-9@._-]/gi, '_')}-${new Date(job.created_at).toISOString().slice(0, 10)}.mbox"`,
+      'Content-Length': String(bytes),
+      'Cache-Control': 'private, no-store',
+    },
+  });
+});
+
+adminOpsRoutes.delete('/users/:id/export/:job', async (c) => {
+  const u = managed(c);
+  const job = userExport(c, u);
+  if (job.status === 'queued' || job.status === 'running') run(`UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE id = ?`, [now(), job.id]);
+  await deleteJob(job);
+  return c.json({ ok: true });
 });
 
 // ── Bulk actions ────────────────────────────────────────────────────────────

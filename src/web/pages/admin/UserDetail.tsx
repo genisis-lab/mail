@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, KeyRound, LogOut, Mail, MonitorSmartphone, Pencil, ShieldCheck, ShieldOff, UserX } from 'lucide-react';
+import { ArrowLeft, AtSign, CheckCircle2, KeyRound, Lock, LogOut, Mail, MonitorSmartphone, Pencil, ShieldCheck, ShieldOff, Trash2, UserX } from 'lucide-react';
 import { api } from '../../lib/api';
 import { fileSize, longDate, number, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
@@ -10,6 +10,7 @@ import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Empty, Menu, Spinner } from '../../components/ui';
 import { PageHeader } from './common';
 import { EditUserModal, ResetPasswordModal, SignInLinkModal, type AdminUser } from './Users';
+import { DeleteUserModal, ExportCard, MailHandlingCard, RenameModal } from './UserControls';
 
 interface Detail {
   user: {
@@ -31,7 +32,10 @@ interface Detail {
     sendLimitPerDay: number;
     customSendLimit: boolean;
     sentToday: number;
+    lockedUntil: number | null;
   };
+  mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
+  exports: Parameters<typeof ExportCard>[0]['jobs'];
   storage: { folders: { folder: string; c: number; bytes: number }[]; attachments: { c: number; bytes: number } | null };
   addresses: { id: number; address: string; kind: string; enabled: number; can_send: number; created_by: number | null }[];
   shared: { id: number; email: string; name: string; canSend: boolean }[];
@@ -64,7 +68,14 @@ export function UserDetailPage() {
   const [editing, setEditing] = useState(false);
   const [password, setPassword] = useState(false);
   const [link, setLink] = useState(false);
-  const q = useQuery({ queryKey: ['admin', 'user', id], queryFn: () => api.get<Detail>(`/api/admin/users/${id}/detail`) });
+  const [renaming, setRenaming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const q = useQuery({
+    queryKey: ['admin', 'user', id],
+    queryFn: () => api.get<Detail>(`/api/admin/users/${id}/detail`),
+    // Follow a running export until it's ready.
+    refetchInterval: (query) => (query.state.data?.exports.some((j) => j.status === 'queued' || j.status === 'running') ? 3000 : false),
+  });
   if (q.isLoading) return <Spinner />;
   if (q.isError || !q.data) {
     return (
@@ -121,6 +132,7 @@ export function UserDetailPage() {
               width="w-64"
               trigger={({ onClick }) => <Button onClick={onClick}>More</Button>}
               items={[
+                { label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) },
                 { label: 'Send a sign-in link…', icon: <Mail className="size-4" />, onClick: () => setLink(true) },
                 ...(u.recoveryEmail
                   ? [
@@ -147,6 +159,7 @@ export function UserDetailPage() {
                 u.status === 'active'
                   ? { label: 'Suspend', icon: <UserX className="size-4" />, disabled: self || u.role === 'owner', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'suspended' }), `${u.email} suspended`) }
                   : { label: 'Reactivate', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'active' }), `${u.email} reactivated`) },
+                { label: 'Delete user…', icon: <Trash2 className="size-4" />, disabled: self || u.role === 'owner', onClick: () => setDeleting(true) },
               ]}
             />
           </>
@@ -160,6 +173,19 @@ export function UserDetailPage() {
             <dd>{longDate(u.createdAt)}</dd>
             <dt className="text-muted">Last sign-in</dt>
             <dd>{u.lastLoginAt ? relativeTime(u.lastLoginAt) : 'Never'}</dd>
+            {u.lockedUntil && (
+              <>
+                <dt className="text-muted">Sign-in</dt>
+                <dd className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1 text-danger">
+                    <Lock className="size-4" aria-hidden /> Locked after too many wrong passwords, until {new Date(u.lockedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                  <Button size="sm" onClick={() => void call(() => api.post(`/api/admin/users/${u.id}/unlock`), 'Unlocked: they can sign in again')}>
+                    Unlock
+                  </Button>
+                </dd>
+              </>
+            )}
             <dt className="text-muted">Password changed</dt>
             <dd>{u.passwordChangedAt ? relativeTime(u.passwordChangedAt) : '—'}</dd>
             <dt className="text-muted">2-step verification</dt>
@@ -253,6 +279,9 @@ export function UserDetailPage() {
           )}
         </Card>
 
+        <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
+        <ExportCard userId={u.id} jobs={d.exports} run={call} />
+
         <Card title="Recent sign-in activity" className="lg:col-span-2">
           {d.signIns.length === 0 ? (
             <p className="text-sm text-muted">No sign-ins yet.</p>
@@ -276,6 +305,22 @@ export function UserDetailPage() {
       <EditUserModal user={editing ? asAdminUser : null} onClose={() => setEditing(false)} onSaved={refresh} />
       <ResetPasswordModal user={password ? asAdminUser : null} onClose={() => setPassword(false)} />
       <SignInLinkModal user={link ? asAdminUser : null} onClose={() => setLink(false)} />
+      <RenameModal
+        user={u}
+        open={renaming}
+        onClose={() => setRenaming(false)}
+        // Your own address changed: reload so the whole app picks it up.
+        onDone={() => (self ? window.location.reload() : refresh())}
+      />
+      <DeleteUserModal
+        user={{ id: u.id, email: u.email, messages: asAdminUser.messages }}
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        onDone={() => {
+          qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+          navigate('/admin/users');
+        }}
+      />
     </div>
   );
 }

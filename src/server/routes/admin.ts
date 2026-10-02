@@ -10,11 +10,11 @@ import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { cleanConfig, createProvider, MASK } from '../services/providers.js';
-import { sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
+import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, getUser, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -115,8 +115,15 @@ adminRoutes.get('/system', async (c) =>
 
 // ── Users ───────────────────────────────────────────────────────────────────
 
-function userDto(u: any) {
+/** Addresses locked out by too many wrong passwords right now. */
+function lockedEmails(): Set<string> {
+  const rows = all<{ key: string }>(`SELECT key FROM login_attempts WHERE key LIKE 'login:user:%' AND reset_at > ? AND count >= ?`, [now(), getSettings()['security.maxLoginAttempts']]);
+  return new Set(rows.map((r) => r.key.slice('login:user:'.length)));
+}
+
+function userDto(u: any, locked?: Set<string>) {
   return {
+    locked: !!locked?.has(String(u.email).toLowerCase()),
     id: u.id,
     email: u.email,
     name: u.name,
@@ -144,7 +151,8 @@ adminRoutes.get('/users', (c) => {
        FROM users u WHERE u.kind = 'person' ${q ? 'AND (u.email LIKE ? OR u.name LIKE ?)' : ''} ORDER BY u.created_at`,
     q ? [`%${q}%`, `%${q}%`] : [],
   );
-  return c.json({ users: rows.map(userDto) });
+  const locked = lockedEmails();
+  return c.json({ users: rows.map((u) => userDto(u, locked)) });
 });
 
 adminRoutes.get('/users/:id', (c) => {
@@ -220,7 +228,10 @@ adminRoutes.put('/users/:id', async (c) => {
     if (owners <= 1) throw badRequest('There must be at least one owner');
   }
   tx(() => {
-    if (input.name !== undefined) run('UPDATE users SET name = ? WHERE id = ?', [input.name, id]);
+    if (input.name !== undefined) {
+      run('UPDATE users SET name = ? WHERE id = ?', [input.name, id]);
+      run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [input.name, id]);
+    }
     if (input.role !== undefined) run('UPDATE users SET role = ? WHERE id = ?', [input.role, id]);
     if (input.status !== undefined) {
       run('UPDATE users SET status = ? WHERE id = ?', [input.status, id]);
@@ -231,6 +242,20 @@ adminRoutes.put('/users/:id', async (c) => {
   });
   act(c, 'admin.user_updated', u.email, input);
   return c.json({ ok: true });
+});
+
+/** Change someone's primary address (their username). */
+adminRoutes.post('/users/:id/rename', async (c) => {
+  const id = intParam(c, 'id');
+  const me = c.get('user');
+  const u = getUser(id);
+  if (!u) throw notFound();
+  if (u.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can change the owner’s address');
+  const input = await body(c, z.object({ email: z.string().min(3).max(254), keepOldAsAlias: z.boolean().default(true) }));
+  const change = renameUser(id, input.email, { keepOldAsAlias: input.keepOldAsAlias });
+  await noticeAddressChanged(id, { ...change, keptOld: input.keepOldAsAlias, by: me.name || me.email });
+  act(c, 'admin.user_renamed', change.to, { from: change.from, keptOld: input.keepOldAsAlias });
+  return c.json({ email: change.to });
 });
 
 adminRoutes.post('/users/:id/password', async (c) => {
@@ -282,8 +307,11 @@ adminRoutes.post('/users/:id/reset-2fa', (c) => {
 
 adminRoutes.post('/users/:id/signout', (c) => {
   const id = intParam(c, 'id');
+  const u = getUser(id);
+  if (!u) throw notFound();
+  if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden();
   const r = run('DELETE FROM sessions WHERE user_id = ?', [id]);
-  act(c, 'admin.user_signed_out', String(id));
+  act(c, 'admin.user_signed_out', u.email);
   return c.json({ revoked: r.changes });
 });
 
@@ -294,11 +322,19 @@ adminRoutes.delete('/users/:id', (c) => {
   if (!u) throw notFound();
   if (id === me.id) throw badRequest('You cannot delete your own account');
   if (u.role === 'owner') throw forbidden('Transfer ownership before deleting an owner');
+  // Optionally hand their addresses to someone else, so mail sent to them keeps arriving.
+  const handTo = c.req.query('transferTo') ? getUser(Number(c.req.query('transferTo'))) : null;
+  if (c.req.query('transferTo') && (!handTo || handTo.id === id || handTo.status !== 'active')) throw badRequest('Pick an active account to receive their mail');
   const msgs = all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id);
   purgeMessages(msgs);
-  run('DELETE FROM users WHERE id = ?', [id]);
-  act(c, 'admin.user_deleted', u.email);
-  return c.json({ ok: true });
+  const moved = tx(() => {
+    const n = handTo ? run(`UPDATE addresses SET user_id = ?, kind = 'alias', name = ?, created_by = NULL WHERE user_id = ?`, [handTo.id, handTo.name, id]).changes : 0;
+    if (handTo) run('UPDATE domains SET catch_all_user_id = ? WHERE catch_all_user_id = ?', [handTo.id, id]);
+    run('DELETE FROM users WHERE id = ?', [id]);
+    return n;
+  });
+  act(c, 'admin.user_deleted', u.email, handTo ? { addressesTo: handTo.email, moved } : undefined);
+  return c.json({ ok: true, moved });
 });
 
 // ── Domains ─────────────────────────────────────────────────────────────────

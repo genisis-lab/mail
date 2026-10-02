@@ -128,6 +128,43 @@ export async function welcomeUser(userId: number) {
   });
 }
 
+/** Tell someone, in their own inbox, that an admin changed their address. */
+export async function noticeAddressChanged(userId: number, change: { from: string; to: string; keptOld: boolean; by: string }) {
+  const user = get<{ email: string; name: string }>('SELECT email, name FROM users WHERE id = ?', [userId]);
+  if (!user) return;
+  const html = systemTemplate({
+    title: 'Your email address changed',
+    paragraphs: [
+      `${escapeHtml(change.by)} changed your address from <b>${escapeHtml(change.from)}</b> to <b>${escapeHtml(change.to)}</b>.`,
+      'Use the new address to sign in from now on. Your mail, contacts and settings haven’t changed.',
+      change.keptOld
+        ? `Mail sent to ${escapeHtml(change.from)} still reaches you, and you can still send from it.`
+        : `Mail sent to ${escapeHtml(change.from)} no longer reaches you, so let people know your new address.`,
+    ],
+  });
+  const domain = user.email.split('@')[1];
+  await storeMessage({
+    userId,
+    folder: 'inbox',
+    direction: 'in',
+    messageId: `renamed.${userId}.${now()}@${domain}`,
+    inReplyTo: null,
+    references: [],
+    from: systemSender(domain) ?? { address: `contact@${domain}`, name: getSettings()['instance.name'] },
+    to: [{ address: user.email, name: user.name }],
+    cc: [],
+    replyTo: null,
+    subject: 'Your email address changed',
+    text: null,
+    html,
+    date: now(),
+    size: html.length,
+    rawBlob: null,
+    attachments: [],
+    source: 'system',
+  });
+}
+
 /** Mark a recovery email as verified (called when a link sent to it is used). */
 export function markRecoveryVerified(userId: number, email: string) {
   run('UPDATE users SET recovery_email = ?, recovery_verified_at = ? WHERE id = ?', [email.toLowerCase(), now(), userId]);

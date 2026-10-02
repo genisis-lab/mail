@@ -163,3 +163,55 @@ export function sentToday(userId: number): number {
     )?.c ?? 0
   );
 }
+
+/**
+ * Give an account a new primary address (the "username"), on any hosted
+ * domain. The old address can stay as an alias so mail sent to it still
+ * arrives and replies can come from it. One of the person's own aliases can
+ * be promoted. Signatures and the default From follow the address.
+ */
+export function renameUser(userId: number, newEmail: string, opts: { keepOldAsAlias: boolean }): { from: string; to: string } {
+  const user = getUser(userId);
+  if (!user) throw badRequest('Unknown user');
+  const from = user.email.toLowerCase();
+  const to = normalizeEmail(newEmail);
+  if (!isEmail(to)) throw badRequest('Enter a valid address');
+  if (to === from) throw badRequest('That’s already their address');
+  if (!/^[a-z0-9._+-]+$/i.test(localPart(to))) throw badRequest('Address may only contain letters, numbers, dots, dashes, underscores and plus');
+  const domain = findDomain(domainOf(to));
+  if (!domain) throw badRequest(`Domain ${domainOf(to)} is not hosted on this server`);
+  const existing = get<{ id: number; kind: string; user_id: number | null }>('SELECT id, kind, user_id FROM addresses WHERE address = ?', [to]);
+  const ownAlias = existing?.kind === 'alias' && existing.user_id === userId;
+  if ((existing && !ownAlias) || get('SELECT 1 FROM users WHERE email = ? AND id != ?', [to, userId])) throw conflict('That address is already taken');
+
+  tx(() => {
+    if (ownAlias) run('DELETE FROM addresses WHERE id = ?', [existing!.id]);
+    run('UPDATE users SET email = ? WHERE id = ?', [to, userId]);
+    const mailbox = get<{ id: number }>(`SELECT id FROM addresses WHERE user_id = ? AND kind = 'mailbox'`, [userId]);
+    if (mailbox) run('UPDATE addresses SET address = ?, domain_id = ? WHERE id = ?', [to, domain.id, mailbox.id]);
+    else insert(`INSERT INTO addresses (address, domain_id, kind, user_id, name, created_at) VALUES (?, ?, 'mailbox', ?, ?, ?)`, [to, domain.id, userId, user.name, now()]);
+    if (opts.keepOldAsAlias) {
+      const oldDomain = findDomain(domainOf(from));
+      if (oldDomain) {
+        insert(`INSERT INTO addresses (address, domain_id, kind, user_id, name, description, created_at) VALUES (?, ?, 'alias', ?, ?, ?, ?)`, [
+          from,
+          oldDomain.id,
+          userId,
+          user.name,
+          `Previous address (until ${new Date().toISOString().slice(0, 10)})`,
+          now(),
+        ]);
+      }
+    }
+    // Per-address settings move to the new address.
+    const prefs = parsePrefs(user.prefs);
+    if (prefs.signatures[from] !== undefined) {
+      prefs.signatures[to] = prefs.signatures[from];
+      if (!opts.keepOldAsAlias) delete prefs.signatures[from];
+    }
+    if (prefs.defaultFrom.toLowerCase() === from) prefs.defaultFrom = '';
+    savePrefs(userId, prefs);
+    run('DELETE FROM login_attempts WHERE key = ?', [`login:user:${from}`]);
+  });
+  return { from, to };
+}

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileUp, MoreVertical, Plus, Search, ShieldCheck, UserPlus, X } from 'lucide-react';
+import { FileDown, FileUp, MoreVertical, Plus, Search, ShieldCheck, UserPlus, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { csvRecords, download, pick, toCsv } from '../../lib/csv';
 import { fileSize, relativeTime } from '../../lib/format';
@@ -28,6 +28,8 @@ export interface AdminUser {
   aliases: number;
   messages: number;
   recoveryEmail?: string | null;
+  /** Locked out by too many wrong passwords right now. */
+  locked?: boolean;
 }
 
 export function useDomains() {
@@ -35,6 +37,19 @@ export function useDomains() {
 }
 
 type BulkAction = 'suspend' | 'activate' | 'quota' | 'sendLimit' | 'signout' | 'delete';
+
+/** The user list as a spreadsheet (for records, audits, or moving elsewhere). */
+function exportUsers(list: AdminUser[]) {
+  const day = (ts: number | null) => (ts ? new Date(ts).toISOString().slice(0, 10) : '');
+  const mb = (b: number) => Math.round(b / 1024 / 1024);
+  download(
+    `users-${day(Date.now())}.csv`,
+    toCsv([
+      ['email', 'name', 'role', 'status', 'created', 'last_sign_in', 'used_mb', 'quota_mb', 'send_limit_per_day', 'aliases', 'messages', 'two_step', 'recovery_email'],
+      ...list.map((u) => [u.email, u.name, u.role, u.status, day(u.createdAt), day(u.lastLoginAt), mb(u.usedBytes), mb(u.quotaBytes), u.sendLimitPerDay, u.aliases, u.messages, u.totpEnabled ? 'yes' : 'no', u.recoveryEmail ?? '']),
+    ]),
+  );
+}
 
 export function UsersPage() {
   const { user: me } = useSession();
@@ -101,6 +116,9 @@ export function UsersPage() {
           <>
             <Button icon={<FileUp className="size-4" />} onClick={() => setImporting(true)}>
               Import CSV
+            </Button>
+            <Button icon={<FileDown className="size-4" />} disabled={!list.length} onClick={() => exportUsers(list)}>
+              Export CSV
             </Button>
             <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setCreating(true)}>
               Add user
@@ -170,6 +188,7 @@ export function UsersPage() {
                         </Link>
                         {u.id === me.id && <Badge>you</Badge>}
                         {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
+                        {u.locked && <Badge tone="warn">locked out</Badge>}
                         {u.totpEnabled && <ShieldCheck className="size-3.5 text-ok" aria-label="2-step verification on" />}
                       </p>
                       <p className="truncate text-xs text-muted">
