@@ -1,4 +1,4 @@
-import type { Addr, Folder } from '../../shared/types.js';
+import type { Addr, Category, Folder } from '../../shared/types.js';
 import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
 import { putBlob } from './blobs.js';
 import { bodyColumns } from './body.js';
@@ -96,6 +96,11 @@ export interface StoreInput {
   authResults?: Record<string, string> | null;
   labelIds?: number[];
   threadId?: number | null;
+  /** Incoming mail: which of the user's addresses it was delivered to. */
+  deliveredTo?: string | null;
+  category?: Category;
+  listUnsubscribe?: string | null;
+  listUnsubscribePost?: string | null;
 }
 
 export async function storeMessage(input: StoreInput): Promise<number> {
@@ -135,8 +140,9 @@ export async function storeMessage(input: StoreInput): Promise<number> {
     const id = insert(
       `INSERT INTO messages (user_id, thread_id, folder, direction, message_id, in_reply_to, refs, from_addr, from_name,
         to_json, cc_json, bcc_json, reply_to, subject, snippet, text_body, html_body, body_blob, date, size, raw_blob, has_attachments,
-        is_read, is_starred, is_important, status, identity, source, spam_score, auth_results, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        is_read, is_starred, is_important, status, identity, source, spam_score, auth_results, created_at,
+        delivered_to, category, list_unsubscribe, list_unsubscribe_post)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId,
         threadId,
@@ -169,6 +175,10 @@ export async function storeMessage(input: StoreInput): Promise<number> {
         input.spamScore ?? null,
         input.authResults ? JSON.stringify(input.authResults) : null,
         ts,
+        input.deliveredTo ?? null,
+        input.category ?? 'primary',
+        input.listUnsubscribe?.slice(0, 2000) ?? null,
+        input.listUnsubscribePost?.slice(0, 200) ?? null,
       ],
     );
     for (const a of att) {

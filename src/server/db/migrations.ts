@@ -543,4 +543,10 @@ export const migrations: string[] = [
     finished_at INTEGER
   );
   `,
+
+  // 6: throwaway sign-up aliases.
+  `
+  ALTER TABLE addresses ADD COLUMN throwaway INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX idx_messages_delivered_to ON messages(user_id, delivered_to);
+  `,
 ];

@@ -716,6 +716,7 @@ adminRoutes.put('/settings', async (c) => {
   if (input['spam.rspamdPassword'] === MASK) delete (input as Record<string, unknown>)['spam.rspamdPassword'];
   if ('alerts.externalTo' in input && input['alerts.externalTo'] && !isEmail(String(input['alerts.externalTo']))) throw badRequest('Enter a valid address for alert emails');
   if ('aliases.maxPerUser' in input && (Number(input['aliases.maxPerUser']) < 0 || Number(input['aliases.maxPerUser']) > 100)) throw badRequest('Alias limit must be between 0 and 100');
+  if ('aliases.maxThrowaway' in input && (Number(input['aliases.maxThrowaway']) < 0 || Number(input['aliases.maxThrowaway']) > 500)) throw badRequest('Throwaway alias limit must be between 0 and 500');
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');

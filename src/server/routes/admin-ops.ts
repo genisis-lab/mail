@@ -5,7 +5,7 @@
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { all, get, IN_LIST, listParam, now, run } from '../db/index.js';
+import { all, get, IN_LIST, insert, listParam, now, run } from '../db/index.js';
 import { badRequest, notFound } from '../lib/http.js';
 import { getBlob } from '../mail/blobs.js';
 import { processQueue, retryOutbox } from '../mail/outbound.js';
@@ -282,6 +282,73 @@ adminOpsRoutes.delete('/suppressions/:address', (c) => {
   const a = normalizeEmail(decodeURIComponent(c.req.param('address')));
   if (!unsuppress(a)) throw notFound();
   act(c, 'admin.suppression_removed', a);
+  return c.json({ ok: true });
+});
+
+// ── Catch-all control ───────────────────────────────────────────────────────
+
+/** Addresses that only received mail through a domain's catch-all, and blocked addresses. */
+adminOpsRoutes.get('/domains/:id/catchall', (c) => {
+  const id = intParam(c, 'id');
+  const d = get<{ name: string; catch_all_user_id: number | null }>('SELECT name, catch_all_user_id FROM domains WHERE id = ?', [id]);
+  if (!d) throw notFound();
+  const hits = all<any>(
+    `SELECT h.address, h.count, h.first_at, h.last_at, h.last_from, h.last_subject, (SELECT 1 FROM blocked_recipients b WHERE b.address = h.address) AS blocked
+       FROM catchall_hits h WHERE h.domain_id = ? AND NOT EXISTS (SELECT 1 FROM addresses a WHERE a.address = h.address)
+      ORDER BY h.last_at DESC LIMIT 500`,
+    [id],
+  );
+  const blocked = all<any>(`SELECT address, created_at FROM blocked_recipients WHERE address LIKE ? ESCAPE '\\' ORDER BY address`, [`%@${d.name.replace(/[\\%_]/g, (x) => `\\${x}`)}`]);
+  return c.json({
+    catchAllUserId: d.catch_all_user_id,
+    hits: hits.map((h) => ({ address: h.address, count: h.count, firstAt: h.first_at, lastAt: h.last_at, lastFrom: h.last_from, lastSubject: h.last_subject, blocked: !!h.blocked })),
+    blocked: blocked.map((b) => ({ address: b.address, createdAt: b.created_at })),
+  });
+});
+
+const hostedAddress = (value: string) => {
+  const a = normalizeEmail(value);
+  if (!isEmail(a) || !get('SELECT 1 FROM domains WHERE name = ?', [domainOf(a)])) throw badRequest('Enter an address on one of your domains');
+  return a;
+};
+
+/** Refuse mail to an address (even when a catch-all would take it). */
+adminOpsRoutes.post('/blocked-recipients', async (c) => {
+  const a = hostedAddress((await body(c, z.object({ address: z.string().max(254) }))).address);
+  run('INSERT OR IGNORE INTO blocked_recipients (address, created_by, created_at) VALUES (?, ?, ?)', [a, c.get('user').id, now()]);
+  act(c, 'admin.recipient_blocked', a);
+  return c.json({ ok: true });
+});
+
+adminOpsRoutes.delete('/blocked-recipients/:address', (c) => {
+  const a = normalizeEmail(decodeURIComponent(c.req.param('address')));
+  if (!run('DELETE FROM blocked_recipients WHERE address = ?', [a]).changes) throw notFound();
+  act(c, 'admin.recipient_unblocked', a);
+  return c.json({ ok: true });
+});
+
+/** Turn an address the catch-all has been taking into a real alias. */
+adminOpsRoutes.post('/catchall/alias', async (c) => {
+  const input = await body(c, z.object({ address: z.string().max(254), userId: z.number().int().positive().optional() }));
+  const a = hostedAddress(input.address);
+  if (get('SELECT 1 FROM addresses WHERE address = ?', [a]) || get('SELECT 1 FROM users WHERE email = ?', [a])) throw badRequest('That address already exists');
+  const d = get<{ id: number; catch_all_user_id: number | null }>('SELECT id, catch_all_user_id FROM domains WHERE name = ?', [domainOf(a)])!;
+  const userId = input.userId ?? d.catch_all_user_id;
+  if (!userId || !getUser(userId)) throw badRequest('Choose the mailbox this alias delivers to');
+  const id = insert(`INSERT INTO addresses (address, domain_id, kind, user_id, name, can_send, enabled, description, created_at) VALUES (?, ?, 'alias', ?, '', 1, 1, ?, ?)`, [
+    a,
+    d.id,
+    userId,
+    'Created from the catch-all',
+    now(),
+  ]);
+  run('DELETE FROM blocked_recipients WHERE address = ?', [a]);
+  act(c, 'admin.alias_created', a);
+  return c.json({ id });
+});
+
+adminOpsRoutes.delete('/catchall/hits/:address', (c) => {
+  run('DELETE FROM catchall_hits WHERE address = ?', [normalizeEmail(decodeURIComponent(c.req.param('address')))]);
   return c.json({ ok: true });
 });
 

@@ -81,19 +81,65 @@ const RESERVED = /^(postmaster|abuse|admin|administrator|root|hostmaster|webmast
 
 function aliasPolicy(userId: number) {
   const s = getSettings();
-  const domain = domainOf(get<{ email: string }>('SELECT email FROM users WHERE id = ?', [userId])!.email);
-  const used = get<{ c: number }>(`SELECT COUNT(*) AS c FROM addresses WHERE user_id = ? AND kind = 'alias' AND created_by = ?`, [userId, userId])?.c ?? 0;
-  return { enabled: s['aliases.selfService'], limit: s['aliases.maxPerUser'], used, domain };
+  const user = get<{ email: string; role: string }>('SELECT email, role FROM users WHERE id = ?', [userId])!;
+  const domain = domainOf(user.email);
+  const count = (throwaway: number) =>
+    get<{ c: number }>(`SELECT COUNT(*) AS c FROM addresses WHERE user_id = ? AND kind = 'alias' AND created_by = ? AND throwaway = ?`, [userId, userId, throwaway])?.c ?? 0;
+  const admin = user.role === 'owner' || user.role === 'admin';
+  return {
+    enabled: s['aliases.selfService'],
+    limit: s['aliases.maxPerUser'],
+    used: count(0),
+    domain,
+    throwaway: { enabled: admin || s['aliases.throwaway'], limit: admin ? 500 : s['aliases.maxThrowaway'], used: count(1) },
+  };
 }
 
 meRoutes.get('/aliases', (c) => {
   const user = c.get('user');
-  const aliases = all<any>(`SELECT id, address, name, created_by, created_at FROM addresses WHERE user_id = ? AND kind = 'alias' ORDER BY address`, [user.id]);
+  const aliases = all<any>(
+    `SELECT id, address, name, kind, enabled, throwaway, description, created_by, created_at FROM addresses
+      WHERE user_id = ? AND kind IN ('mailbox', 'alias') ORDER BY kind = 'alias', throwaway, address`,
+    [user.id],
+  );
+  // How much mail each address has received (for spotting a leaked sign-up address).
+  const stats = new Map(
+    all<{ a: string; n: number; last: number }>(
+      `SELECT lower(delivered_to) AS a, COUNT(*) AS n, MAX(date) AS last FROM messages WHERE user_id = ? AND direction = 'in' AND delivered_to IS NOT NULL GROUP BY lower(delivered_to)`,
+      [user.id],
+    ).map((r) => [r.a, r]),
+  );
   return c.json({
     policy: aliasPolicy(user.id),
-    aliases: aliases.map((a) => ({ id: a.id, address: a.address, name: a.name, own: a.created_by === user.id, createdAt: a.created_at })),
+    aliases: aliases.map((a) => ({
+      id: a.id,
+      address: a.address,
+      name: a.name,
+      kind: a.kind,
+      own: a.created_by === user.id,
+      enabled: !!a.enabled,
+      throwaway: !!a.throwaway,
+      description: a.description,
+      createdAt: a.created_at,
+      received: stats.get(a.address.toLowerCase())?.n ?? 0,
+      lastReceivedAt: stats.get(a.address.toLowerCase())?.last ?? null,
+    })),
   });
 });
+
+/** Four easy-to-read random characters. */
+function shortCode() {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  return [...crypto.getRandomValues(new Uint8Array(4))].map((b) => chars[b % chars.length]).join('');
+}
+
+function aliasDomain(domain: string) {
+  const d = get<{ id: number }>('SELECT id FROM domains WHERE name = ? AND enabled = 1', [domain]);
+  if (!d) throw badRequest('Your domain is not available');
+  return d.id;
+}
+
+const taken = (address: string) => !!get('SELECT 1 FROM addresses WHERE address = ?', [address]) || !!get('SELECT 1 FROM users WHERE email = ?', [address]);
 
 meRoutes.post('/aliases', async (c) => {
   const user = c.get('user');
@@ -105,12 +151,10 @@ meRoutes.post('/aliases', async (c) => {
   if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(local) || local.includes('..')) throw badRequest('Use letters, numbers, dots, dashes and underscores');
   if (RESERVED.test(local)) throw conflict('That address is reserved');
   const address = normalizeEmail(`${local}@${policy.domain}`);
-  if (get('SELECT 1 FROM addresses WHERE address = ?', [address]) || get('SELECT 1 FROM users WHERE email = ?', [address])) throw conflict('That address is already taken');
-  const d = get<{ id: number }>('SELECT id FROM domains WHERE name = ?', [policy.domain]);
-  if (!d) throw badRequest('Your domain is not available');
+  if (taken(address)) throw conflict('That address is already taken');
   const id = insert(`INSERT INTO addresses (address, domain_id, kind, user_id, name, can_send, created_by, created_at) VALUES (?, ?, 'alias', ?, ?, 1, ?, ?)`, [
     address,
-    d.id,
+    aliasDomain(policy.domain),
     user.id,
     input.name || user.name,
     user.id,
@@ -118,6 +162,52 @@ meRoutes.post('/aliases', async (c) => {
   ]);
   audit(user.id, 'account.alias_created', address, undefined, clientIp(c));
   return c.json({ alias: { id, address, name: input.name || user.name, own: true } });
+});
+
+/**
+ * A throwaway address for signing up somewhere: "shop.k3x9@domain". If it
+ * starts getting spam, turn it off; the sender gets a bounce and nothing else
+ * changes.
+ */
+meRoutes.post('/aliases/throwaway', async (c) => {
+  const user = c.get('user');
+  const policy = aliasPolicy(user.id);
+  if (!policy.throwaway.enabled) throw forbidden('Your administrator hasn’t turned on throwaway addresses');
+  if (policy.throwaway.used >= policy.throwaway.limit) throw badRequest(`You can have up to ${policy.throwaway.limit} throwaway addresses. Delete some you no longer use.`);
+  const input = await body(c, z.object({ label: z.string().trim().max(40).default(''), description: z.string().trim().max(200).default('') }));
+  const label =
+    input.label
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'signup';
+  const domainId = aliasDomain(policy.domain);
+  let address = '';
+  for (let i = 0; i < 10 && !address; i++) {
+    const candidate = normalizeEmail(`${label}.${shortCode()}@${policy.domain}`);
+    if (!taken(candidate)) address = candidate;
+  }
+  if (!address) throw conflict('Couldn’t find a free address; try another label');
+  const id = insert(
+    `INSERT INTO addresses (address, domain_id, kind, user_id, name, can_send, description, throwaway, created_by, created_at) VALUES (?, ?, 'alias', ?, ?, 1, ?, 1, ?, ?)`,
+    [address, domainId, user.id, user.name, input.description || input.label, user.id, now()],
+  );
+  audit(user.id, 'account.alias_created', address, { throwaway: true }, clientIp(c));
+  return c.json({ alias: { id, address, name: user.name, own: true, throwaway: true, enabled: true } });
+});
+
+/** Turn one of your aliases off (mail to it bounces) or on, or change its note. */
+meRoutes.put('/aliases/:id', async (c) => {
+  const user = c.get('user');
+  const id = intParam(c, 'id');
+  const a = get<{ address: string }>(`SELECT address FROM addresses WHERE id = ? AND user_id = ? AND kind = 'alias'`, [id, user.id]);
+  if (!a) throw notFound('Alias not found');
+  const input = await body(c, z.object({ enabled: z.boolean().optional(), description: z.string().trim().max(200).optional() }));
+  if (input.enabled !== undefined) run('UPDATE addresses SET enabled = ? WHERE id = ?', [input.enabled ? 1 : 0, id]);
+  if (input.description !== undefined) run('UPDATE addresses SET description = ? WHERE id = ?', [input.description, id]);
+  if (input.enabled !== undefined) audit(user.id, input.enabled ? 'account.alias_enabled' : 'account.alias_disabled', a.address, undefined, clientIp(c));
+  return c.json({ ok: true });
 });
 
 meRoutes.delete('/aliases/:id', (c) => {

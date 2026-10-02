@@ -4,7 +4,7 @@ import { domainOf, formatAddr, isNoReply, matchesPattern, normalizeEmail } from 
 import { logger } from '../lib/log.js';
 import { getSettings } from '../settings.js';
 import { getPrefs, getUser, quotaBytes, userAddresses } from '../services/users.js';
-import { isHostedDomain, resolveRecipient } from '../services/routing.js';
+import { isHostedDomain, recordCatchAllHit, resolveRecipient } from '../services/routing.js';
 import { putBlob } from './blobs.js';
 import { buildMime, textToHtml } from './compose.js';
 import { applyFilters, toMatchable } from './filters.js';
@@ -12,6 +12,7 @@ import { enqueue, setLocalDeliver } from './outbound.js';
 import { getHeader, parseMail, type Parsed } from './parse.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
+import { categorize } from './categorize.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
 import { notifyNewMail } from '../services/push.js';
@@ -97,6 +98,7 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
       continue;
     }
     result.accepted.push(r);
+    if (res.catchAll) recordCatchAllHit(r, p.from?.address ?? opts.mailFrom ?? '', p.subject);
     for (const u of res.userIds) if (!userTargets.has(u)) userTargets.set(u, r);
     for (const e of res.external) if (!externalTargets.has(e)) externalTargets.set(e, r);
   }
@@ -201,6 +203,12 @@ async function deliverToUser(
   }
 
   const important = !!a.important || (!p.listId && !!contact && contact.times_contacted >= 3);
+  const category = categorize(p, {
+    userId,
+    knownContact: !!contact && (!!contact.saved || contact.times_contacted > 0),
+    internal: opts.source === 'system' || !!opts.localSenderId,
+  });
+  const unsubscribe = getHeader(p, 'list-unsubscribe');
 
   const id = await storeMessage({
     userId,
@@ -227,6 +235,10 @@ async function deliverToUser(
     spamScore: spam?.score ?? null,
     authResults: spam ? { ...spam.auth, engine: spam.engine, reasons: spam.reasons.join('; ') } : null,
     labelIds: filters.labelIds.filter((l) => !!get('SELECT 1 FROM labels WHERE id = ? AND user_id = ?', [l, userId])),
+    deliveredTo: rcpt,
+    category,
+    listUnsubscribe: unsubscribe || null,
+    listUnsubscribePost: getHeader(p, 'list-unsubscribe-post') || null,
   });
   if (folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
   if (folder === 'inbox' && !isRead && opts.source !== 'system') notifyNewMail(userId);

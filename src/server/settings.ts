@@ -42,6 +42,9 @@ export const DEFAULT_SETTINGS = {
   'users.welcomeMessage': true,
   'aliases.selfService': false,
   'aliases.maxPerUser': 5,
+  /** Let people (not just admins) make throwaway sign-up aliases. */
+  'aliases.throwaway': false,
+  'aliases.maxThrowaway': 50,
 
   'alerts.email': true,
   'alerts.externalTo': '',

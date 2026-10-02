@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { View } from '../../shared/types.js';
+import type { Category, View } from '../../shared/types.js';
+import { CATEGORIES } from '../mail/categorize.js';
 import { all, get, insert, now, run, tx } from '../db/index.js';
 import { badRequest, notFound } from '../lib/http.js';
 import { isEmail, normalizeEmail } from '../lib/addr.js';
@@ -8,6 +9,7 @@ import { getBlob } from '../mail/blobs.js';
 import { applyThreadAction, counters, getMessage, getThread, listThreads, VIEWS, type ThreadAction } from '../mail/threads.js';
 import { retryOutbox } from '../mail/outbound.js';
 import { purgeMessages } from '../mail/store.js';
+import { unsubscribe } from '../services/unsubscribe.js';
 import { body, intParam, type AppEnv } from '../http/context.js';
 
 export const mailRoutes = new Hono<AppEnv>();
@@ -17,8 +19,11 @@ mailRoutes.get('/threads', (c) => {
   const view = (c.req.query('view') ?? 'inbox') as View;
   if (!VIEWS.includes(view)) throw badRequest('Unknown view');
   const label = c.req.query('label');
+  const category = c.req.query('category');
+  if (category && !CATEGORIES.includes(category as Category)) throw badRequest('Unknown tab');
   const result = listThreads(user.id, {
     view,
+    category: (category as Category) || undefined,
     labelId: label ? Number(label) : undefined,
     query: c.req.query('q') ?? undefined,
     page: Number(c.req.query('page') ?? 1),
@@ -48,6 +53,7 @@ const actionSchema = z.object({
     }),
     z.object({ type: z.literal('snooze'), until: z.number().int() }),
     z.object({ type: z.enum(['label', 'unlabel']), labelId: z.number().int().positive() }),
+    z.object({ type: z.literal('category'), category: z.enum(['primary', 'updates', 'promotions']) }),
   ]),
 });
 
@@ -61,12 +67,15 @@ mailRoutes.post('/threads/actions', async (c) => {
 /** Apply an action to every thread matching a view/search (e.g. "select all 2,341 conversations"). */
 mailRoutes.post('/threads/bulk', async (c) => {
   const user = c.get('user');
-  const input = await body(c, z.object({ view: z.string().optional(), label: z.number().optional(), q: z.string().optional(), action: actionSchema.shape.action }));
+  const input = await body(
+    c,
+    z.object({ view: z.string().optional(), label: z.number().optional(), q: z.string().optional(), category: z.enum(['primary', 'updates', 'promotions']).optional(), action: actionSchema.shape.action }),
+  );
   let page = 1;
   let changed = 0;
   const ids: number[] = [];
   for (;;) {
-    const r = listThreads(user.id, { view: (input.view as View) ?? 'inbox', labelId: input.label, query: input.q, page, pageSize: 200 });
+    const r = listThreads(user.id, { view: (input.view as View) ?? 'inbox', labelId: input.label, query: input.q, category: input.category, page, pageSize: 200 });
     ids.push(...r.threads.map((t) => t.id));
     if (r.threads.length < 200 || ids.length >= 20_000) break;
     page++;
@@ -134,6 +143,16 @@ mailRoutes.get('/messages/:id/raw', async (c) => {
       'X-Content-Type-Options': 'nosniff',
     },
   });
+});
+
+/** Unsubscribe from the mailing list a message came from. */
+mailRoutes.post('/messages/:id/unsubscribe', async (c) => {
+  const user = c.get('user');
+  try {
+    return c.json(await unsubscribe(user.id, intParam(c, 'id')));
+  } catch (err) {
+    throw badRequest((err as Error).message);
+  }
 });
 
 mailRoutes.post('/messages/:id/retry', (c) => {

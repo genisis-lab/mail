@@ -1,4 +1,4 @@
-import type { Addr, AttachmentInfo, Folder, MessageDetail, ThreadDetail, ThreadSummary, View } from '../../shared/types.js';
+import type { Addr, AttachmentInfo, Category, Folder, MessageDetail, ThreadDetail, ThreadSummary, View } from '../../shared/types.js';
 import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
 import { loadBody } from './body.js';
@@ -37,6 +37,8 @@ export interface ListOptions {
   view?: View;
   labelId?: number;
   query?: string;
+  /** Inbox only: one tab (Primary, Updates, Promotions). */
+  category?: Category;
   page?: number;
   pageSize?: number;
 }
@@ -60,6 +62,8 @@ interface SummaryRow {
   send_at: number | null;
   snoozed_until: number | null;
   labels: string | null;
+  delivered_to: string | null;
+  category: Category;
 }
 
 export function listThreads(userId: number, opts: ListOptions): { threads: ThreadSummary[]; total: number; page: number; pageSize: number } {
@@ -81,6 +85,10 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
     const v = viewCondition(opts.view ?? 'inbox', ts);
     where.push(v.sql);
     params.push(...v.params);
+    if ((opts.view ?? 'inbox') === 'inbox' && opts.category) {
+      where.push('m.category = ?');
+      params.push(opts.category);
+    }
   }
 
   const whereSql = where.join(' AND ');
@@ -104,7 +112,7 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
   const hideFolders = opts.view === 'trash' || opts.view === 'spam' ? [] : ['spam', 'trash'];
   const rows = all<SummaryRow>(
     `SELECT m.id, m.thread_id, m.folder, m.direction, m.from_addr, m.from_name, m.to_json, m.subject, m.snippet, m.date,
-            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until,
+            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until, m.delivered_to, m.category,
             (SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS labels
        FROM messages m
       WHERE m.thread_id IN ${IN_LIST}
@@ -113,6 +121,7 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
     hideFolders.length ? [listParam(threadIds), listParam([...inView])] : [listParam(threadIds)],
   );
   const mine = new Set(userAddresses(userId));
+  const primary = (get<{ email: string }>('SELECT email FROM users WHERE id = ?', [userId])?.email ?? '').toLowerCase();
   const byThread = new Map<number, SummaryRow[]>();
   for (const r of rows) byThread.set(r.thread_id, [...(byThread.get(r.thread_id) ?? []), r]);
 
@@ -142,6 +151,8 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
       }
       participants = [...seen.values()];
     }
+    const lastIn = [...viewMsgs].reverse().find((m) => m.direction === 'in') ?? [...visible].reverse().find((m) => m.direction === 'in');
+    const via = lastIn?.delivered_to && lastIn.delivered_to.toLowerCase() !== primary ? lastIn.delivered_to : null;
     const labelSet = new Set<number>();
     for (const m of msgs) for (const l of (m.labels ?? '').split(',').filter(Boolean)) labelSet.add(Number(l));
 
@@ -162,6 +173,8 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
       status: latest.direction === 'out' ? latest.status : undefined,
       sendAt: latest.send_at,
       snoozedUntil: viewMsgs.find((m) => m.snoozed_until && m.snoozed_until > now())?.snoozed_until ?? null,
+      category: latest.category ?? 'primary',
+      via,
     });
   }
   return { threads, total, page, pageSize };
@@ -214,11 +227,18 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     identity: r.identity,
     // In a shared mailbox, who on the team sent this.
     sentBy: r.sent_by && r.sent_by !== r.user_id && r.sent_by_email ? { name: r.sent_by_name ?? '', email: r.sent_by_email } : null,
+    deliveredTo: r.delivered_to ?? null,
+    category: r.category ?? 'primary',
+    canUnsubscribe: r.direction === 'in' && !!r.list_unsubscribe && /<(https:|mailto:)/i.test(r.list_unsubscribe),
+    unsubscribed: !!r.unsubscribed,
   };
 }
 
 export async function getMessage(userId: number, id: number): Promise<MessageDetail | null> {
-  const r = get<any>('SELECT * FROM messages WHERE id = ? AND user_id = ?', [id, userId]);
+  const r = get<any>('SELECT m.*, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed FROM messages m WHERE m.id = ? AND m.user_id = ?', [
+    id,
+    userId,
+  ]);
   if (!r) return null;
   await loadBody(r);
   const atts = attachmentsFor([id]).get(id) ?? [];
@@ -229,7 +249,8 @@ export async function getMessage(userId: number, id: number): Promise<MessageDet
 export async function getThread(userId: number, threadId: number): Promise<ThreadDetail | null> {
   const t = get<{ id: number; subject: string }>('SELECT id, subject FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
   if (!t) return null;
-  const cols = 'm.*, sb.name AS sent_by_name, sb.email AS sent_by_email FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by';
+  const cols =
+    'm.*, sb.name AS sent_by_name, sb.email AS sent_by_email, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by';
   let rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? AND m.folder NOT IN ('spam','trash') ORDER BY m.date ASC, m.id ASC`, [threadId]);
   if (!rows.length) rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? ORDER BY m.date ASC, m.id ASC`, [threadId]);
   for (const r of rows) await loadBody(r);
@@ -249,7 +270,9 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
 export type ThreadAction =
   | { type: 'read' | 'unread' | 'star' | 'unstar' | 'important' | 'unimportant' | 'archive' | 'inbox' | 'trash' | 'untrash' | 'spam' | 'notspam' | 'delete' | 'unsnooze' }
   | { type: 'snooze'; until: number }
-  | { type: 'label' | 'unlabel'; labelId: number };
+  | { type: 'label' | 'unlabel'; labelId: number }
+  /** Move to an inbox tab; future mail from the same sender follows. */
+  | { type: 'category'; category: Category };
 
 /** Message ids a thread action applies to. Drafts are never moved by thread actions. */
 function threadMessageIds(userId: number, threadIds: number[], extra = ''): number[] {
@@ -328,6 +351,20 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
         }
         return list.length;
       }
+      case 'category': {
+        const list = ids(`AND direction = 'in'`);
+        const senders = new Set(
+          all<{ from_addr: string }>(`SELECT DISTINCT from_addr FROM messages WHERE id IN ${IN_LIST} AND from_addr <> ''`, [listParam(list)]).map((r) => r.from_addr.toLowerCase()),
+        );
+        for (const sender of senders) {
+          run(
+            `INSERT INTO category_rules (user_id, sender, category, created_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT (user_id, sender) DO UPDATE SET category = excluded.category, created_at = excluded.created_at`,
+            [userId, sender, action.category, ts],
+          );
+        }
+        return upd('category = ?', list, action.category);
+      }
     }
     return 0;
   });
@@ -344,10 +381,14 @@ export function counters(userId: number) {
        COUNT(DISTINCT CASE WHEN folder = 'sent' AND status = 'queued' AND is_scheduled = 1 THEN thread_id END) AS scheduled,
        COUNT(DISTINCT CASE WHEN snoozed_until > ? AND folder NOT IN ('spam','trash') THEN thread_id END) AS snoozed,
        COUNT(DISTINCT CASE WHEN is_starred = 1 AND is_read = 0 AND folder NOT IN ('spam','trash') THEN thread_id END) AS starred,
-       COUNT(DISTINCT CASE WHEN is_important = 1 AND is_read = 0 AND folder NOT IN ('spam','trash','drafts') THEN thread_id END) AS important
+       COUNT(DISTINCT CASE WHEN is_important = 1 AND is_read = 0 AND folder NOT IN ('spam','trash','drafts') THEN thread_id END) AS important,
+       COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'primary' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS primary_unread,
+       COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'updates' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS updates_unread,
+       COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'promotions' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS promotions_unread
      FROM messages WHERE user_id = ?`,
-    [ts, ts, userId],
+    [ts, ts, ts, ts, ts, userId],
   );
+  const { primary_unread, updates_unread, promotions_unread, ...rest } = c;
   const labels = all<{ id: number; unread: number; total: number }>(
     `SELECT l.id,
             COUNT(DISTINCT CASE WHEN m.is_read = 0 THEN m.thread_id END) AS unread,
@@ -358,7 +399,7 @@ export function counters(userId: number) {
       WHERE l.user_id = ? GROUP BY l.id`,
     [userId],
   );
-  return { ...c, labels };
+  return { ...rest, categories: { primary: primary_unread, updates: updates_unread, promotions: promotions_unread }, labels };
 }
 
 /** Wake snoozed messages whose time has come: back to the inbox, unread, on top. */

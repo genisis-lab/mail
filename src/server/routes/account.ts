@@ -37,6 +37,8 @@ const prefsSchema = z
     keyboardShortcuts: z.boolean(),
     defaultFrom: z.string().max(254),
     readingPane: z.boolean(),
+    inboxTabs: z.boolean(),
+    signInAlerts: z.boolean(),
     vacation: z.object({
       enabled: z.boolean(),
       subject: z.string().max(200),

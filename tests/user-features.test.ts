@@ -59,7 +59,10 @@ describe('self-service aliases and signatures', () => {
     expect(prefs.signatures).toEqual({ 'ivy.shop@wren.test': '<p>Ivy’s shop</p>' });
     const list = (await h.call('GET', '/api/me/aliases')).body;
     expect(list.policy).toMatchObject({ enabled: true, limit: 2, used: 2, domain: 'wren.test' });
-    expect((await h.call('DELETE', `/api/me/aliases/${list.aliases[0].id}`)).status).toBe(200);
+    expect(list.aliases[0]).toMatchObject({ kind: 'mailbox', own: false });
+    const shop = list.aliases.find((a: any) => a.address === 'ivy.shop@wren.test');
+    expect(shop).toMatchObject({ kind: 'alias', own: true, enabled: true, received: 1 });
+    expect((await h.call('DELETE', `/api/me/aliases/${shop.id}`)).status).toBe(200);
   });
 });
 

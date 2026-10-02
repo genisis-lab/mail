@@ -56,6 +56,10 @@ export interface UserPrefs {
   keyboardShortcuts: boolean;
   defaultFrom: string;
   readingPane: boolean;
+  /** Split the inbox into Primary, Updates and Promotions. */
+  inboxTabs: boolean;
+  /** Email me when my account is signed in to from a new device. */
+  signInAlerts: boolean;
   vacation: VacationPrefs;
   forwarding: ForwardingPrefs;
 }
@@ -75,6 +79,8 @@ export const DEFAULT_PREFS: UserPrefs = {
   keyboardShortcuts: true,
   defaultFrom: '',
   readingPane: false,
+  inboxTabs: true,
+  signInAlerts: true,
   vacation: { enabled: false, subject: '', message: '', startAt: null, endAt: null, contactsOnly: false },
   forwarding: { enabled: false, to: '', keep: 'inbox' },
 };
@@ -104,6 +110,9 @@ export interface Label {
   total?: number;
 }
 
+/** Inbox tab. */
+export type Category = 'primary' | 'updates' | 'promotions';
+
 export interface ThreadSummary {
   id: number;
   subject: string;
@@ -121,6 +130,10 @@ export interface ThreadSummary {
   status?: string;
   sendAt?: number | null;
   snoozedUntil?: number | null;
+  /** The inbox tab of the latest message. */
+  category?: Category;
+  /** The alias or other address of the user's that the latest incoming message was sent to, when it isn't their main one. */
+  via?: string | null;
 }
 
 export interface AttachmentInfo {
@@ -164,6 +177,13 @@ export interface MessageDetail {
   inReplyTo: string | null;
   references: string;
   identity: string | null;
+  /** Incoming mail: the address of the user's it was delivered to (alias, group, catch-all…). */
+  deliveredTo?: string | null;
+  category?: Category;
+  /** The sender offers an unsubscribe link or address (List-Unsubscribe). */
+  canUnsubscribe?: boolean;
+  /** The user already unsubscribed from this sender. */
+  unsubscribed?: boolean;
 }
 
 export interface ThreadDetail {

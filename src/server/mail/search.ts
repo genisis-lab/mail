@@ -3,8 +3,9 @@
  *
  * Supported: free text, "exact phrases", from: to: cc: bcc: subject: label:
  * has:attachment is:unread|read|starred|important|snoozed in:<folder>|anywhere
- * before: after: older_than: newer_than: larger: smaller: filename: and
- * negation with a leading "-".
+ * before: after: older_than: newer_than: larger: smaller: filename:
+ * deliveredto: category:primary|updates|promotions and negation with a
+ * leading "-".
  */
 
 export interface SqlFragment {
@@ -97,6 +98,12 @@ export function buildSearch(q: string, userId: number, now = Date.now()): SqlFra
         break;
       case 'subject':
         cond(`m.subject LIKE ? ESCAPE '\\'`, t.negate, like(v));
+        break;
+      case 'deliveredto':
+        cond(`COALESCE(m.delivered_to, '') LIKE ? ESCAPE '\\'`, t.negate, like(v));
+        break;
+      case 'category':
+        cond(`m.category = ?`, t.negate, v.toLowerCase() === 'social' || v.toLowerCase() === 'forums' ? 'updates' : v.toLowerCase());
         break;
       case 'label':
         cond(

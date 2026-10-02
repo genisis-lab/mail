@@ -1,4 +1,4 @@
-import { all, get } from '../db/index.js';
+import { all, get, run } from '../db/index.js';
 import { domainOf, normalizeEmail, stripSubaddress } from '../lib/addr.js';
 
 export interface Resolution {
@@ -10,6 +10,8 @@ export interface Resolution {
   matched: string | null;
   /** Why nothing matched (for logs). */
   reason?: string;
+  /** Delivered by the domain's catch-all (no address of its own). */
+  catchAll?: boolean;
 }
 
 export function isHostedDomain(domain: string): boolean {
@@ -53,6 +55,7 @@ export function resolveRecipient(input: string): Resolution {
     [domain],
   );
   if (!dom || !dom.enabled) return { userIds: [], external: [], matched: null, reason: 'domain not hosted' };
+  if (get('SELECT 1 FROM blocked_recipients WHERE address = ?', [address])) return { userIds: [], external: [], matched: address, reason: 'address blocked' };
 
   let row = lookup(address);
   if (!row) {
@@ -69,9 +72,22 @@ export function resolveRecipient(input: string): Resolution {
 
   if (dom.catch_all_user_id) {
     const u = get<{ status: string }>('SELECT status FROM users WHERE id = ?', [dom.catch_all_user_id]);
-    if (u?.status === 'active') return { userIds: [dom.catch_all_user_id], external: [], matched: `*@${domain}` };
+    if (u?.status === 'active') return { userIds: [dom.catch_all_user_id], external: [], matched: `*@${domain}`, catchAll: true };
   }
   return { userIds: [], external: [], matched: null, reason: 'no such mailbox' };
+}
+
+/** Remember an address that only exists through the catch-all, so admins can see what it's catching. */
+export function recordCatchAllHit(address: string, from: string, subject: string) {
+  const a = normalizeEmail(address);
+  const dom = get<{ id: number }>('SELECT id FROM domains WHERE name = ?', [domainOf(a)]);
+  if (!dom) return;
+  const ts = Date.now();
+  run(
+    `INSERT INTO catchall_hits (address, domain_id, count, first_at, last_at, last_from, last_subject) VALUES (?, ?, 1, ?, ?, ?, ?)
+     ON CONFLICT (address) DO UPDATE SET count = count + 1, last_at = excluded.last_at, last_from = excluded.last_from, last_subject = excluded.last_subject`,
+    [a, dom.id, ts, ts, from.slice(0, 254), subject.slice(0, 200)],
+  );
 }
 
 function expandGroup(groupId: number, matched: string, seen: Set<number>): Resolution {
