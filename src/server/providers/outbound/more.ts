@@ -7,7 +7,7 @@ import type { Addr } from '../../../shared/types.js';
 const toEmailName = (a: Addr) => (a.name ? { email: a.address, name: a.name } : { email: a.address });
 
 // ── MailerSend ──────────────────────────────────────────────────────────────
-export const mailersend: ProviderDefinition<{ apiToken: string; customHeaders?: boolean }> = {
+export const mailersend: ProviderDefinition<{ apiToken: string; customHeaders?: boolean; webhookSecret?: string }> = {
   type: 'mailersend',
   name: 'MailerSend',
   description: 'MailerSend email API.',
@@ -21,6 +21,7 @@ export const mailersend: ProviderDefinition<{ apiToken: string; customHeaders?: 
   fields: [
     { key: 'apiToken', label: 'API token', type: 'password', required: true },
     { key: 'customHeaders', label: 'Send custom headers (paid plans)', type: 'boolean', default: false },
+    { key: 'webhookSecret', label: 'Webhook signing secret', type: 'password', help: 'Optional: verifies delivery events from MailerSend webhooks.' },
   ],
   outboundSetup: 'Add and verify your domain in MailerSend, then create an API token with Email: full access.',
 

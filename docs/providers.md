@@ -53,8 +53,42 @@ rest. Mail that arrives through Cloudflare Email Routing needs no provider at al
   provider, including ones that drop custom headers (MailerSend without its paid-plan
   header option). `tests/roundtrip-providers.test.ts` checks every registered provider.
 
+## Delivery status, bounces and the suppression list
+
+After a provider accepts a message, Wren still finds out what happened to it, and
+an address that hard-bounces or reports spam isn't mailed again until an admin
+removes it (**Delivery logs → Suppressions**). This works with every provider:
+
+| How it arrives | Providers |
+|---|---|
+| The provider's event webhook, posted to the same secret URL as its inbound mail (**Admin → Providers → Delivery status** shows the URL and which events to tick) | Resend, Amazon SES (SNS), Postmark, SendGrid (signed webhooks verified when you paste the key), Mailgun (signing key), Brevo, Mailjet, SparkPost, MailerSend (signing secret), MailChannels, SMTP2GO, ZeptoMail, Elastic Email, Mailtrap, Scaleway TEM, Postal, and the custom HTTP webhook |
+| Bounce messages (RFC 3464) and spam reports (RFC 5965, ARF) that come back to the sender | SMTP relays (Gmail, Microsoft 365, Fastmail…), Cloudflare Email Service, and any provider whose bounces come back by email |
+| Refused at send time | SMTP servers that refuse some recipients while accepting the rest |
+
+- Events are matched by the provider's message id or by the Message-ID, only for
+  messages that went out through that provider, and only for the recipients the
+  message actually had. Events for mail another app sent through the same account are
+  ignored.
+- A bounce that comes back by email counts only for the person who sent the original,
+  and only an address that doesn't exist (5.1.x) is suppressed; a message refused for
+  its content or by policy (5.7.x) is logged but the address stays.
+- The sender gets a *Delivery Status Notification* in their inbox, threaded with the
+  original (for bounces that came by email, the bounce itself is that notice).
+- `tests/all-providers.test.ts` feeds every provider's real-shaped bounce webhook and
+  checks the log and the suppression list.
+
+## Meeting replies
+
+Answering an invitation (Yes / Maybe / No) sends an iTIP REPLY as a
+`text/calendar; method=REPLY` part. Raw-MIME providers send Wren's message as is;
+JSON APIs get it as a calendar attachment with that content type. Brevo and MailerSend
+have no content-type field for attachments, so there it goes as `invite.ics`, which
+calendar apps generally still read. `tests/all-providers.test.ts` checks every provider.
+
 ## Adding a provider
 
 Create `src/server/providers/outbound/<name>.ts` exporting a `ProviderDefinition`:
 metadata, `fields`, and `send()` and/or `receive()`. Register it in
 `providers/registry.ts`. The admin UI builds its form from `fields` automatically.
+If the provider reports delivery status by webhook, add a parser and setup text in
+`providers/events.ts`, and a case in `tests/all-providers.test.ts`.

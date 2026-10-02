@@ -13,6 +13,8 @@ import { getHeader, parseMail, type Parsed } from './parse.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
+import { readReport } from './dsn.js';
+import { recordDeliveryEvents } from '../services/delivery-events.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
 import { notifyNewMail } from '../services/push.js';
@@ -104,6 +106,11 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
   }
   if (!userTargets.size && !externalTargets.size) return result;
   if (opts.source === 'cloudflare-routing') verifyDomainsByRouting(result.accepted);
+  // A bounce or spam report about something we sent: record it like a provider's webhook would (any provider).
+  const report = opts.localSenderId ? null : readReport(p);
+  if (report?.length) {
+    await recordDeliveryEvents(null, report, { notify: false, userIds: [...userTargets.keys()] }).catch((err) => log.warn('Could not read bounce report', err));
+  }
   const roundtrip = roundtripToken(p, getHeader(p, 'x-wren-roundtrip'));
   if (roundtrip) markRoundtripReceived(roundtrip);
 

@@ -13,6 +13,7 @@ import { mailjet } from './outbound/mailjet.js';
 import { mailersend, mailchannels, smtp2go, zeptomail, elasticemail, mailtrap, scaleway } from './outbound/more.js';
 import { postal, webhook, logOnly, rawMime, forwardemail, cloudmailin } from './outbound/selfhosted.js';
 import { cloudflareBinding } from './outbound/cloudflare-binding.js';
+import { EVENTS_SETUP, hasEventWebhook } from './events.js';
 
 const definitions: ProviderDefinition<any>[] = [
   cloudflareBinding,
@@ -63,6 +64,8 @@ export function listProviderTypes(): ProviderTypeInfo[] {
     spfInclude: d.spfInclude,
     dkimSelectors: d.dkimSelectors,
     inboundSetup: d.inboundSetup,
+    eventsSetup: EVENTS_SETUP[d.type],
+    eventsWebhook: hasEventWebhook(d.type) || !!d.receive,
     outboundSetup: d.outboundSetup,
     presets: d.presets,
   }));

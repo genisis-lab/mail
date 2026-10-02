@@ -242,6 +242,10 @@ export interface ProviderTypeInfo {
   spfInclude?: string;
   dkimSelectors?: string[];
   inboundSetup?: string;
+  /** How to turn on delivery status (bounces, complaints) for this provider. */
+  eventsSetup?: string;
+  /** Delivery status arrives at the provider's webhook URL (otherwise, by bounce email). */
+  eventsWebhook?: boolean;
   outboundSetup?: string;
   category: 'api' | 'smtp' | 'self-hosted' | 'inbound' | 'other';
   /** Shown first and marked as recommended. */

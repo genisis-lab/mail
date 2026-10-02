@@ -42,6 +42,8 @@ export function learnedCategory(userId: number, sender: string): Category | null
 
 export function categorize(p: Parsed, ctx: CategoryContext): Category {
   if (ctx.internal) return 'primary';
+  // Bounces and spam reports about your own mail: you need to see them.
+  if (/^multipart\/report/i.test(header(p, 'content-type'))) return 'primary';
   const sender = normalizeEmail(p.from?.address ?? '');
   const learned = sender ? learnedCategory(ctx.userId, sender) : null;
   if (learned) return learned;

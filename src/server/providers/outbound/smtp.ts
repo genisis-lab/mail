@@ -78,7 +78,12 @@ export const smtp: ProviderDefinition<SmtpConfig> = {
     try {
       const r = await smtpSend(options(cfg), email.envelope, email.raw);
       const detail = r.rejected.length ? `${r.response} (rejected: ${r.rejected.map((x) => x.address).join(', ')})` : r.response;
-      return { providerMessageId: queueId(r.response), detail };
+      return {
+        providerMessageId: queueId(r.response),
+        detail,
+        // The server accepted the message for the others: these won't get it.
+        rejected: r.rejected.map((x) => ({ rcpt: x.address, reason: x.message, permanent: x.code >= 500, code: x.code })),
+      };
     } catch (err) {
       if (err instanceof SmtpError) throw new ProviderError(err.message, err.permanent, err.code);
       throw new ProviderError((err as Error).message);

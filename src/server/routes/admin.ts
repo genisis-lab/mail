@@ -12,6 +12,7 @@ import { audit } from '../services/audit.js';
 import { cleanConfig, createProvider, MASK } from '../services/providers.js';
 import { sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
+import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
@@ -543,7 +544,7 @@ function providerDto(row: any, withConfig = false) {
     isDefault: !!row.is_default,
     outbound: !!def?.send,
     inbound: !!def?.receive,
-    inboundUrl: def?.receive ? inboundUrl(row.inbound_token) : null,
+    inboundUrl: def?.receive || hasEventWebhook(row.type) ? inboundUrl(row.inbound_token) : null,
     sentCount: row.sent_count,
     failedCount: row.failed_count,
     receivedCount: row.received_count,

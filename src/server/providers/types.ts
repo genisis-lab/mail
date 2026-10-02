@@ -30,6 +30,8 @@ export interface OutboundEmail {
 
 export interface SendResult {
   providerMessageId?: string | null;
+  /** Recipients the provider refused while accepting the rest (SMTP RCPT errors). */
+  rejected?: { rcpt: string; reason: string; permanent: boolean; code?: number }[];
   /** Free-form note recorded in the delivery log. */
   detail?: string;
 }
@@ -71,11 +73,15 @@ export interface InboundRequest {
 /** What happened to a message after the provider accepted it (from its event webhooks). */
 export interface DeliveryEvent {
   /** The id the provider returned when Wren sent the message (outbox.provider_message_id). */
-  providerMessageId: string;
+  providerMessageId?: string | null;
+  /** The message's Message-ID header, when the provider (or a bounce report) gives it. */
+  messageId?: string | null;
   type: 'delivered' | 'bounced' | 'complained' | 'delayed';
   recipients: string[];
   /** For bounces: true when the address can't receive mail (hard bounce). */
   permanent?: boolean;
+  /** For permanent bounces: stop mailing the address (default). False when the message, not the address, was refused. */
+  suppress?: boolean;
   detail?: string;
 }
 

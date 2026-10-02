@@ -1,7 +1,7 @@
 import type { Addr } from '../../shared/types.js';
 import { all, get, insert, now, run } from '../db/index.js';
 import { decryptJson } from '../lib/crypto.js';
-import { domainOf, parseAddresses } from '../lib/addr.js';
+import { domainOf, normalizeEmail, parseAddresses } from '../lib/addr.js';
 import { logger } from '../lib/log.js';
 import { getSettings } from '../settings.js';
 import { getProviderDef } from '../providers/registry.js';
@@ -11,7 +11,8 @@ import { getBlob } from './blobs.js';
 import { getHeader, parseMail } from './parse.js';
 import { storeMessage } from './store.js';
 import { escapeHtml } from './compose.js';
-import { suppressionFor, suppressionReason } from '../services/suppressions.js';
+import { suppress, suppressionFor, suppressionReason } from '../services/suppressions.js';
+import { badMailbox } from './dsn.js';
 
 const log = logger('outbound');
 
@@ -258,7 +259,15 @@ async function deliver(job: OutboxRow) {
         providerMessageId = result.providerMessageId ?? null;
         usedProvider = pid;
         markProvider(pid, true);
-        logDelivery(job, 'sent', pid, external, result.detail ?? `via ${p.name}`);
+        const refused = new Set((result.rejected ?? []).map((r) => normalizeEmail(r.rcpt)));
+        logDelivery(job, 'sent', pid, external.filter((r) => !refused.has(normalizeEmail(r))), result.detail ?? `via ${p.name}`);
+        // Some recipients refused while the rest were accepted: they bounce now, and a missing mailbox is suppressed.
+        for (const r of result.rejected ?? []) {
+          failures.push({ rcpt: r.rcpt, reason: r.reason });
+          logDelivery(job, r.permanent ? 'bounced' : 'deferred', pid, [r.rcpt], r.reason);
+          const status = (/\b([45]\.\d{1,3}\.\d{1,3})\b/.exec(r.reason) ?? [])[1] ?? '';
+          if (r.permanent && badMailbox(status || '5.0.0', r.reason)) suppress(r.rcpt, 'bounce', r.reason, pid);
+        }
         lastErr = null;
         break;
       } catch (err) {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, ExternalLink, FlaskConical, PlugZap, Plus, RotateCw, Search, Send, Trash2, XCircle } from 'lucide-react';
+import { Activity, ArrowDownToLine, ArrowUpFromLine, CheckCircle2, ExternalLink, FlaskConical, PlugZap, Plus, RotateCw, Search, Send, Trash2, XCircle } from 'lucide-react';
 import type { ProviderTypeInfo } from '../../../shared/types';
 import { api } from '../../lib/api';
 import { number, relativeTime } from '../../lib/format';
@@ -247,7 +247,7 @@ function ProviderDialog({ type, id, onClose }: { type: ProviderTypeInfo; id?: nu
   };
 
   const shownUrl = inboundUrl;
-  const setupText = (s?: string) => (s ?? '').replace(/\{\{url\}\}/g, shownUrl ?? '<inbound URL — save first>');
+  const setupText = (s?: string) => (s ?? '').replace(/\{\{url\}\}/g, shownUrl ?? 'the webhook URL (shown once you save)');
 
   return (
     <Modal open onClose={onClose} title={id ? `Edit ${provider?.name ?? type.name}` : `Connect ${type.name}`} width="max-w-2xl">
@@ -378,6 +378,24 @@ function ProviderDialog({ type, id, onClose }: { type: ProviderTypeInfo; id?: nu
               ) : (
                 <p className="text-xs text-faint">Save the provider to get its inbound webhook URL.</p>
               )}
+            </div>
+          )}
+
+          {type.outbound && type.eventsSetup && (
+            <div className="rounded-xl border border-line p-4">
+              <p className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                <Activity className="size-4 text-muted" /> Delivery status
+              </p>
+              <p className="mb-3 text-[13px] leading-relaxed text-muted">
+                {type.eventsWebhook ? 'Bounces and spam complaints show in the delivery log, and those addresses aren’t mailed again. ' : ''}
+                {setupText(type.eventsSetup)}
+              </p>
+              {type.eventsWebhook &&
+                (shownUrl ? (
+                  !type.inbound && <CopyField value={shownUrl} onCopy={() => toast('Webhook URL copied')} />
+                ) : (
+                  <p className="text-xs text-faint">Save the provider to get its webhook URL.</p>
+                ))}
             </div>
           )}
 

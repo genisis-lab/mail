@@ -6,6 +6,7 @@ import type { Addr } from '../../../shared/types.js';
 interface SendgridConfig {
   apiKey: string;
   region?: 'global' | 'eu';
+  eventWebhookKey?: string;
 }
 
 const RESERVED = new Set(['x-sg-id', 'x-sg-eid', 'received', 'dkim-signature', 'content-type', 'content-transfer-encoding', 'to', 'from', 'subject', 'reply-to', 'cc', 'bcc']);
@@ -43,6 +44,12 @@ export const sendgrid: ProviderDefinition<SendgridConfig> = {
         { value: 'global', label: 'Global (api.sendgrid.com)' },
         { value: 'eu', label: 'EU (api.eu.sendgrid.com)' },
       ],
+    },
+    {
+      key: 'eventWebhookKey',
+      label: 'Event webhook verification key',
+      type: 'password',
+      help: 'Optional: the public key from Event Webhook → Signature Verification, so Wren checks delivery events really come from SendGrid.',
     },
   ],
   outboundSetup: 'Complete Domain Authentication in SendGrid (Settings → Sender Authentication) and create an API key with Mail Send permission.',

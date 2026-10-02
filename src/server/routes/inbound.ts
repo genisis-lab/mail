@@ -7,6 +7,7 @@ import { providerContext } from '../mail/outbound.js';
 import { getProviderDef } from '../providers/registry.js';
 import { ProviderError, type InboundRequest } from '../providers/types.js';
 import { recordDeliveryEvents } from '../services/delivery-events.js';
+import { EVENT_PARSERS } from '../providers/events.js';
 import { insert, now } from '../db/index.js';
 
 const log = logger('inbound');
@@ -23,7 +24,10 @@ async function handle(c: any) {
   );
   if (!provider || !provider.enabled) return c.json({ error: 'Unknown endpoint' }, 404);
   const def = getProviderDef(provider.type);
-  if (!def?.receive) return c.json({ error: 'This provider does not accept inbound mail' }, 400);
+  const events = EVENT_PARSERS[provider.type];
+  // A GET is only ever a status report (Elastic Email) or a reachability check.
+  if (c.req.method === 'GET' && !events) return c.json({ ok: true });
+  if (!def?.receive && !events) return c.json({ error: 'This provider does not accept inbound mail' }, 400);
 
   const len = Number(c.req.header('content-length') ?? 0);
   if (len > MAX_BODY) return c.json({ error: 'Payload too large' }, 413);
@@ -62,6 +66,13 @@ async function handle(c: any) {
   }
 
   try {
+    // Delivery status (bounces, complaints…) can share the URL with inbound mail.
+    const reported = events ? await events(req, cfg, providerContext) : null;
+    if (reported) {
+      const matched = reported.length ? await recordDeliveryEvents(provider.id, reported) : 0;
+      return c.json({ ok: true, events: reported.length, matched }, 200);
+    }
+    if (!def?.receive) return c.json({ ignored: true }, 200);
     const result = await def.receive(cfg, req, providerContext);
     if (result.events?.length) await recordDeliveryEvents(provider.id, result.events);
     const outcome = { accepted: [] as string[], rejected: [] as { rcpt: string; reason: string }[], delivered: 0 };
@@ -97,4 +108,5 @@ async function handle(c: any) {
 inboundRoutes.post('/:token', handle);
 inboundRoutes.post('/:token/*', handle);
 // Some providers validate the URL with a GET/HEAD first.
-inboundRoutes.get('/:token', (c) => c.json({ ok: true }));
+// Some providers (Elastic Email) report status with GET and query parameters; a bare GET is a reachability check.
+inboundRoutes.get('/:token', (c) => (new URL(c.req.url).searchParams.size ? handle(c) : c.json({ ok: true })));
