@@ -7,8 +7,9 @@ import { badRequest, notFound, unauthorized } from '../lib/http.js';
 import { isEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { getPrefs, getUser, identities, savePrefs, sessionUser, validatePassword } from '../services/users.js';
-import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { getPrefs, getUser, identities, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
+import { sendRecoveryVerification } from '../services/account-links.js';
+import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 
 export const accountRoutes = new Hono<AppEnv>();
 
@@ -82,6 +83,44 @@ accountRoutes.post('/password', async (c) => {
   // Sign out every other session.
   run('DELETE FROM sessions WHERE user_id = ? AND id != ?', [user.id, c.get('session')?.id ?? '']);
   audit(user.id, 'account.password_changed', user.email, undefined, clientIp(c));
+  return c.json({ ok: true });
+});
+
+// ── Recovery email (for "Forgot password?") ─────────────────────────────────
+
+accountRoutes.get('/recovery', (c) => {
+  const u = getUser(c.get('user').id)!;
+  return c.json({ email: u.recovery_email, verified: !!u.recovery_verified_at });
+});
+
+accountRoutes.put('/recovery', async (c) => {
+  const user = getUser(c.get('user').id)!;
+  const input = await body(c, z.object({ email: z.string().max(254), password: z.string().min(1).max(256) }));
+  if (!(await verifyPassword(input.password, user.password_hash))) throw unauthorized('Password is incorrect');
+  const email = input.email.trim().toLowerCase();
+  if (!isEmail(email)) throw badRequest('Enter a valid email address');
+  if (userAddresses(user.id).includes(email)) throw badRequest('Use an address outside this mailbox, so you can still reach it if you’re locked out');
+  rateLimit(`recovery:${user.id}`, 5, 60 * 60_000);
+  run('UPDATE users SET recovery_email = ?, recovery_verified_at = NULL WHERE id = ?', [email, user.id]);
+  await sendRecoveryVerification(user, email);
+  audit(user.id, 'account.recovery_set', email, undefined, clientIp(c));
+  return c.json({ email, verified: false });
+});
+
+accountRoutes.post('/recovery/resend', async (c) => {
+  const user = getUser(c.get('user').id)!;
+  if (!user.recovery_email || user.recovery_verified_at) throw badRequest('Nothing to confirm');
+  rateLimit(`recovery:${user.id}`, 5, 60 * 60_000);
+  await sendRecoveryVerification(user, user.recovery_email);
+  return c.json({ ok: true });
+});
+
+accountRoutes.delete('/recovery', async (c) => {
+  const user = getUser(c.get('user').id)!;
+  const { password } = await body(c, z.object({ password: z.string().min(1).max(256) }));
+  if (!(await verifyPassword(password, user.password_hash))) throw unauthorized('Password is incorrect');
+  run('UPDATE users SET recovery_email = NULL, recovery_verified_at = NULL WHERE id = ?', [user.id]);
+  audit(user.id, 'account.recovery_removed', user.email, undefined, clientIp(c));
   return c.json({ ok: true });
 });
 

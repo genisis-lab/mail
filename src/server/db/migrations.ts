@@ -341,4 +341,110 @@ export const migrations: string[] = [
     seen_at INTEGER NOT NULL
   );
   `,
+
+  // 4: shared mailboxes, recovery email, one-time links, alerts, push, saved replies and
+  //    searches, background jobs (import/export) and the setup round-trip test.
+  `
+  ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'person' CHECK (kind IN ('person','shared'));
+  ALTER TABLE users ADD COLUMN recovery_email TEXT;
+  ALTER TABLE users ADD COLUMN recovery_verified_at INTEGER;
+  ALTER TABLE addresses ADD COLUMN created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+  ALTER TABLE messages ADD COLUMN sent_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+  ALTER TABLE delivery_log ADD COLUMN outbox_id INTEGER;
+  ALTER TABLE invites ADD COLUMN emailed_at INTEGER;
+  ALTER TABLE invites ADD COLUMN sent_to TEXT;
+  CREATE INDEX idx_delivery_log_created ON delivery_log(created_at);
+  CREATE INDEX idx_inbound_log_created ON inbound_log(created_at);
+
+  CREATE TABLE auth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL CHECK (kind IN ('reset','setup','verify_recovery')),
+    data       TEXT,
+    expires_at INTEGER NOT NULL,
+    used_at    INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_auth_tokens_user ON auth_tokens(user_id, kind);
+
+  CREATE TABLE mailbox_members (
+    mailbox_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    can_send   INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (mailbox_id, user_id)
+  );
+  CREATE INDEX idx_mailbox_members_user ON mailbox_members(user_id);
+
+  CREATE TABLE alerts (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    severity    TEXT NOT NULL DEFAULT 'warn' CHECK (severity IN ('info','warn','critical')),
+    title       TEXT NOT NULL,
+    detail      TEXT NOT NULL DEFAULT '',
+    link        TEXT,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    notified_at INTEGER,
+    resolved_at INTEGER
+  );
+  CREATE UNIQUE INDEX idx_alerts_open ON alerts(kind, key) WHERE resolved_at IS NULL;
+
+  CREATE TABLE push_subscriptions (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint     TEXT NOT NULL UNIQUE,
+    p256dh       TEXT NOT NULL,
+    auth         TEXT NOT NULL,
+    user_agent   TEXT,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER
+  );
+  CREATE INDEX idx_push_user ON push_subscriptions(user_id);
+
+  CREATE TABLE saved_replies (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    html       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_saved_replies_user ON saved_replies(user_id);
+
+  CREATE TABLE saved_searches (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    query      TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_saved_searches_user ON saved_searches(user_id);
+
+  CREATE TABLE jobs (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('imap_import','export')),
+    status      TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed','cancelled')),
+    config      TEXT,
+    state       TEXT NOT NULL DEFAULT '{}',
+    progress    TEXT NOT NULL DEFAULT '{}',
+    error       TEXT,
+    next_run_at INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+  CREATE INDEX idx_jobs_due ON jobs(status, next_run_at);
+
+  CREATE TABLE roundtrip_tests (
+    token       TEXT PRIMARY KEY,
+    user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    address     TEXT NOT NULL,
+    outbox_id   INTEGER,
+    sent_at     INTEGER NOT NULL,
+    received_at INTEGER
+  );
+  `,
 ];

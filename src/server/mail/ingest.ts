@@ -219,10 +219,10 @@ async function deliverToUser(
   if (folder !== 'spam') {
     const targets = [...filters.forwardTo, ...(fwd.enabled && fwd.to ? [fwd.to] : [])];
     if (targets.length && getSettings()['mail.allowExternalForwarding']) {
-      void forwardCopy(p, raw, rcpt, targets, userId).catch((err) => log.warn('Forward failed', err));
+      await forwardCopy(p, raw, rcpt, targets, userId).catch((err) => log.warn('Forward failed', err));
     }
     if (prefs.vacation.enabled) {
-      void maybeAutoReply(userId, rcpt, p).catch((err) => log.warn('Auto-reply failed', err));
+      await maybeAutoReply(userId, rcpt, p).catch((err) => log.warn('Auto-reply failed', err));
     }
   }
   return { stored: true, status: folder === 'spam' ? 'spam' : 'accepted', reason: reason || folder };

@@ -10,6 +10,7 @@ import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { cleanConfig, createProvider, MASK } from '../services/providers.js';
+import { sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { createUser, getUser, quotaBytes, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
@@ -159,7 +160,9 @@ adminRoutes.post('/users', async (c) => {
     z.object({
       email: z.string().min(3).max(254),
       name: z.string().min(1).max(100),
-      password: z.string().min(1).max(256),
+      password: z.string().max(256).optional(),
+      /** Personal address that receives a "set your password" link instead of a password. */
+      setupEmail: z.string().max(254).optional(),
       role: roleSchema.default('user'),
       quotaMb: z.number().int().min(1).nullable().optional(),
       sendLimitPerDay: z.number().int().min(0).nullable().optional(),
@@ -167,16 +170,26 @@ adminRoutes.post('/users', async (c) => {
   );
   const me = c.get('user');
   if (input.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can create owners');
+  const setupEmail = input.setupEmail?.trim().toLowerCase() || null;
+  if (setupEmail && !isEmail(setupEmail)) throw badRequest('Enter a valid personal email address');
+  if (!input.password && !setupEmail) throw badRequest('Set a password, or enter a personal email to send a setup link to');
   const id = await createUser({
     email: input.email,
     name: input.name,
-    password: input.password,
+    // Without a password the account can only be opened through the setup link.
+    password: input.password || `${randomToken(24)}${randomToken(8)}`,
     role: input.role,
     quotaBytes: input.quotaMb ? input.quotaMb * 1024 * 1024 : null,
     sendLimitPerDay: input.sendLimitPerDay ?? null,
   });
-  act(c, 'admin.user_created', normalizeEmail(input.email), { role: input.role });
-  return c.json({ id });
+  let setupUrl: string | null = null;
+  if (setupEmail) {
+    run('UPDATE users SET recovery_email = ? WHERE id = ?', [setupEmail, id]);
+    setupUrl = input.password ? null : await sendSetupLink(getUser(id)!, setupEmail);
+  }
+  await welcomeUser(id);
+  act(c, 'admin.user_created', normalizeEmail(input.email), { role: input.role, setupEmail });
+  return c.json({ id, setupUrl });
 });
 
 adminRoutes.put('/users/:id', async (c) => {
@@ -226,6 +239,30 @@ adminRoutes.post('/users/:id/password', async (c) => {
   run('DELETE FROM sessions WHERE user_id = ?', [id]);
   act(c, 'admin.user_password_reset', u.email);
   return c.json({ ok: true });
+});
+
+/** Email a password-reset link to the user's verified recovery address. */
+adminRoutes.post('/users/:id/reset-link', async (c) => {
+  const u = getUser(intParam(c, 'id'));
+  if (!u || u.kind !== 'person') throw notFound();
+  if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden();
+  if (!u.recovery_email) throw badRequest('This user has no recovery email. Create a sign-in link instead.');
+  await sendPasswordReset(u, u.recovery_email);
+  act(c, 'admin.user_reset_link_sent', u.email, { to: u.recovery_email });
+  return c.json({ sentTo: u.recovery_email });
+});
+
+/** A one-time "choose your password" link to hand over (optionally emailed). */
+adminRoutes.post('/users/:id/setup-link', async (c) => {
+  const u = getUser(intParam(c, 'id'));
+  if (!u || u.kind !== 'person') throw notFound();
+  if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden();
+  const { sendTo } = await body(c, z.object({ sendTo: z.string().max(254).optional() }));
+  const to = sendTo?.trim().toLowerCase() || null;
+  if (to && !isEmail(to)) throw badRequest('Enter a valid email address');
+  const url = await sendSetupLink(u, to);
+  act(c, 'admin.user_setup_link', u.email, { sentTo: to });
+  return c.json({ url, sentTo: to });
 });
 
 adminRoutes.post('/users/:id/reset-2fa', (c) => {
@@ -720,7 +757,7 @@ adminRoutes.delete('/blocklist/:id', (c) => {
 
 adminRoutes.get('/invites', (c) => {
   const rows = all<any>(
-    `SELECT i.id, i.email, i.role, i.expires_at, i.used_at, i.created_at, d.name AS domain, u.email AS used_by_email
+    `SELECT i.id, i.email, i.role, i.expires_at, i.used_at, i.created_at, i.sent_to, i.emailed_at, d.name AS domain, u.email AS used_by_email
        FROM invites i LEFT JOIN domains d ON d.id = i.domain_id LEFT JOIN users u ON u.id = i.used_by ORDER BY i.id DESC LIMIT 200`,
   );
   return c.json({ invites: rows });
@@ -729,12 +766,21 @@ adminRoutes.get('/invites', (c) => {
 adminRoutes.post('/invites', async (c) => {
   const input = await body(
     c,
-    z.object({ email: z.string().max(254).optional(), domainId: z.number().int().nullable().optional(), role: z.enum(['user', 'admin']).default('user'), days: z.number().int().min(1).max(90).default(7) }),
+    z.object({
+      email: z.string().max(254).optional(),
+      domainId: z.number().int().nullable().optional(),
+      role: z.enum(['user', 'admin']).default('user'),
+      days: z.number().int().min(1).max(90).default(7),
+      /** The person's current address: the invitation link is emailed there. */
+      sendTo: z.string().max(254).optional(),
+    }),
   );
   if (input.email && !isEmail(input.email)) throw badRequest('Invalid email');
+  const sendTo = input.sendTo?.trim().toLowerCase() || null;
+  if (sendTo && !isEmail(sendTo)) throw badRequest('Enter a valid address to send the invitation to');
   if (input.domainId && !get('SELECT 1 FROM domains WHERE id = ?', [input.domainId])) throw badRequest('Unknown domain');
   const token = randomToken(18);
-  insert('INSERT INTO invites (token_hash, email, role, domain_id, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+  const id = insert('INSERT INTO invites (token_hash, email, role, domain_id, created_by, expires_at, created_at, sent_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
     sha256(token),
     input.email ? normalizeEmail(input.email) : null,
     input.role,
@@ -742,9 +788,32 @@ adminRoutes.post('/invites', async (c) => {
     c.get('user').id,
     now() + input.days * 86_400_000,
     now(),
+    sendTo,
   ]);
-  act(c, 'admin.invite_created', input.email ?? '(open)', { role: input.role });
-  return c.json({ url: `${config.publicUrl}/register?invite=${token}` });
+  const url = `${config.publicUrl}/register?invite=${token}`;
+  if (sendTo) {
+    await sendInviteEmail({ to: sendTo, url, invitedBy: c.get('user').name || c.get('user').email, mailbox: input.email ? normalizeEmail(input.email) : null, days: input.days });
+    run('UPDATE invites SET emailed_at = ? WHERE id = ?', [now(), id]);
+  }
+  act(c, 'admin.invite_created', input.email ?? '(open)', { role: input.role, sentTo: sendTo });
+  return c.json({ id, url, emailed: !!sendTo });
+});
+
+/** Email the invitation again. The old link stops working (only a hash of it is stored). */
+adminRoutes.post('/invites/:id/resend', async (c) => {
+  const inv = get<any>('SELECT * FROM invites WHERE id = ?', [intParam(c, 'id')]);
+  if (!inv) throw notFound();
+  if (inv.used_at) throw badRequest('This invitation has already been used');
+  const { sendTo } = await body(c, z.object({ sendTo: z.string().max(254).optional() }));
+  const to = sendTo?.trim().toLowerCase() || inv.sent_to;
+  if (!to || !isEmail(to)) throw badRequest('Enter an address to send the invitation to');
+  const token = randomToken(18);
+  const days = Math.max(1, Math.round((inv.expires_at - inv.created_at) / 86_400_000));
+  run('UPDATE invites SET token_hash = ?, sent_to = ?, emailed_at = ?, expires_at = MAX(expires_at, ?) WHERE id = ?', [sha256(token), to, now(), now() + days * 86_400_000, inv.id]);
+  const url = `${config.publicUrl}/register?invite=${token}`;
+  await sendInviteEmail({ to, url, invitedBy: c.get('user').name || c.get('user').email, mailbox: inv.email, days });
+  act(c, 'admin.invite_resent', inv.email ?? '(open)', { sentTo: to });
+  return c.json({ url, sentTo: to });
 });
 
 adminRoutes.delete('/invites/:id', (c) => {

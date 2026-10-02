@@ -157,8 +157,8 @@ function backoffMs(attempt: number): number {
 
 function logDelivery(job: OutboxRow, event: string, providerId: number | null, recipients: string[], detail = '') {
   insert(
-    'INSERT INTO delivery_log (message_id, user_id, provider_id, event, recipients, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [job.message_id, job.user_id, providerId, event, recipients.join(', '), detail.slice(0, 2000), now()],
+    'INSERT INTO delivery_log (message_id, user_id, provider_id, outbox_id, event, recipients, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [job.message_id, job.user_id, providerId, job.id, event, recipients.join(', '), detail.slice(0, 2000), now()],
   );
 }
 

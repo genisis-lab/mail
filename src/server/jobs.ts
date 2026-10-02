@@ -6,6 +6,7 @@ import { processQueue } from './mail/outbound.js';
 import { purgeMessages } from './mail/store.js';
 import { wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
+import { pruneTokens } from './services/tokens.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
@@ -27,6 +28,8 @@ export function runMaintenance() {
   run(`DELETE FROM outbox WHERE status IN ('sent','cancelled') AND updated_at < ?`, [ts - 30 * DAY]);
   run('DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?', [ts - DAY]);
   run('DELETE FROM autoreply_log WHERE sent_at < ?', [ts - 30 * DAY]);
+  pruneTokens();
+  run('DELETE FROM roundtrip_tests WHERE sent_at < ?', [ts - 30 * DAY]);
   if (trash.length || spam.length) log.info(`Retention: purged ${trash.length} trash and ${spam.length} spam messages`);
 }
 

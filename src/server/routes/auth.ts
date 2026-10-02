@@ -2,14 +2,16 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { APP_NAME, APP_VERSION } from '../../shared/brand.js';
 import { get, insert, now, run } from '../db/index.js';
-import { decrypt, randomToken, sha256, verifyPassword, verifyTotp } from '../lib/crypto.js';
+import { decrypt, hashPassword, randomToken, sha256, verifyPassword, verifyTotp } from '../lib/crypto.js';
 import { badRequest, conflict, forbidden, unauthorized } from '../lib/http.js';
 import { normalizeEmail } from '../lib/addr.js';
 import { getSettings, setSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { createProvider } from '../services/providers.js';
 import { platform } from '../platform.js';
-import { createUser, getUserByEmail, sessionUser, getUser } from '../services/users.js';
+import { createUser, getUserByEmail, sessionUser, getUser, validatePassword } from '../services/users.js';
+import { markRecoveryVerified, sendPasswordReset, welcomeUser } from '../services/account-links.js';
+import { consumeToken, peekToken } from '../services/tokens.js';
 import { body, clearRateLimit, clientIp, createSession, destroySession, getPendingSession, rateLimit, SESSION_COOKIE, type AppEnv } from '../http/context.js';
 import { getCookie } from 'hono/cookie';
 
@@ -57,7 +59,9 @@ authRoutes.post('/login', async (c) => {
   const max = getSettings()['security.maxLoginAttempts'];
   rateLimit(`login:ip:${ip}`, max * 3, 15 * 60_000);
   rateLimit(`login:user:${normalizeEmail(email)}`, max, 15 * 60_000);
-  const user = getUserByEmail(email);
+  const found = getUserByEmail(email);
+  // Shared mailboxes have no password of their own; members open them from their account.
+  const user = found && found.kind !== 'shared' ? found : undefined;
   const ok = user ? await verifyPassword(password, user.password_hash) : await verifyPassword(password, 'scrypt$16384$8$1$AAAA$AAAA');
   if (!user || !ok) {
     audit(user?.id ?? null, 'auth.login_failed', normalizeEmail(email), undefined, ip);
@@ -106,6 +110,65 @@ authRoutes.post('/logout', (c) => {
   return c.json({ ok: true });
 });
 
+// ── Password reset & account setup links ────────────────────────────────────
+
+authRoutes.post('/forgot', async (c) => {
+  const { email } = await body(c, z.object({ email: z.string().min(3).max(254) }));
+  const ip = clientIp(c);
+  rateLimit(`forgot:ip:${ip}`, 10, 60 * 60_000);
+  rateLimit(`forgot:user:${normalizeEmail(email)}`, 3, 60 * 60_000);
+  const user = getUserByEmail(email);
+  // Same answer whether or not the account exists, so this can't be used to probe addresses.
+  if (user && user.kind === 'person' && user.status === 'active' && user.recovery_email && user.recovery_verified_at) {
+    await sendPasswordReset(user, user.recovery_email);
+    audit(user.id, 'auth.reset_requested', user.email, undefined, ip);
+  } else {
+    audit(user?.id ?? null, 'auth.reset_requested_unavailable', normalizeEmail(email), undefined, ip);
+  }
+  return c.json({ ok: true });
+});
+
+authRoutes.get('/reset/:token', (c) => {
+  const row = peekToken(c.req.param('token'), ['reset', 'setup']);
+  const user = row ? getUser(row.user_id) : undefined;
+  if (!row || !user || user.status !== 'active') return c.json({ valid: false });
+  return c.json({ valid: true, kind: row.kind, email: user.email, name: user.name });
+});
+
+authRoutes.post('/reset', async (c) => {
+  const input = await body(c, z.object({ token: z.string().min(20).max(100), password: z.string().min(1).max(256) }));
+  rateLimit(`reset:${clientIp(c)}`, 20, 60 * 60_000);
+  const pending = peekToken(input.token, ['reset', 'setup']);
+  if (!pending) throw badRequest('This link is invalid or has expired. Ask for a new one.');
+  validatePassword(input.password);
+  const row = consumeToken(input.token, ['reset', 'setup']);
+  const user = row ? getUser(row.user_id) : undefined;
+  if (!row || !user || user.status !== 'active') throw badRequest('This link is invalid or has expired. Ask for a new one.');
+  run('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?', [await hashPassword(input.password), now(), user.id]);
+  run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+  // A setup link sent to a personal address proves that address works: keep it for recovery.
+  const sentTo = row.data ? (JSON.parse(row.data) as { email?: string | null }).email : null;
+  if (row.kind === 'setup' && sentTo) markRecoveryVerified(user.id, sentTo);
+  audit(user.id, row.kind === 'setup' ? 'auth.account_setup' : 'auth.password_reset', user.email, undefined, clientIp(c));
+  if (user.totp_enabled) return c.json({ ok: true, signedIn: false });
+  createSession(c, user.id);
+  run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
+  return c.json({ ok: true, signedIn: true, user: sessionUser(getUser(user.id)!) });
+});
+
+authRoutes.post('/verify-recovery', async (c) => {
+  const { token } = await body(c, z.object({ token: z.string().min(20).max(100) }));
+  const row = consumeToken(token, ['verify_recovery']);
+  const email = row?.data ? (JSON.parse(row.data) as { email: string }).email : null;
+  const user = row ? getUser(row.user_id) : undefined;
+  if (!row || !user || !email || (user.recovery_email ?? '').toLowerCase() !== email.toLowerCase()) {
+    throw badRequest('This link is invalid or has expired.');
+  }
+  markRecoveryVerified(user.id, email);
+  audit(user.id, 'account.recovery_verified', email, undefined, clientIp(c));
+  return c.json({ ok: true, email });
+});
+
 authRoutes.get('/invite/:token', (c) => {
   const inv = get<any>(
     `SELECT i.email, i.role, i.expires_at, i.used_at, d.name AS domain FROM invites i LEFT JOIN domains d ON d.id = i.domain_id WHERE i.token_hash = ?`,
@@ -131,6 +194,7 @@ authRoutes.post('/register', async (c) => {
   const email = normalizeEmail(`${input.localPart}@${input.domain}`);
   let role: 'user' | 'admin' = 'user';
   let inviteId: number | null = null;
+  let inviteSentTo: string | null = null;
   if (input.invite) {
     const inv = get<any>('SELECT i.*, d.name AS domain FROM invites i LEFT JOIN domains d ON d.id = i.domain_id WHERE i.token_hash = ?', [sha256(input.invite)]);
     if (!inv || inv.used_at || inv.expires_at < now()) throw badRequest('This invitation is invalid or has expired');
@@ -138,6 +202,7 @@ authRoutes.post('/register', async (c) => {
     if (inv.domain && inv.domain.toLowerCase() !== input.domain.toLowerCase()) throw badRequest(`This invitation is for @${inv.domain}`);
     role = inv.role === 'admin' ? 'admin' : 'user';
     inviteId = inv.id;
+    inviteSentTo = inv.sent_to ?? null;
   } else if (s['registration.mode'] === 'open') {
     const allowed = s['registration.domains'].map((id) => get<{ name: string }>('SELECT name FROM domains WHERE id = ?', [id])?.name?.toLowerCase());
     if (!allowed.includes(input.domain.toLowerCase())) throw forbidden('Registration is not open for that domain');
@@ -149,6 +214,9 @@ authRoutes.post('/register', async (c) => {
   }
   const id = await createUser({ email, name: input.name, password: input.password, role });
   if (inviteId) run('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ?', [now(), id, inviteId]);
+  // The invitation link reached this address, so it's a proven way to recover the account.
+  if (inviteSentTo) markRecoveryVerified(id, inviteSentTo);
+  await welcomeUser(id);
   audit(id, 'auth.register', email, { invite: !!inviteId }, clientIp(c));
   createSession(c, id);
   return c.json({ user: sessionUser(getUser(id)!) });
@@ -192,6 +260,7 @@ setupRoutes.post('/', async (c) => {
   insert('INSERT INTO domains (name, verify_token, created_at) VALUES (?, ?, ?)', [domain, randomToken(12), now()]);
   const id = await createUser({ email: `${input.localPart}@${domain}`, name: input.name, password: input.password, role: 'owner' });
   setSettings({ 'instance.name': input.instanceName, 'instance.setupComplete': true });
+  await welcomeUser(id);
   if (input.email.provider === 'cloudflare') {
     createProvider({ name: 'Cloudflare Email Service', type: 'cloudflare-binding', config: { binding }, isDefault: true });
   } else if (input.email.provider === 'resend') {

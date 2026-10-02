@@ -22,6 +22,9 @@ export interface UserRow {
   created_at: number;
   last_login_at: number | null;
   password_changed_at: number | null;
+  kind: 'person' | 'shared';
+  recovery_email: string | null;
+  recovery_verified_at: number | null;
 }
 
 export function getUser(id: number): UserRow | undefined {

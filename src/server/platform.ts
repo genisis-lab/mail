@@ -51,6 +51,8 @@ export interface Platform {
   systemInfo(): Record<string, unknown>;
   /** Ask the runtime to run background work no later than `at` (Durable Object alarm). */
   wake?(at: number): void;
+  /** Keep a promise running after the response is sent (e.g. push notifications). */
+  defer?(promise: Promise<unknown>): void;
   /** Durable Object point-in-time recovery. */
   pointInTime?: {
     /** Bookmark for the current state. */

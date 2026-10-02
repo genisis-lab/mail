@@ -32,6 +32,18 @@ export const DEFAULT_SETTINGS = {
   'mail.allowExternalForwarding': true,
   'mail.maxRetries': 6,
   'mail.inboundRejectUnknown': true,
+
+  'users.welcomeMessage': true,
+  'aliases.selfService': false,
+  'aliases.maxPerUser': 5,
+
+  'alerts.email': true,
+  'alerts.externalTo': '',
+  'alerts.queueThreshold': 50,
+  'alerts.quotaPercent': 90,
+
+  'cloudflare.apiToken': '',
+  'cloudflare.workerName': 'wren',
 };
 
 export type Settings = typeof DEFAULT_SETTINGS;

@@ -79,6 +79,7 @@ function workersPlatform(ctx: DurableObjectState, env: Env, schedule: (at: numbe
           },
         },
     wake: schedule,
+    defer: (p) => ctx.waitUntil(p.catch((err) => log.warn('Background task failed', err))),
     emailBindings,
     async sendViaBinding(binding, from, to, raw) {
       if (!emailBindings().includes(binding)) {
