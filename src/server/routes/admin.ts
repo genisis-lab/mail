@@ -128,6 +128,7 @@ function userDto(u: any) {
     lastLoginAt: u.last_login_at,
     aliases: u.aliases ?? 0,
     messages: u.messages ?? 0,
+    recoveryEmail: u.recovery_email ?? null,
   };
 }
 

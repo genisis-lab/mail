@@ -17,7 +17,7 @@ export interface DnsReport {
   checkedAt: number;
   verification: { ok: boolean; expected: string; found: string[] };
   mx: { ok: boolean | null; records: { exchange: string; priority: number }[]; hint: string };
-  spf: { ok: boolean; record: string | null; includesProvider: boolean | null; expectedInclude: string | null };
+  spf: { ok: boolean; record: string | null; includesProvider: boolean | null; expectedInclude: string | null; host?: string };
   dkim: { selector: string; found: boolean; value: string | null }[];
   dmarc: { ok: boolean; record: string | null; policy: string | null };
   errors: string[];
@@ -41,6 +41,20 @@ export function sendingProviderType(domain: { provider_id: number | null }): str
 /** Providers whose SPF and DKIM records the provider adds itself when you onboard the domain. */
 const MANAGED_RECORDS = new Set(['cloudflare-binding', 'cloudflare']);
 
+/**
+ * Providers that send from their own bounce subdomain: SPF (and a bounce MX)
+ * live there, not on the domain itself.
+ */
+const RETURN_PATH: Record<string, { label: string; mx: string }> = {
+  resend: { label: 'send', mx: 'feedback-smtp.<region>.amazonses.com' },
+};
+
+/** Where SPF is checked for a domain: the provider's bounce subdomain, or the domain. */
+function spfHost(domain: string, providerType: string | null): string {
+  const rp = providerType ? RETURN_PATH[providerType] : undefined;
+  return rp ? `${rp.label}.${domain}` : domain;
+}
+
 /** DNS records an admin should create for this domain. */
 export function recommendedRecords(domain: { name: string; verify_token: string; provider_id: number | null; dkim_selector: string | null }): DnsRecordHint[] {
   const records: DnsRecordHint[] = [
@@ -55,19 +69,44 @@ export function recommendedRecords(domain: { name: string; verify_token: string;
   const type = sendingProviderType(domain);
   const def = type ? getProviderDef(type) : undefined;
   const managed = !!type && MANAGED_RECORDS.has(type);
-  records.push({
-    type: 'MX',
-    host: domain.name,
-    value: 'route1.mx.cloudflare.net (+ route2, route3)',
-    priority: 10,
-    purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker. (Receiving through a provider webhook such as Resend instead? Use that provider’s MX records.)',
-  });
+  const returnPath = type ? RETURN_PATH[type] : undefined;
+  if (def?.inbound && !managed) {
+    records.push({
+      type: 'MX',
+      host: domain.name,
+      value: `(the MX record ${def.name} shows)`,
+      priority: 10,
+      purpose: `Mail arrives through ${def.name}: turn on receiving for ${domain.name} there, add the MX record it shows, and point its inbound webhook at the URL on the Providers page. (Receiving through Cloudflare Email Routing instead? Use route1/route2/route3.mx.cloudflare.net.)`,
+    });
+  } else {
+    records.push({
+      type: 'MX',
+      host: domain.name,
+      value: 'route1.mx.cloudflare.net (+ route2, route3)',
+      priority: 10,
+      purpose: 'Added automatically when you enable Cloudflare Email Routing. Route the catch-all to this Worker. (Receiving through a provider webhook such as Resend instead? Use that provider’s MX records.)',
+    });
+  }
   if (managed) {
     records.push({
       type: 'TXT',
       host: domain.name,
       value: '(added by Cloudflare)',
       purpose: `SPF and DKIM are created by Cloudflare when you onboard ${domain.name} under Email Service → Email Sending (or use “Set up with Cloudflare” below). Don’t replace them by hand.`,
+    });
+  } else if (def?.spfInclude && returnPath) {
+    records.push({
+      type: 'MX',
+      host: `${returnPath.label}.${domain.name}`,
+      value: `(${returnPath.mx}, as ${def.name} shows)`,
+      priority: 10,
+      purpose: `Bounce handling for ${def.name}. The region in the host name comes from your ${def.name} domain page.`,
+    });
+    records.push({
+      type: 'TXT',
+      host: `${returnPath.label}.${domain.name}`,
+      value: `v=spf1 include:${def.spfInclude} ~all`,
+      purpose: `SPF for ${def.name}’s bounce subdomain. ${def.name} sends from ${returnPath.label}.${domain.name}, so the domain’s own SPF record can stay as it is.`,
     });
   } else if (def?.spfInclude) {
     records.push({
@@ -126,9 +165,8 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
       ? 'MX points to Cloudflare Email Routing. Make sure the catch-all rule sends mail to this Worker.'
       : `MX points to ${mxRecords.map((m) => m.exchange).join(', ')}. That's fine if that provider (for example Resend) forwards mail to Wren with a webhook.`;
 
-  const rootTxt = await txt(d.name);
-  const spfRecord = rootTxt.find((t) => t.toLowerCase().startsWith('v=spf1')) ?? null;
   const providerType = sendingProviderType(d);
+  const spfRecord = (await txt(spfHost(d.name, providerType))).find((t) => t.toLowerCase().startsWith('v=spf1')) ?? null;
   const expectedInclude = providerType ? getProviderDef(providerType)?.spfInclude ?? null : null;
 
   const selectors = (d.dkim_selector || (providerType ? getProviderDef(providerType)?.dkimSelectors?.join(',') : '') || '')
@@ -162,6 +200,7 @@ export async function checkDomainDns(domainId: number): Promise<DnsReport> {
       record: spfRecord,
       includesProvider: expectedInclude && spfRecord ? spfRecord.includes(`include:${expectedInclude}`) : null,
       expectedInclude,
+      host: spfHost(d.name, providerType),
     },
     dkim,
     dmarc: { ok: !!dmarcRecord, record: dmarcRecord, policy },

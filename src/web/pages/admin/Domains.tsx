@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, Circle, Globe, Plus, RefreshCw, Trash2, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, Cloud, Globe, MinusCircle, Plus, RefreshCw, Trash2, XCircle } from 'lucide-react';
 import { api } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, Empty, Field, Input, Modal, Select, Spinner, Switch } from '../../components/ui';
+import { Badge, Button, Card, cx, Empty, Field, Input, Modal, Select, Spinner, Switch } from '../../components/ui';
 import { CopyField, PageHeader, StatusDot, Table } from './common';
 import { useDomains } from './Users';
 import { useProviders } from './Providers';
@@ -40,11 +40,9 @@ export function DomainsPage() {
           </Empty>
         </Card>
       ) : (
-        <Table head={['Domain', 'Outbound provider', 'Mailboxes', 'DNS', '']}>
+        <Table head={['Domain', 'Outbound provider', 'Mailboxes', 'DNS health', '']}>
           {domains.data.map((d) => {
             const dns = d.dns;
-            const okCount = dns ? [dns.verification.ok, dns.mx.ok, dns.spf.ok, dns.dmarc.ok, ...(dns.dkim ?? []).map((k: any) => k.found)].filter(Boolean).length : 0;
-            const total = dns ? 4 + (dns.dkim?.length ?? 0) : 0;
             return (
               <tr key={d.id} className="cursor-pointer hover:bg-hover" onClick={() => navigate(`/admin/domains/${d.id}`)}>
                 <td>
@@ -60,7 +58,16 @@ export function DomainsPage() {
                 <td className="text-muted tabular-nums">
                   {d.mailboxes} · {d.aliases} alias/group
                 </td>
-                <td className="text-xs text-muted">{dns ? `${okCount}/${total} records OK · ${relativeTime(d.dnsCheckedAt)}` : 'Not checked'}</td>
+                <td className="text-xs text-muted">
+                  {dns ? (
+                    <>
+                      <DnsBadges dns={dns} />
+                      <span className="mt-1 block">checked {relativeTime(d.dnsCheckedAt)}</span>
+                    </>
+                  ) : (
+                    'Not checked yet'
+                  )}
+                </td>
                 <td className="text-right">
                   <Link to={`/admin/domains/${d.id}`} className="text-sm font-medium text-accent hover:underline" onClick={(e) => e.stopPropagation()}>
                     Configure
@@ -118,6 +125,27 @@ export function DomainsPage() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+/** MX / SPF / DKIM / DMARC at a glance. */
+function DnsBadges({ dns }: { dns: any }) {
+  const dkim = (dns.dkim ?? []) as { found: boolean }[];
+  const items: [string, boolean | null][] = [
+    ['MX', dns.mx.ok],
+    ['SPF', dns.spf.ok && dns.spf.includesProvider !== false],
+    ['DKIM', dkim.length ? dkim.some((k) => k.found) : null],
+    ['DMARC', dns.dmarc.ok],
+  ];
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      {items.map(([name, ok]) => (
+        <Badge key={name} tone={ok === null ? 'neutral' : ok ? 'ok' : name === 'DMARC' ? 'warn' : 'danger'}>
+          <span aria-hidden>{ok === null ? '·' : ok ? '✓' : '✕'}</span> {name}
+          <span className="sr-only">{ok === null ? 'not checked' : ok ? 'OK' : 'missing'}</span>
+        </Badge>
+      ))}
+    </span>
   );
 }
 
@@ -205,21 +233,21 @@ export function DomainDetail() {
         }
       />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-6">
           <Card title="DNS records" description="Create these at your DNS host (Cloudflare, Route 53, Namecheap…). Values from your provider’s dashboard take precedence.">
             <div className="space-y-4">
               {q.data.records.map((r: any, i: number) => (
                 <div key={i} className="rounded-xl border border-line p-3">
-                  <div className="mb-2 flex items-center gap-2">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
                     <Badge tone="accent">{r.type}</Badge>
                     {r.priority !== undefined && <Badge>priority {r.priority}</Badge>}
-                    {r.optional && <Badge>optional</Badge>}
-                    <span className="text-xs text-muted">{r.purpose}</span>
+                    {r.optional && <Badge tone="neutral">optional</Badge>}
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-[1fr_1.4fr]">
-                    <CopyField value={r.host} onCopy={() => toast('Copied')} />
-                    <CopyField value={r.value} onCopy={() => toast('Copied')} />
+                  <p className="mb-2 text-xs leading-relaxed text-muted">{r.purpose}</p>
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+                    <CopyField value={r.host} label="host name" onCopy={() => toast('Host copied')} />
+                    <CopyField value={r.value} label="value" onCopy={() => toast('Value copied')} />
                   </div>
                 </div>
               ))}
@@ -240,7 +268,7 @@ export function DomainDetail() {
                   {dns.mx.hint}
                   {dns.mx.records.length > 0 && <div className="mt-1 font-mono text-xs">{dns.mx.records.map((m: any) => `${m.priority} ${m.exchange}`).join(' · ')}</div>}
                 </Check>
-                <Check ok={dns.spf.ok && dns.spf.includesProvider !== false} label="SPF">
+                <Check ok={dns.spf.ok && dns.spf.includesProvider !== false} label={dns.spf.host && dns.spf.host !== d.name ? `SPF (${dns.spf.host})` : 'SPF'}>
                   {dns.spf.record ? <span className="font-mono text-xs break-all">{dns.spf.record}</span> : 'No SPF record found.'}
                   {dns.spf.includesProvider === false && <div className="mt-1 text-warn">Missing include:{dns.spf.expectedInclude} (fine if your provider uses its own return-path domain).</div>}
                 </Check>
@@ -270,7 +298,7 @@ export function DomainDetail() {
           </Card>
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <Card title="Sending">
             <div className="space-y-4">
               <Field label="Outbound provider">
@@ -311,6 +339,7 @@ export function DomainDetail() {
               <Switch checked={d.enabled} onChange={(v) => void update({ enabled: v })} label="Domain enabled" description="Disabled domains don’t receive mail and can’t be sent from." />
             </div>
           </Card>
+          <CloudflareCard domain={d} onDone={refresh} />
         </div>
       </div>
     </div>
@@ -328,5 +357,151 @@ function DkimField({ value, onSave }: { value: string; onSave: (v: string) => vo
         </Button>
       </div>
     </Field>
+  );
+}
+
+interface SetupStep {
+  id: string;
+  title: string;
+  status: 'done' | 'skipped' | 'failed' | 'warn';
+  detail: string;
+}
+
+/**
+ * One-click Cloudflare setup: Email Routing to this Worker, plus Email Sending.
+ * A domain whose mail goes somewhere else today is only switched after an
+ * explicit confirmation.
+ */
+function CloudflareCard({ domain: d, onDone }: { domain: any; onDone: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const cf = useQuery({ queryKey: ['admin', 'cloudflare'], queryFn: () => api.get<{ configured: boolean; workerName: string }>('/api/admin/cloudflare') });
+  const [token, setToken] = useState('');
+  const [worker, setWorker] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(true);
+  const [confirmMx, setConfirmMx] = useState(false);
+  const [steps, setSteps] = useState<SetupStep[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const mx: { exchange: string }[] = d.dns?.mx.records ?? [];
+  const elsewhere = mx.filter((m) => !/\.mx\.cloudflare\.net\.?$/i.test(m.exchange));
+  const receivesElsewhere = elsewhere.length > 0;
+  if (cf.isLoading) return null;
+
+  const saveToken = async () => {
+    setBusy(true);
+    try {
+      await api.put('/api/admin/cloudflare', { apiToken: token.trim(), ...(worker.trim() ? { workerName: worker.trim() } : {}) });
+      setToken('');
+      await qc.invalidateQueries({ queryKey: ['admin', 'cloudflare'] });
+      toast('Cloudflare token saved');
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const run = async () => {
+    setBusy(true);
+    setSteps(null);
+    try {
+      const r = await api.post<{ steps: SetupStep[] }>(`/api/admin/domains/${d.id}/cloudflare-setup`, { sending, replaceMx: receivesElsewhere && confirmMx });
+      setSteps(r.steps);
+      onDone();
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // A domain that already receives elsewhere: keep this out of the way until asked for.
+  if (receivesElsewhere && !open && !steps) {
+    return (
+      <Card title={<span className="flex items-center gap-2"><Cloud className="size-4 text-muted" /> Cloudflare</span>}>
+        <p className="text-[13px] text-muted">
+          {d.name} receives mail through {elsewhere.map((m) => m.exchange).join(', ')}. One-click Cloudflare setup would move it to Cloudflare Email Routing.
+        </p>
+        <Button size="sm" variant="ghost" className="mt-3 -ml-3" onClick={() => setOpen(true)}>
+          Set up with Cloudflare anyway…
+        </Button>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title={<span className="flex items-center gap-2"><Cloud className="size-4 text-[#f38020]" /> Set up with Cloudflare</span>} description="Turns on Email Routing to this Worker and Email Sending for the domain, and creates the DNS records.">
+      {!cf.data?.configured ? (
+        <div className="space-y-3">
+          <p className="text-[13px] text-muted">
+            Create an API token in the Cloudflare dashboard (My Profile → API Tokens) with <b>Zone: Read</b>, <b>DNS: Edit</b>, <b>Email Routing Rules: Edit</b>, <b>Zone Settings: Edit</b> and <b>Email Sending: Edit</b> for this zone. It’s stored encrypted.
+          </p>
+          <Field label="API token">
+            <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+          </Field>
+          <Field label="Worker name" help="As shown in Workers & Pages. Usually wren.">
+            <Input value={worker} onChange={(e) => setWorker(e.target.value)} placeholder={cf.data?.workerName ?? 'wren'} />
+          </Field>
+          <Button variant="primary" size="sm" loading={busy} disabled={token.trim().length < 20} onClick={() => void saveToken()}>
+            Save token
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Switch checked={sending} onChange={setSending} label="Also set up sending" description="Onboards the domain in Email Service so Wren can send through it." />
+          {receivesElsewhere && (
+            <div className="rounded-xl border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] p-3 text-[13px]">
+              <p className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+                <span>
+                  Mail for {d.name} goes to <b>{elsewhere.map((m) => m.exchange).join(', ')}</b> today. Turning on Email Routing replaces those MX records, and that service stops receiving it.
+                </span>
+              </p>
+              <label className="mt-2 flex items-center gap-2">
+                <input type="checkbox" className="accent-[var(--accent)]" checked={confirmMx} onChange={(e) => setConfirmMx(e.target.checked)} />
+                Yes, move this domain’s mail to Cloudflare
+              </label>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="primary" size="sm" loading={busy} disabled={receivesElsewhere && !confirmMx} onClick={() => void run()}>
+              {steps ? 'Run again' : 'Set up now'}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                if (!window.confirm('Remove the stored Cloudflare token?')) return;
+                await api.del('/api/admin/cloudflare');
+                await qc.invalidateQueries({ queryKey: ['admin', 'cloudflare'] });
+              }}
+            >
+              Remove token
+            </Button>
+          </div>
+          {steps && (
+            <ol className="mt-1 space-y-2 border-t border-line pt-3" aria-live="polite">
+              {steps.map((st) => (
+                <li key={st.id} className="flex gap-2 text-[13px]">
+                  {st.status === 'done' ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok" aria-label="Done" />
+                  ) : st.status === 'skipped' ? (
+                    <MinusCircle className="mt-0.5 size-4 shrink-0 text-faint" aria-label="Already done" />
+                  ) : st.status === 'warn' ? (
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" aria-label="Needs attention" />
+                  ) : (
+                    <XCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-label="Failed" />
+                  )}
+                  <span className="min-w-0">
+                    <span className={cx('font-medium', st.status === 'failed' && 'text-danger')}>{st.title}</span>
+                    <span className="block break-words text-muted">{st.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

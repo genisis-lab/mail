@@ -43,12 +43,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={show}>
       {children}
-      <div className="pointer-events-none fixed bottom-6 left-6 z-[80] flex flex-col gap-2">
+      {/* Always present, so screen readers announce what appears in it. */}
+      <div aria-live="polite" aria-atomic="false" className="pointer-events-none fixed right-3 bottom-3 left-3 z-[80] flex flex-col gap-2 sm:right-auto sm:bottom-6 sm:left-6">
         {items.map((t) => (
           <div
             key={t.id}
-            role="status"
-            className={`animate-slide-up pointer-events-auto flex min-w-72 max-w-[480px] items-center gap-4 rounded-lg px-4 py-3 text-sm shadow-float ${
+            role={t.tone === 'error' ? 'alert' : 'status'}
+            className={`animate-slide-up pointer-events-auto flex max-w-[480px] items-center gap-4 rounded-lg px-4 py-3 text-sm shadow-float sm:min-w-72 ${
               t.tone === 'error' ? 'bg-[#b3261e] text-white' : 'bg-[#2b2f36] text-white dark:bg-[#e6e8ec] dark:text-[#1d2129]'
             }`}
           >

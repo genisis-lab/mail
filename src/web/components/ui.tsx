@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import {
   forwardRef,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -207,6 +208,53 @@ export function Kbd({ children }: { children: ReactNode }) {
 
 // ── Modal ───────────────────────────────────────────────────────────────────
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+/**
+ * Keep keyboard focus inside a dialog while it's open, move focus into it, and
+ * give focus back to whatever had it when it closes.
+ */
+export function useDialogFocus(open: boolean, ref: React.RefObject<HTMLElement | null>, onClose: () => void) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const t = setTimeout(() => {
+      const el = ref.current;
+      if (!el || el.contains(document.activeElement)) return; // an autoFocus field already has it
+      const field = el.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [contenteditable="true"]');
+      (field ?? el.querySelector<HTMLElement>(FOCUSABLE) ?? el).focus();
+    }, 0);
+    const onKey = (e: KeyboardEvent) => {
+      const el = ref.current;
+      if (!el) return;
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close.current();
+      } else if (e.key === 'Tab') {
+        const items = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((n) => n.offsetParent !== null);
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !el.contains(document.activeElement))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('keydown', onKey, true);
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, [open, ref]);
+}
+
 export function Modal({
   open,
   onClose,
@@ -222,26 +270,31 @@ export function Modal({
   footer?: ReactNode;
   width?: string;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useDialogFocus(open, ref, onClose);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh] backdrop-blur-[1px]" onMouseDown={onClose}>
-      <div className={cx('animate-pop w-full rounded-2xl bg-panel shadow-float', width)} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal>
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh] backdrop-blur-[1px] max-sm:px-3 max-sm:pt-4" onMouseDown={onClose}>
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className={cx('animate-pop w-full rounded-2xl bg-panel shadow-float outline-none', width)}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+      >
         {title && (
-          <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-2">
-            <h2 className="text-lg font-semibold">{title}</h2>
+          <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-2 max-sm:px-4">
+            <h2 id={titleId} className="text-lg font-semibold">{title}</h2>
             <IconButton label="Close" size="sm" onClick={onClose}>
               <X className="size-4" />
             </IconButton>
           </div>
         )}
-        <div className="px-6 py-3">{children}</div>
-        {footer && <div className="flex justify-end gap-2 px-6 pt-2 pb-5">{footer}</div>}
+        <div className="px-6 py-3 max-sm:px-4">{children}</div>
+        {footer && <div className="flex flex-wrap justify-end gap-2 px-6 pt-2 pb-5 max-sm:px-4">{footer}</div>}
       </div>
     </div>,
     document.body,
@@ -278,6 +331,7 @@ export function Menu({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const viaKeyboard = useRef(false);
 
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
@@ -297,7 +351,21 @@ export function Menu({
       if (panel.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        anchor.current?.querySelector<HTMLElement>('button')?.focus();
+        return;
+      }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+      const items = [...(panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)') ?? [])];
+      if (!items.length) return;
+      e.preventDefault();
+      const i = items.indexOf(document.activeElement as HTMLElement);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+      items[next].focus();
+    };
+    if (viaKeyboard.current) setTimeout(() => panel.current?.querySelector<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]')?.focus(), 0);
     document.addEventListener('mousedown', close);
     window.addEventListener('keydown', key);
     window.addEventListener('resize', () => setOpen(false), { once: true });
@@ -314,6 +382,8 @@ export function Menu({
           open,
           onClick: (e) => {
             e.stopPropagation();
+            // A click with no pointer position came from the keyboard (Enter/Space).
+            viaKeyboard.current = e.detail === 0;
             setOpen((o) => !o);
           },
         })}
@@ -323,24 +393,27 @@ export function Menu({
           <div
             ref={panel}
             style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
-            className={cx('animate-pop fixed z-[70] max-h-[70vh] overflow-y-auto rounded-xl border border-line bg-panel py-1.5 shadow-float', width)}
+            role={children ? undefined : 'menu'}
+            className={cx('animate-pop fixed z-[70] max-h-[70vh] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-line bg-panel py-1.5 shadow-float', width)}
             onClick={(e) => e.stopPropagation()}
           >
             {children
               ? children(() => setOpen(false))
               : items?.map((it, i) =>
                   it.divider ? (
-                    <div key={i} className="my-1.5 border-t border-line" />
+                    <div key={i} role="separator" className="my-1.5 border-t border-line" />
                   ) : (
                     <button
                       key={i}
+                      role={it.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'}
+                      aria-checked={it.checked}
                       disabled={it.disabled}
                       onClick={() => {
                         setOpen(false);
                         it.onClick?.();
                       }}
                       className={cx(
-                        'flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-hover disabled:opacity-40',
+                        'flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-hover focus-visible:bg-hover focus-visible:outline-none disabled:opacity-40',
                         it.danger ? 'text-danger' : 'text-fg',
                       )}
                     >
@@ -365,10 +438,12 @@ export function Menu({
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { value: T; label: ReactNode }[]; value: T; onChange: (v: T) => void }) {
   return (
-    <div className="flex gap-1 overflow-x-auto border-b border-line">
+    <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-line">
       {tabs.map((t) => (
         <button
           key={t.value}
+          role="tab"
+          aria-selected={value === t.value}
           onClick={() => onChange(t.value)}
           className={cx(
             '-mb-px border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors',

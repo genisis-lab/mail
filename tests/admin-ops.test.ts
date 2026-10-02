@@ -246,3 +246,37 @@ describe('delivery logs', () => {
     expect((await h.call('GET', `/api/admin/inbound-log/${rejected[0].id}`)).body.entry.reason).toMatch(/no such mailbox/);
   });
 });
+
+describe('DNS guidance follows the sending provider', () => {
+  it('shows Resend’s records, not Cloudflare’s, and checks SPF where Resend puts it', async () => {
+    const pid = insert(`INSERT INTO providers (name, type, config, enabled, is_default, inbound_token, created_at) VALUES ('Resend', 'resend', '{}', 1, 0, 'tok-dns-test', ?)`, [now()]);
+    const domainId = get<{ id: number }>(`SELECT id FROM domains WHERE name = 'wren.test'`)!.id;
+    run('UPDATE domains SET provider_id = ? WHERE id = ?', [pid, domainId]);
+    const original = platform();
+    setPlatform({
+      ...original,
+      dns: {
+        txt: async (name: string) => (name === 'send.wren.test' ? ['v=spf1 include:amazonses.com ~all'] : name === 'resend._domainkey.wren.test' ? ['p=MIGf'] : []),
+        cname: async () => [],
+        mx: async () => [{ exchange: 'inbound-smtp.us-east-1.amazonaws.com', priority: 10 }],
+      },
+    });
+    try {
+      const records = (await h.call('GET', `/api/admin/domains/${domainId}`)).body.records;
+      const by = (type: string, host: string) => records.find((r: any) => r.type === type && r.host === host);
+      expect(by('MX', 'wren.test').value).toBe('(the MX record Resend shows)');
+      expect(by('MX', 'send.wren.test').value).toMatch(/^\(feedback-smtp/);
+      expect(by('TXT', 'send.wren.test').value).toBe('v=spf1 include:amazonses.com ~all');
+      expect(by('TXT', 'resend._domainkey.wren.test').value).toBe('(copy the DKIM value from Resend)');
+      expect(records.some((r: any) => r.value === 'v=spf1 ~all' || r.value.includes('cloudflare.net'))).toBe(false);
+      await h.call('POST', `/api/admin/domains/${domainId}/check`);
+      const dns = (await h.call('GET', `/api/admin/domains/${domainId}`)).body.domain.dns;
+      expect(dns.spf).toMatchObject({ ok: true, includesProvider: true, host: 'send.wren.test' });
+      expect(dns.dkim).toEqual([{ selector: 'resend', found: true, value: 'p=MIGf' }]);
+    } finally {
+      setPlatform(original);
+      run('UPDATE domains SET provider_id = NULL WHERE id = ?', [domainId]);
+      run('DELETE FROM providers WHERE id = ?', [pid]);
+    }
+  });
+});

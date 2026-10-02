@@ -211,6 +211,38 @@ button:disabled {
   display: none;
 }
 
+/* Admin tables become cards on phones (see Table in pages/admin/common.tsx). */
+@media (max-width: 639px) {
+  .wren-table thead {
+    display: none;
+  }
+  .wren-table,
+  .wren-table > tbody,
+  .wren-table > tbody > tr,
+  .wren-table > tbody > tr > td {
+    display: block;
+    width: 100%;
+  }
+  .wren-table > tbody > tr {
+    padding: 12px 16px;
+  }
+  .wren-table > tbody > tr > td {
+    padding: 3px 0;
+    text-align: left;
+  }
+  .wren-table > tbody > tr > td:empty {
+    display: none;
+  }
+  .wren-table > tbody > tr > td[data-label]:not([data-label='']):not(:first-child)::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 7.5rem;
+    margin-right: 0.5rem;
+    font-size: 12px;
+    color: var(--muted);
+  }
+}
+
 @media print {
   .no-print {
     display: none !important;

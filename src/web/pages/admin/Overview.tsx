@@ -1,11 +1,22 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowRight, Database, Globe, Info, Mail, PlugZap, Send, Users } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, ArrowRight, BellRing, CheckCircle2, ChevronDown, Circle, CircleDashed, Database, Globe, Info, Loader2, Mail, PlugZap, Send, Users } from 'lucide-react';
 import { api } from '../../lib/api';
 import { fileSize, number, relativeTime } from '../../lib/format';
-import { Badge, Card, cx, Spinner, Stat } from '../../components/ui';
+import { useToast } from '../../components/toast';
+import { Badge, Button, Card, cx, Spinner, Stat } from '../../components/ui';
 import { PageHeader, StatusDot } from './common';
+import { useAlerts, type AlertItem } from './alerts';
+
+interface ChecklistItem {
+  id: string;
+  title: string;
+  status: 'done' | 'todo' | 'warn' | 'pending';
+  detail: string;
+  action?: { label: string; href?: string; api?: string };
+  optional?: boolean;
+}
 
 interface OverviewData {
   version: string;
@@ -51,6 +62,9 @@ export function Overview() {
           ))}
         </div>
       )}
+
+      <AlertsCard />
+      <SetupChecklist />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Users" icon={<Users className="size-4" />} value={number(d.users.total)} sub={`${d.users.active} active · ${d.users.admins} admin${d.users.admins === 1 ? '' : 's'}`} />
@@ -100,7 +114,10 @@ export function Overview() {
                       <p className="flex items-center gap-2 text-sm font-medium">
                         {p.name} {p.is_default ? <Badge tone="accent">default</Badge> : null}
                       </p>
-                      <p className="truncate text-xs text-muted">{recentError ? `Error: ${p.last_error}` : p.typeName}</p>
+                      {/* The type only adds something when the name doesn't already say it. */}
+                      {(recentError || p.typeName.toLowerCase() !== p.name.toLowerCase()) && (
+                        <p className={cx('truncate text-xs', recentError ? 'text-danger' : 'text-muted')}>{recentError ? `Error: ${p.last_error}` : p.typeName}</p>
+                      )}
                     </div>
                     <div className="text-right text-xs text-muted tabular-nums">
                       <div>{number(p.sent_count)} sent</div>
@@ -137,6 +154,187 @@ export function Overview() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function AlertsCard() {
+  const alerts = useAlerts();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [checking, setChecking] = useState(false);
+  const open = alerts.data?.open ?? [];
+  if (!open.length) return null;
+  const tone = (a: AlertItem) => (a.severity === 'critical' ? 'danger' : a.severity === 'warn' ? 'warn' : 'muted');
+  return (
+    <Card
+      className="mb-6 border-[color-mix(in_srgb,var(--danger)_30%,var(--line))]"
+      title={
+        <span className="flex items-center gap-2">
+          <BellRing className="size-4 text-danger" /> {open.length === 1 ? '1 open alert' : `${open.length} open alerts`}
+        </span>
+      }
+      description="Admins also get these in their inbox. Alerts clear on their own once the problem is gone."
+      actions={
+        <Button
+          size="sm"
+          loading={checking}
+          onClick={async () => {
+            setChecking(true);
+            try {
+              await api.post('/api/admin/alerts/check');
+              await qc.invalidateQueries({ queryKey: ['admin', 'alerts'] });
+            } finally {
+              setChecking(false);
+            }
+          }}
+        >
+          Check again
+        </Button>
+      }
+    >
+      <ul className="-my-2 divide-y divide-line" aria-live="polite">
+        {open.map((a) => (
+          <li key={a.id} className="flex items-start gap-3 py-3">
+            <span className="mt-1.5">
+              <StatusDot tone={tone(a)} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">{a.title}</p>
+              <p className="mt-0.5 text-[13px] text-muted">{a.detail}</p>
+              <p className="mt-1 text-xs text-faint">
+                Since {relativeTime(a.createdAt)}
+                {a.updatedAt > a.createdAt + 60_000 ? ` · seen ${relativeTime(a.updatedAt)}` : ''}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+              {a.link && (
+                <Link to={a.link} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+                  Fix <ArrowRight className="size-3.5" />
+                </Link>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  await api.post(`/api/admin/alerts/${a.id}/resolve`);
+                  await qc.invalidateQueries({ queryKey: ['admin', 'alerts'] });
+                  toast('Alert dismissed. It comes back if the problem is still there at the next check.');
+                }}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+const DISMISS_KEY = 'wren.checklist.hidden';
+
+function SetupChecklist() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const q = useQuery({
+    queryKey: ['admin', 'checklist'],
+    queryFn: () => api.get<{ items: ChecklistItem[]; complete: boolean }>('/api/admin/checklist'),
+    // Poll while a round-trip test is on its way back.
+    refetchInterval: (query) => (query.state.data?.items.some((i) => i.status === 'pending' && i.id === 'roundtrip') ? 4000 : false),
+  });
+  if (!q.data) return null;
+  const { items, complete } = q.data;
+  const required = items.filter((i) => !i.optional);
+  const done = required.filter((i) => i.status === 'done').length;
+  const setHide = (v: boolean) => {
+    setHidden(v);
+    try {
+      localStorage.setItem(DISMISS_KEY, v ? '1' : '0');
+    } catch {
+      /* private mode */
+    }
+  };
+  if (complete && hidden) {
+    return (
+      <button onClick={() => setHide(false)} className="mb-6 flex items-center gap-2 text-sm text-muted hover:text-fg">
+        <CheckCircle2 className="size-4 text-ok" /> Setup complete <ChevronDown className="size-3.5" />
+      </button>
+    );
+  }
+  const run = async (item: ChecklistItem) => {
+    if (!item.action?.api) return;
+    setBusy(item.id);
+    try {
+      await api.post(item.action.api);
+      await qc.invalidateQueries({ queryKey: ['admin', 'checklist'] });
+      if (item.id === 'roundtrip') toast('Test message sent. Waiting for it to come back…');
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const icon = (s: ChecklistItem['status']) =>
+    s === 'done' ? (
+      <CheckCircle2 className="size-5 text-ok" aria-label="Done" />
+    ) : s === 'warn' ? (
+      <AlertTriangle className="size-5 text-warn" aria-label="Needs attention" />
+    ) : s === 'pending' ? (
+      <CircleDashed className="size-5 animate-[spin_3s_linear_infinite] text-accent" aria-label="In progress" />
+    ) : (
+      <Circle className="size-5 text-faint" aria-label="To do" />
+    );
+  return (
+    <Card
+      className="mb-6"
+      title={complete ? 'Wren is ready' : 'Get Wren ready'}
+      description={complete ? 'Everything required is set up. The optional steps make your server safer.' : `${done} of ${required.length} required steps done`}
+      actions={
+        complete ? (
+          <Button size="sm" variant="ghost" onClick={() => setHide(true)}>
+            Hide
+          </Button>
+        ) : undefined
+      }
+    >
+      {!complete && (
+        <div className="-mt-1 mb-4 h-1.5 overflow-hidden rounded-full bg-panel2" role="progressbar" aria-valuemin={0} aria-valuemax={required.length} aria-valuenow={done} aria-label="Setup progress">
+          <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${(done / Math.max(1, required.length)) * 100}%` }} />
+        </div>
+      )}
+      <ol className="-my-2 divide-y divide-line">
+        {items.map((i) => (
+          <li key={i.id} className="flex items-start gap-3 py-3">
+            <span className="mt-0.5 shrink-0">{icon(i.status)}</span>
+            <div className="min-w-0 flex-1">
+              <p className={cx('text-sm font-medium', i.status === 'done' && 'text-muted')}>
+                {i.title} {i.optional && <span className="ml-1 text-xs font-normal text-faint">optional</span>}
+              </p>
+              <p className="mt-0.5 text-[13px] text-muted">{i.detail}</p>
+            </div>
+            {i.action &&
+              (i.action.href ? (
+                <Link to={i.action.href} className="shrink-0 text-sm font-medium text-accent hover:underline">
+                  {i.action.label}
+                </Link>
+              ) : (
+                <Button size="sm" variant={i.status === 'done' ? 'ghost' : 'soft'} className="shrink-0" loading={busy === i.id} onClick={() => void run(i)}>
+                  {i.action.label}
+                </Button>
+              ))}
+            {i.status === 'pending' && i.id === 'roundtrip' && <Loader2 className="size-4 shrink-0 animate-spin text-muted" aria-hidden />}
+          </li>
+        ))}
+      </ol>
+    </Card>
   );
 }
 

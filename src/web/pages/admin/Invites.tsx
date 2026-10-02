@@ -1,30 +1,52 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Ticket, Trash2 } from 'lucide-react';
+import { MoreVertical, Plus, Send, Ticket } from 'lucide-react';
 import { api } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, Empty, Field, IconButton, Input, Modal, Select, Spinner } from '../../components/ui';
+import { Badge, Button, Card, Empty, Field, Input, Menu, Modal, Select, Spinner } from '../../components/ui';
 import { CopyField, PageHeader, Table } from './common';
 import { useDomains } from './Users';
+
+interface Invite {
+  id: number;
+  email: string | null;
+  role: string;
+  expires_at: number;
+  used_at: number | null;
+  created_at: number;
+  sent_to: string | null;
+  emailed_at: number | null;
+  domain: string | null;
+  used_by_email: string | null;
+}
 
 export function InvitesPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const domains = useDomains();
-  const invites = useQuery({ queryKey: ['admin', 'invites'], queryFn: () => api.get<{ invites: any[] }>('/api/admin/invites').then((r) => r.invites) });
+  const invites = useQuery({ queryKey: ['admin', 'invites'], queryFn: () => api.get<{ invites: Invite[] }>('/api/admin/invites').then((r) => r.invites) });
+  const empty = { email: '', domainId: '', role: 'user', days: '7', sendTo: '' };
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ email: '', domainId: '', role: 'user', days: '7' });
-  const [link, setLink] = useState<string | null>(null);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<{ url: string; emailed: string | null } | null>(null);
+  const [resending, setResending] = useState<Invite | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'invites'] });
+  const close = () => {
+    setOpen(false);
+    setCreated(null);
+    setForm(empty);
+  };
 
   return (
     <div>
       <PageHeader
         title="Invites"
-        description="Invitation links let people create their own mailbox, even when registration is closed."
+        description="Invitation links let people create their own mailbox, even when registration is closed. Wren can email the link for you."
         actions={
-          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => (setLink(null), setOpen(true))}>
-            Create invite
+          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setOpen(true)}>
+            Invite someone
           </Button>
         }
       />
@@ -32,15 +54,20 @@ export function InvitesPage() {
         <Spinner />
       ) : !invites.data?.length ? (
         <Card>
-          <Empty icon={<Ticket className="size-7" />} title="No invites yet" />
+          <Empty icon={<Ticket className="size-7" />} title="No invites yet">
+            Invite someone by email, or create a link to share yourself.
+          </Empty>
         </Card>
       ) : (
-        <Table head={['For', 'Role', 'Status', 'Created', '']}>
+        <Table head={['For', 'Role', 'Status', 'Sent', '']}>
           {invites.data.map((i) => {
             const expired = i.expires_at < Date.now();
             return (
               <tr key={i.id}>
-                <td>{i.email ?? (i.domain ? `anyone @${i.domain}` : 'anyone')}</td>
+                <td>
+                  <p className="font-medium">{i.email ?? (i.domain ? `Any address @${i.domain}` : 'Any address')}</p>
+                  {i.sent_to && <p className="text-xs text-muted">Invitation to {i.sent_to}</p>}
+                </td>
                 <td>
                   <Badge>{i.role}</Badge>
                 </td>
@@ -53,18 +80,28 @@ export function InvitesPage() {
                     <span className="text-xs text-muted">expires {relativeTime(i.expires_at)}</span>
                   )}
                 </td>
-                <td className="text-xs text-muted">{relativeTime(i.created_at)}</td>
+                <td className="text-xs text-muted">{i.emailed_at ? `Emailed ${relativeTime(i.emailed_at)}` : `Link created ${relativeTime(i.created_at)}`}</td>
                 <td className="text-right">
-                  <IconButton
-                    size="sm"
-                    label="Delete"
-                    onClick={async () => {
-                      await api.del(`/api/admin/invites/${i.id}`);
-                      qc.invalidateQueries({ queryKey: ['admin', 'invites'] });
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </IconButton>
+                  <Menu
+                    align="right"
+                    trigger={({ onClick }) => (
+                      <button onClick={onClick} aria-label="Invite actions" className="rounded-full p-2 text-muted hover:bg-hover hover:text-fg">
+                        <MoreVertical className="size-4" />
+                      </button>
+                    )}
+                    items={[
+                      ...(i.used_at ? [] : [{ label: i.sent_to ? 'Send again…' : 'Email the invitation…', icon: <Send className="size-4" />, onClick: () => setResending(i) }]),
+                      {
+                        label: 'Delete',
+                        danger: true,
+                        onClick: async () => {
+                          await api.del(`/api/admin/invites/${i.id}`);
+                          refresh();
+                          toast('Invite deleted');
+                        },
+                      },
+                    ]}
+                  />
                 </td>
               </tr>
             );
@@ -73,49 +110,59 @@ export function InvitesPage() {
       )}
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
-        title="Create invite"
+        onClose={close}
+        title={created ? (created.emailed ? 'Invitation sent' : 'Invite link ready') : 'Invite someone'}
         footer={
-          link ? (
-            <Button variant="primary" onClick={() => setOpen(false)}>
+          created ? (
+            <Button variant="primary" onClick={close}>
               Done
             </Button>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => setOpen(false)}>
+              <Button variant="ghost" onClick={close}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
+                loading={busy}
+                icon={form.sendTo.trim() ? <Send className="size-4" /> : undefined}
                 onClick={async () => {
+                  setBusy(true);
                   try {
-                    const r = await api.post<{ url: string }>('/api/admin/invites', {
+                    const sendTo = form.sendTo.trim();
+                    const r = await api.post<{ url: string; emailed: boolean }>('/api/admin/invites', {
                       email: form.email || undefined,
                       domainId: form.domainId ? Number(form.domainId) : null,
                       role: form.role,
                       days: Number(form.days),
+                      sendTo: sendTo || undefined,
                     });
-                    setLink(r.url);
-                    qc.invalidateQueries({ queryKey: ['admin', 'invites'] });
+                    setCreated({ url: r.url, emailed: r.emailed ? sendTo : null });
+                    refresh();
                   } catch (err) {
                     toast({ message: (err as Error).message, tone: 'error' });
+                  } finally {
+                    setBusy(false);
                   }
                 }}
               >
-                Create link
+                {form.sendTo.trim() ? 'Send invitation' : 'Create link'}
               </Button>
             </>
           )
         }
       >
-        {link ? (
-          <div className="space-y-2 pb-2">
-            <p className="text-sm">Share this link. It can be used once.</p>
-            <CopyField value={link} onCopy={() => toast('Link copied')} />
+        {created ? (
+          <div className="space-y-3 pb-2 text-sm">
+            <p>{created.emailed ? <>We emailed the invitation to <b>{created.emailed}</b>. You can also share the link yourself:</> : 'Share this link privately. It works once.'}</p>
+            <CopyField value={created.url} label="invite link" onCopy={() => toast('Link copied')} />
           </div>
         ) : (
           <div className="grid gap-4">
-            <Field label="Exact address (optional)" help="Leave blank to let them choose their address.">
+            <Field label="Send the invitation to" help="Their current email address. Leave blank to just create a link to share.">
+              <Input type="email" value={form.sendTo} onChange={(e) => setForm({ ...form, sendTo: e.target.value })} placeholder="name@gmail.com" autoFocus />
+            </Field>
+            <Field label="Their new address (optional)" help="Leave blank to let them choose.">
               <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="newperson@yourdomain.com" />
             </Field>
             <Field label="Domain">
@@ -148,6 +195,59 @@ export function InvitesPage() {
           </div>
         )}
       </Modal>
+      <ResendModal invite={resending} onClose={() => setResending(null)} onSent={refresh} />
     </div>
+  );
+}
+
+function ResendModal({ invite, onClose, onSent }: { invite: Invite | null; onClose: () => void; onSent: () => void }) {
+  const toast = useToast();
+  const [to, setTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [lastId, setLastId] = useState<number | null>(null);
+  if (invite && invite.id !== lastId) {
+    setLastId(invite.id);
+    setTo(invite.sent_to ?? '');
+  }
+  return (
+    <Modal
+      open={!!invite}
+      onClose={onClose}
+      title="Email the invitation"
+      width="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={!to.trim()}
+            icon={<Send className="size-4" />}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await api.post<{ sentTo: string }>(`/api/admin/invites/${invite!.id}/resend`, { sendTo: to.trim() });
+                toast(`Invitation sent to ${r.sentTo}`);
+                onSent();
+                onClose();
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Send
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-4 text-sm text-muted">A fresh link is sent and the old one stops working.</p>
+      <Field label="Send to">
+        <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} autoFocus />
+      </Field>
+    </Modal>
   );
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { cx } from '../../components/ui';
 
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
@@ -13,10 +13,25 @@ export function PageHeader({ title, description, actions }: { title: string; des
   );
 }
 
+/**
+ * A data table. On phones each row becomes a card, with the column name in
+ * front of each value (taken from `head`), so nothing needs sideways scrolling.
+ */
 export function Table({ head, children, className }: { head: ReactNode[]; children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLTableElement>(null);
+  const labels = head.map((h) => (typeof h === 'string' ? h : ''));
+  useLayoutEffect(() => {
+    ref.current?.querySelectorAll(':scope > tbody > tr').forEach((tr) => {
+      [...tr.children].forEach((td, i) => {
+        if ((td as HTMLTableCellElement).colSpan > 1) return;
+        const label = labels[i] ?? '';
+        if (td.getAttribute('data-label') !== label) td.setAttribute('data-label', label);
+      });
+    });
+  });
   return (
     <div className={cx('overflow-x-auto rounded-2xl border border-line bg-panel', className)}>
-      <table className="w-full text-sm">
+      <table ref={ref} className="wren-table w-full text-sm">
         <thead>
           <tr className="border-b border-line text-left text-xs text-muted">
             {head.map((h, i) => (
@@ -39,22 +54,27 @@ export function StatusDot({ tone }: { tone: 'ok' | 'warn' | 'danger' | 'muted' }
   return <span className={cx('inline-block size-2 shrink-0 rounded-full', c)} />;
 }
 
-export function CopyField({ value, onCopy }: { value: string; onCopy: () => void }) {
+/** A value to copy into a DNS host or another dashboard. Placeholders like "(from Resend)" aren't copyable. */
+export function CopyField({ value, onCopy, label }: { value: string; onCopy: () => void; label?: string }) {
+  const placeholder = /^\(.*\)$/.test(value.trim());
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2 py-1 pr-1 pl-3">
-      <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]" title={value}>
+    <div className={cx('flex min-w-0 items-center gap-2 rounded-lg border border-line py-1 pr-1 pl-3', placeholder ? 'border-dashed bg-transparent' : 'bg-panel2')}>
+      <code className={cx('min-w-0 flex-1 truncate py-1 font-mono text-[12.5px]', placeholder && 'font-sans text-muted italic')} title={value}>
         {value}
       </code>
-      <button
-        type="button"
-        className="rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-hover"
-        onClick={() => {
-          void navigator.clipboard.writeText(value);
-          onCopy();
-        }}
-      >
-        Copy
-      </button>
+      {!placeholder && (
+        <button
+          type="button"
+          aria-label={label ? `Copy ${label}` : 'Copy'}
+          className="rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-hover"
+          onClick={() => {
+            void navigator.clipboard.writeText(value);
+            onCopy();
+          }}
+        >
+          Copy
+        </button>
+      )}
     </div>
   );
 }
