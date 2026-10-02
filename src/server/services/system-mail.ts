@@ -34,19 +34,19 @@ export function systemSender(domainHint?: string): { address: string; name: stri
   return { address: `contact@${d.name}`, name };
 }
 
-/** Minimal, mail-client-safe HTML layout with an optional call-to-action button. */
+/**
+ * The body of every system email: plain paragraphs and the link written out in
+ * full, like a note from a person. No images, colours, buttons or styling,
+ * which spam filters (Gmail's especially) treat with suspicion in automated
+ * mail. `title` and `button.label` are plain text; paragraphs and `footer` are HTML.
+ */
 export function systemTemplate(opts: { title: string; paragraphs: string[]; button?: { label: string; url: string }; footer?: string }): string {
-  const accent = getSettings()['instance.accent'] || '#2563eb';
   const name = escapeHtml(getSettings()['instance.name']);
-  const p = opts.paragraphs.map((t) => `<p style="margin:0 0 14px;line-height:1.55">${t}</p>`).join('');
-  const button = opts.button
-    ? `<p style="margin:22px 0"><a href="${escapeHtml(opts.button.url)}" style="background:${accent};color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;display:inline-block">${escapeHtml(opts.button.label)}</a></p>
-<p style="margin:0 0 14px;font-size:13px;color:#555">Or paste this link into your browser:<br><span style="word-break:break-all">${escapeHtml(opts.button.url)}</span></p>`
-    : '';
-  // No header line above the title: inbox previews would start with the instance name.
-  return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#1f2328;max-width:560px">
-<h2 style="margin:0 0 14px;font-size:20px">${escapeHtml(opts.title)}</h2>${p}${button}
-<p style="margin:24px 0 0;font-size:12px;color:#777">${opts.footer ?? `Sent by ${name}.`}</p></div>`;
+  const p = (html: string) => `<p>${html}</p>`;
+  const link = opts.button ? p(`${escapeHtml(opts.button.label)}:<br><a href="${escapeHtml(opts.button.url)}">${escapeHtml(opts.button.url)}</a>`) : '';
+  return `<html><body>
+${[p(`<b>${escapeHtml(opts.title)}</b>`), ...opts.paragraphs.map(p), link, p(opts.footer ?? `Sent by ${name}.`)].filter(Boolean).join('\n')}
+</body></html>`;
 }
 
 export interface SystemEmail {

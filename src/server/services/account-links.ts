@@ -38,7 +38,7 @@ export async function sendSetupLink(user: Pick<UserRow, 'id' | 'email' | 'name'>
       userId: user.id,
       subject: `Your new ${getSettings()['instance.name']} mailbox`,
       html: systemTemplate({
-        title: `Welcome, ${escapeHtml(user.name.split(' ')[0] || user.name)}`,
+        title: `Welcome, ${user.name.split(' ')[0] || user.name}`,
         paragraphs: [
           `A mailbox has been created for you: <b>${escapeHtml(user.email)}</b>.`,
           'Choose a password to start using it. The link expires in 7 days.',
@@ -72,14 +72,16 @@ export async function sendRecoveryVerification(user: Pick<UserRow, 'id' | 'email
 export async function sendInviteEmail(opts: { to: string; url: string; invitedBy: string; mailbox: string | null; days: number }) {
   return sendSystemEmail({
     to: [opts.to],
-    subject: `You’re invited to ${getSettings()['instance.name']}`,
+    // A personal, plain-ASCII subject: an encoded one (curly quotes) is a small spam signal.
+    subject: `${opts.invitedBy} invited you to ${getSettings()['instance.name']}`,
     html: systemTemplate({
-      title: 'You’re invited',
+      title: 'You have been invited',
       paragraphs: [
         `${escapeHtml(opts.invitedBy)} invited you to create ${opts.mailbox ? `the mailbox <b>${escapeHtml(opts.mailbox)}</b>` : 'a mailbox'} on ${instance()}.`,
         `The invitation expires in ${opts.days} day${opts.days === 1 ? '' : 's'}.`,
       ],
       button: { label: 'Accept the invitation', url: opts.url },
+      footer: `You got this email because ${escapeHtml(opts.invitedBy)} entered your address. If you weren’t expecting it, you can ignore it.`,
     }),
   });
 }
@@ -91,7 +93,7 @@ export async function welcomeUser(userId: number) {
   if (!user) return;
   const name = instance();
   const html = systemTemplate({
-    title: `Welcome to ${name}`,
+    title: `Welcome to ${getSettings()['instance.name']}`,
     paragraphs: [
       `Hi ${escapeHtml(user.name.split(' ')[0] || user.name)}, your address is <b>${escapeHtml(user.email)}</b>.`,
       'A few things to set up in <b>Settings</b>:',

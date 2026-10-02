@@ -423,3 +423,18 @@ describe('sending from a subdomain', () => {
     await h.call('DELETE', `/api/admin/providers/${p.body.id}`);
   });
 });
+
+describe('system email format', () => {
+  it('sends plain mail: no images, styling or buttons, the link written out, an ASCII subject', async () => {
+    await h.call('POST', '/api/admin/invites', { sendTo: 'plain@example.org', days: 7 });
+    const job = (await outbox('notice')).at(-1)!;
+    expect(job.subject).toBe('Ada Admin invited you to Fernhill');
+    expect(job.raw).toMatch(/^Subject: Ada Admin invited you to Fernhill$/m);
+    const html = (await (await import('../src/server/mail/parse')).parseMail(new TextEncoder().encode(job.raw))).html ?? '';
+    expect(html).not.toMatch(/<img|style=|background/i);
+    const url = /href="([^"]+)"/.exec(html)![1];
+    expect(url).toMatch(/\/register\?invite=/);
+    expect(html).toContain(`>${url}</a>`);
+    expect(html).toMatch(/You got this email because Ada Admin entered your address/);
+  });
+});
