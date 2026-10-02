@@ -275,7 +275,7 @@ export function Modal({
   useDialogFocus(open, ref, onClose);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh] backdrop-blur-[1px] max-sm:px-3 max-sm:pt-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[8vh] backdrop-blur-[1px] max-sm:px-3 max-sm:pt-[calc(env(safe-area-inset-top)+1rem)] max-sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]" onMouseDown={onClose}>
       <div
         ref={ref}
         tabIndex={-1}

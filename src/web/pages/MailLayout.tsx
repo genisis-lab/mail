@@ -170,7 +170,7 @@ function MailShell() {
       {isListPath(location.pathname) && (
         <button
           onClick={() => compose.open()}
-          className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex h-14 items-center gap-3 rounded-2xl bg-accent-soft pr-5 pl-4 text-[15px] font-medium text-fg shadow-float backdrop-blur md:hidden dark:text-accent-ink"
+          className="fixed right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-40 flex h-14 items-center gap-3 rounded-2xl bg-accent-soft pr-5 pl-4 text-[15px] font-medium text-fg shadow-float backdrop-blur md:hidden dark:text-accent-ink"
           style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 18%, var(--panel))' }}
         >
           <Pencil className="size-5" aria-hidden /> Compose
@@ -519,13 +519,17 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
   const toast = useToast();
   const navigate = useNavigate();
   const c = counters.data;
-  const wide = !collapsed || mobileOpen;
 
   const fmtCount = (n: number | undefined) => (n ? (n > 9999 ? '9,999+' : n.toLocaleString()) : '');
 
-  const content = (
-    <nav aria-label="Mail folders" className={cx('flex h-full flex-col overflow-y-auto pb-6', wide ? 'w-64 pr-3' : 'w-[72px] items-center')}>
-      <div className={cx('pt-2 pb-4', wide ? 'pl-2' : '')}>
+  /** The folder list: in the desktop sidebar, or in the phone menu (`drawer`), which has bigger, inset pills. */
+  const nav = (drawer: boolean) => {
+  const wide = drawer || !collapsed;
+  const item = drawer ? 'mx-3 h-12 rounded-full px-4 text-[15px]' : wide ? 'h-8 rounded-r-full pr-3 pl-6' : 'mb-1 size-8 justify-center rounded-full';
+  const heading = drawer ? 'pr-4 pl-7' : 'pr-1 pl-6';
+  return (
+    <nav aria-label="Mail folders" className={cx('flex h-full flex-col overflow-y-auto pb-6', drawer ? 'w-[min(20rem,86vw)]' : wide ? 'w-64 pr-3' : 'w-[72px] items-center')}>
+      <div className={cx('pt-2 pb-4', drawer ? 'px-4' : wide ? 'pl-2' : '')}>
         <button
           onClick={() => compose.open()}
           className={cx(
@@ -538,7 +542,9 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
           {wide && 'Compose'}
         </button>
       </div>
-      <MailboxSwitcher wide={wide} />
+      <div className={drawer ? 'px-2' : ''}>
+        <MailboxSwitcher wide={wide} />
+      </div>
       {NAV.map((n) => {
         const count = n.count && c ? c[n.count] : 0;
         return (
@@ -549,7 +555,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
             className={({ isActive }) =>
               cx(
                 'group flex shrink-0 items-center gap-4 text-sm transition-colors',
-                wide ? 'h-8 rounded-r-full pr-3 pl-6' : 'mb-1 size-8 justify-center rounded-full',
+                item,
                 isActive ? 'bg-sel font-semibold text-fg' : 'text-fg hover:bg-hover',
               )
             }
@@ -569,7 +575,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
         );
       })}
 
-      <div className={cx('mt-5 flex items-center', wide ? 'justify-between pr-1 pl-6' : 'justify-center')}>
+      <div className={cx('mt-5 flex items-center', wide ? `justify-between ${heading}` : 'justify-center')}>
         {wide && <span className="text-[15px] font-medium">Labels</span>}
         <IconButton label="Create new label" size="sm" onClick={() => setLabelDialog({ name: '', color: LABEL_COLORS[6] })}>
           <Plus className="size-4" />
@@ -585,7 +591,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
             className={({ isActive }) =>
               cx(
                 'group flex shrink-0 items-center gap-4 text-sm',
-                wide ? 'h-8 rounded-r-full pr-1 pl-6' : 'mb-1 size-8 justify-center rounded-full',
+                drawer ? item : wide ? 'h-8 rounded-r-full pr-1 pl-6' : item,
                 isActive ? 'bg-sel font-semibold' : 'hover:bg-hover',
               )
             }
@@ -625,7 +631,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
 
       {(searches.data?.length ?? 0) > 0 && (
         <>
-          <div className={cx('mt-5 flex items-center', wide ? 'pr-1 pl-6' : 'justify-center')}>
+          <div className={cx('mt-5 flex items-center', wide ? heading : 'justify-center')}>
             {wide ? <span className="text-[15px] font-medium">Saved searches</span> : <span className="h-px w-8 bg-line" aria-hidden />}
           </div>
           {searches.data!.map((sv) => (
@@ -634,7 +640,7 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
               to={`/search/${encodeURIComponent(sv.query)}`}
               title={`${sv.name}: ${sv.query}`}
               className={({ isActive }) =>
-                cx('group flex shrink-0 items-center gap-4 text-sm', wide ? 'h-8 rounded-r-full pr-1 pl-6' : 'mb-1 size-8 justify-center rounded-full', isActive ? 'bg-sel font-semibold' : 'hover:bg-hover')
+                cx('group flex shrink-0 items-center gap-4 text-sm', drawer ? item : wide ? 'h-8 rounded-r-full pr-1 pl-6' : item, isActive ? 'bg-sel font-semibold' : 'hover:bg-hover')
               }
             >
               <SearchCheck className="size-[18px] shrink-0 text-muted" aria-hidden />
@@ -677,11 +683,12 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
       )}
     </nav>
   );
+  };
 
   return (
     <>
-      <aside className="shrink-0 max-md:hidden">{content}</aside>
-      {mobileOpen && <MobileDrawer onClose={onCloseMobile}>{content}</MobileDrawer>}
+      <aside className="shrink-0 max-md:hidden">{nav(false)}</aside>
+      {mobileOpen && <MobileDrawer onClose={onCloseMobile}>{nav(true)}</MobileDrawer>}
       <LabelDialog label={labelDialog} onClose={() => setLabelDialog(null)} />
     </>
   );
@@ -693,7 +700,15 @@ function MobileDrawer({ onClose, children }: { onClose: () => void; children: Re
   return (
     <div className="fixed inset-0 z-50 md:hidden" onClick={onClose}>
       <div className="absolute inset-0 bg-black/40" />
-      <div ref={ref} role="dialog" aria-modal="true" aria-label="Main menu" tabIndex={-1} className="animate-slide-up absolute top-0 bottom-0 left-0 bg-bg pt-3 shadow-float outline-none" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Main menu"
+        tabIndex={-1}
+        className="animate-drawer-in absolute top-0 bottom-0 left-0 overflow-hidden rounded-r-[28px] bg-bg pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-float outline-none"
+        onClick={(e) => e.stopPropagation()}
+      >
         {children}
       </div>
     </div>

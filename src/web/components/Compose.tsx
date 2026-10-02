@@ -199,7 +199,8 @@ function ComposeWindow({ win, onClose, onPatch, onReopen }: { win: Window_; onCl
 
   const frame = win.maximized
     ? 'fixed inset-x-[6vw] top-[5vh] bottom-[5vh] w-auto rounded-xl'
-    : 'h-[min(600px,calc(100vh-80px))] w-[540px] max-sm:w-full max-sm:h-[calc(100vh-40px)] rounded-t-xl';
+    : // On phones: full width, below the status bar, with the Send row above the home indicator.
+      'h-[min(600px,calc(100vh-80px))] w-[540px] max-sm:w-full max-sm:h-[calc(100dvh-env(safe-area-inset-top)-0.5rem)] max-sm:pb-[env(safe-area-inset-bottom)] rounded-t-xl max-sm:rounded-t-2xl';
 
   return (
     <>

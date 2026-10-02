@@ -41,8 +41,9 @@ function AdminNav({ wide, alerts }: { wide: boolean; alerts: number }) {
           title={n.label}
           className={({ isActive }) =>
             cx(
-              'flex h-9 items-center gap-3 rounded-r-full pl-6 text-sm transition-colors',
-              !wide && 'max-lg:pl-5',
+              'flex items-center gap-3 text-sm transition-colors',
+              // The phone menu has inset pills with room for a thumb.
+              wide ? 'mx-3 h-12 rounded-full px-4 text-[15px]' : 'h-9 rounded-r-full pl-6 max-lg:pl-5',
               isActive ? 'bg-sel font-semibold' : 'text-fg hover:bg-hover',
             )
           }
@@ -105,7 +106,7 @@ export function AdminLayout() {
               aria-modal="true"
               aria-label="Admin menu"
               tabIndex={-1}
-              className="animate-slide-up absolute top-0 bottom-0 left-0 w-64 overflow-y-auto bg-bg pt-3 pr-3 pb-6 shadow-float outline-none"
+              className="animate-drawer-in absolute top-0 bottom-0 left-0 w-[min(18rem,86vw)] overflow-y-auto rounded-r-[28px] bg-bg pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pl-[env(safe-area-inset-left)] shadow-float outline-none"
               onClick={(e) => e.stopPropagation()}
             >
               <nav aria-label="Admin">

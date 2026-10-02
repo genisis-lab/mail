@@ -44,7 +44,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={show}>
       {children}
       {/* Always present, so screen readers announce what appears in it. */}
-      <div aria-live="polite" aria-atomic="false" className="pointer-events-none fixed right-3 bottom-3 left-3 z-[80] flex flex-col gap-2 sm:right-auto sm:bottom-6 sm:left-6">
+      <div aria-live="polite" aria-atomic="false" className="pointer-events-none fixed right-[calc(env(safe-area-inset-right)+0.75rem)] bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-[calc(env(safe-area-inset-left)+0.75rem)] z-[80] flex flex-col gap-2 sm:right-auto sm:bottom-6 sm:left-6">
         {items.map((t) => (
           <div
             key={t.id}

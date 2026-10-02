@@ -97,6 +97,15 @@ body,
   height: 100%;
 }
 
+/*
+ * Installed on iOS (viewport-fit=cover) the page is drawn under the status
+ * bar, where iOS blurs whatever is there. Keep the app inside the safe area;
+ * the strips around it show the plain background.
+ */
+#root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -189,6 +198,25 @@ button:disabled {
 }
 .animate-pop {
   animation: wren-pop 0.14s ease-out;
+}
+
+@keyframes wren-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+.animate-drawer-in {
+  animation: wren-drawer-in 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-drawer-in,
+  .animate-slide-up,
+  .animate-pop {
+    animation: none;
+  }
 }
 
 @keyframes wren-slide-up {
