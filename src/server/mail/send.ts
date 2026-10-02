@@ -251,7 +251,9 @@ export async function composeTemplate(userId: number, messageId: number, mode: '
   let to: Addr[] = [];
   let cc: Addr[] = [];
   if (mode !== 'forward') {
-    if (m.direction === 'out') {
+    // My own message (sent, or the copy of a note to myself that arrived): reply to whoever it went to, like Gmail.
+    const ownMessage = m.direction === 'out' || mine.has(m.from.address.toLowerCase());
+    if (ownMessage) {
       to = m.to;
       if (mode === 'replyAll') cc = m.cc;
     } else {
@@ -262,8 +264,10 @@ export async function composeTemplate(userId: number, messageId: number, mode: '
         cc = others.filter((a) => !to.some((t) => t.address.toLowerCase() === a.address.toLowerCase()));
       }
     }
-    to = uniqueAddrs(to.filter((a) => !mine.has(a.address.toLowerCase()) || m.direction === 'out'));
-    cc = uniqueAddrs(cc);
+    to = uniqueAddrs(to.filter((a) => !mine.has(a.address.toLowerCase()) || ownMessage));
+    // Never leave To empty (say Reply-To pointed back at me): answer the sender.
+    if (!to.length) to = [m.from];
+    cc = uniqueAddrs(cc.filter((a) => !to.some((t) => t.address.toLowerCase() === a.address.toLowerCase())));
   }
 
   const subject = mode === 'forward' ? `Fwd: ${m.subject}` : /^re\s*:/i.test(m.subject) ? m.subject : `Re: ${m.subject}`;

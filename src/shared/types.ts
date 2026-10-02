@@ -94,6 +94,8 @@ export interface SessionUser {
   prefs: UserPrefs;
   identities: Identity[];
   mustSetup2fa: boolean;
+  /** An administrator asked for a new password before anything else. */
+  mustChangePassword: boolean;
 }
 
 export interface Identity {

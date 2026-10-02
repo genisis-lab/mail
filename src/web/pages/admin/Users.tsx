@@ -8,7 +8,7 @@ import { fileSize, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Checkbox, cx, Field, Input, Menu, Modal, Select, Spinner } from '../../components/ui';
+import { Badge, Button, Checkbox, cx, Field, Input, Menu, Modal, Select, Spinner, Switch } from '../../components/ui';
 import { CopyField, PageHeader, Table } from './common';
 
 export interface AdminUser {
@@ -28,6 +28,8 @@ export interface AdminUser {
   aliases: number;
   messages: number;
   recoveryEmail?: string | null;
+  /** Must choose a new password before doing anything else. */
+  mustChangePassword?: boolean;
   /** Locked out by too many wrong passwords right now. */
   locked?: boolean;
 }
@@ -36,7 +38,7 @@ export function useDomains() {
   return useQuery({ queryKey: ['admin', 'domains'], queryFn: () => api.get<{ domains: any[] }>('/api/admin/domains').then((r) => r.domains) });
 }
 
-type BulkAction = 'suspend' | 'activate' | 'quota' | 'sendLimit' | 'signout' | 'delete';
+type BulkAction = 'suspend' | 'activate' | 'quota' | 'sendLimit' | 'signout' | 'requirePasswordChange' | 'delete';
 
 /** The user list as a spreadsheet (for records, audits, or moving elsewhere). */
 function exportUsers(list: AdminUser[]) {
@@ -150,6 +152,9 @@ export function UsersPage() {
           <Button size="sm" onClick={() => void bulk('signout')}>
             Sign out
           </Button>
+          <Button size="sm" onClick={() => void bulk('requirePasswordChange')}>
+            Require new password
+          </Button>
           <Button size="sm" variant="ghost" className="text-danger" onClick={() => void bulk('delete')}>
             Delete
           </Button>
@@ -189,6 +194,7 @@ export function UsersPage() {
                         {u.id === me.id && <Badge>you</Badge>}
                         {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
                         {u.locked && <Badge tone="warn">locked out</Badge>}
+                        {u.mustChangePassword && <Badge>new password required</Badge>}
                         {u.totpEnabled && <ShieldCheck className="size-3.5 text-ok" aria-label="2-step verification on" />}
                       </p>
                       <p className="truncate text-xs text-muted">
@@ -768,9 +774,10 @@ export function EditUserModal({ user, onClose, onSaved }: { user: AdminUser | nu
   );
 }
 
-export function ResetPasswordModal({ user, onClose }: { user: AdminUser | null; onClose: () => void }) {
+export function ResetPasswordModal({ user, onClose, onSaved }: { user: AdminUser | null; onClose: () => void; onSaved?: () => void }) {
   const toast = useToast();
   const [pw, setPw] = useState('');
+  const [mustChange, setMustChange] = useState(true);
   return (
     <Modal
       open={!!user}
@@ -785,9 +792,10 @@ export function ResetPasswordModal({ user, onClose }: { user: AdminUser | null; 
             variant="primary"
             onClick={async () => {
               try {
-                await api.post(`/api/admin/users/${user!.id}/password`, { password: pw });
-                toast('Password reset. The user was signed out everywhere.');
+                await api.post(`/api/admin/users/${user!.id}/password`, { password: pw, mustChange });
+                toast(mustChange ? 'Temporary password set. They choose their own when they sign in.' : 'Password reset. The user was signed out everywhere.');
                 setPw('');
+                onSaved?.();
                 onClose();
               } catch (err) {
                 toast({ message: (err as Error).message, tone: 'error' });
@@ -803,6 +811,9 @@ export function ResetPasswordModal({ user, onClose }: { user: AdminUser | null; 
       <Field label={`New password for ${user?.email}`}>
         <Input value={pw} onChange={(e) => setPw(e.target.value)} autoFocus autoComplete="off" />
       </Field>
+      <div className="mt-4">
+        <Switch checked={mustChange} onChange={setMustChange} label="Ask them to choose their own at next sign-in" description="This password then only works once, to get to a “choose a new password” screen." />
+      </div>
     </Modal>
   );
 }

@@ -6,7 +6,7 @@ import { get, now, run } from '../db/index.js';
 import { randomToken, sha256 } from '../lib/crypto.js';
 import { badRequest, forbidden, HttpError, tooMany, unauthorized } from '../lib/http.js';
 import { getSettings } from '../settings.js';
-import { getUser, mustSetup2fa, type UserRow } from '../services/users.js';
+import { getUser, mustChangePassword, mustSetup2fa, type UserRow } from '../services/users.js';
 
 export interface SessionRow {
   id: string;
@@ -126,6 +126,7 @@ export const actAsMailbox: MiddlewareHandler<AppEnv> = async (c, next) => {
 export const requireUserReady: MiddlewareHandler<AppEnv> = async (c, next) => {
   const s = loadSession(c);
   if (!s || s.session.mfa_pending) throw unauthorized();
+  if (mustChangePassword(s.user)) throw new HttpError(403, 'Choose a new password first', 'password_change_required');
   if (mustSetup2fa(s.user)) throw new HttpError(403, 'Two-factor authentication must be set up first', 'mfa_setup_required');
   c.set('user', s.user);
   c.set('session', s.session);

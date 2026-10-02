@@ -20,7 +20,7 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, getPrefs, getUser, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
@@ -417,6 +417,7 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       createdAt: u.created_at,
       lastLoginAt: u.last_login_at,
       passwordChangedAt: u.password_changed_at,
+      mustChangePassword: mustChangePassword(u),
       totpEnabled: !!u.totp_enabled,
       passkeys: get<{ c: number }>('SELECT COUNT(*) AS c FROM passkeys WHERE user_id = ?', [id])!.c,
       recoveryEmail: u.recovery_email,
@@ -552,7 +553,7 @@ adminOpsRoutes.delete('/users/:id/export/:job', async (c) => {
 
 const bulkSchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(1000),
-  action: z.enum(['suspend', 'activate', 'quota', 'sendLimit', 'signout', 'delete']),
+  action: z.enum(['suspend', 'activate', 'quota', 'sendLimit', 'signout', 'requirePasswordChange', 'delete']),
   /** MB for quota, messages/day for sendLimit; null resets to the default. */
   value: z.number().int().min(0).nullable().optional(),
 });
@@ -572,7 +573,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
       skip('only the owner can change the owner');
       continue;
     }
-    if (id === me.id && ['suspend', 'delete'].includes(input.action)) {
+    if (id === me.id && ['suspend', 'delete', 'requirePasswordChange'].includes(input.action)) {
       skip('you can’t do that to your own account');
       continue;
     }
@@ -596,6 +597,9 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
         break;
       case 'signout':
         run('DELETE FROM sessions WHERE user_id = ?', [id]);
+        break;
+      case 'requirePasswordChange':
+        run('UPDATE users SET password_change_required_at = ? WHERE id = ?', [now(), id]);
         break;
       case 'delete':
         purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));

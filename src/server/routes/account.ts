@@ -7,7 +7,7 @@ import { badRequest, notFound, unauthorized } from '../lib/http.js';
 import { isEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { getPrefs, getUser, identities, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
+import { getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
 import { sendRecoveryVerification } from '../services/account-links.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
@@ -83,6 +83,19 @@ accountRoutes.put('/prefs', async (c) => {
 accountRoutes.post('/prefs/reset', (c) => {
   savePrefs(c.get('user').id, DEFAULT_PREFS);
   return c.json({ prefs: DEFAULT_PREFS });
+});
+
+/** Choose a new password when an administrator requires it (they just signed in, possibly with a temporary password or a passkey). */
+accountRoutes.post('/password/required', async (c) => {
+  const user = c.get('user');
+  if (!mustChangePassword(user)) throw badRequest('No new password is required');
+  const { next } = await body(c, z.object({ next: z.string().min(1) }));
+  validatePassword(next);
+  if (await verifyPassword(next, user.password_hash)) throw badRequest('Choose a password you haven’t used here before');
+  run('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?', [await hashPassword(next), Math.max(now(), (user.password_change_required_at ?? 0) + 1), user.id]);
+  run('DELETE FROM sessions WHERE user_id = ? AND id != ?', [user.id, c.get('session')?.id ?? '']);
+  audit(user.id, 'account.password_changed', user.email, { required: true }, clientIp(c));
+  return c.json({ user: sessionUser(getUser(user.id)!) });
 });
 
 accountRoutes.post('/password', async (c) => {

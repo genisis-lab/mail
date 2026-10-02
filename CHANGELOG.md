@@ -8,6 +8,14 @@ passwords. Set an out-of-office reply and forwarding for someone who's away or h
 left. Export a user's mail as `.mbox`. When deleting a user, hand their addresses and
 catch-alls to another account so nothing bounces. Export the user list as CSV, with
 locked-out accounts flagged. Only the owner can sign out or manage the owner account.
+Require a new password at next sign-in (with a temporary password, for one person, or
+in bulk); it's met by any password change, including a reset link.
+
+**Mail.** "Did you mean to attach files?" before sending a message that says "see
+attached" without any files. In dark mode, ordinary emails use dark colours (with
+readable text whatever colours the sender set); designed emails such as newsletters
+keep a white background, and each message can be flipped. Replying to your own message
+goes to its recipients, never to an empty To.
 
 **Mail.** System emails are plain, with the link written out; invites reply to the
 admin who sent them. Sending-only subdomains don't need MX, and their DMARC comes from

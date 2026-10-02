@@ -25,6 +25,7 @@ export interface UserRow {
   kind: 'person' | 'shared';
   recovery_email: string | null;
   recovery_verified_at: number | null;
+  password_change_required_at: number | null;
 }
 
 export function getUser(id: number): UserRow | undefined {
@@ -97,6 +98,11 @@ export function mustSetup2fa(user: UserRow): boolean {
   return policy === 'all' || (policy === 'admins' && (user.role === 'admin' || user.role === 'owner'));
 }
 
+/** An admin required a new password, and it hasn't been changed since (any way: settings, reset link, admin). */
+export function mustChangePassword(user: Pick<UserRow, 'password_change_required_at' | 'password_changed_at'>): boolean {
+  return !!user.password_change_required_at && (user.password_changed_at ?? 0) <= user.password_change_required_at;
+}
+
 export function sessionUser(user: UserRow): SessionUser {
   return {
     id: user.id,
@@ -107,6 +113,7 @@ export function sessionUser(user: UserRow): SessionUser {
     prefs: parsePrefs(user.prefs),
     identities: identities(user.id),
     mustSetup2fa: mustSetup2fa(user),
+    mustChangePassword: mustChangePassword(user),
   };
 }
 

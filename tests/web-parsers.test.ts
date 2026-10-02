@@ -63,3 +63,31 @@ describe('contact files', () => {
     expect(contactsFromFile('people.txt', 'BEGIN:VCARD\nFN:A\nEMAIL:a@example.org\nEND:VCARD')).toHaveLength(1);
   });
 });
+
+describe('forgotten attachments', async () => {
+  const { mentionsAttachment } = await import('../src/web/lib/attachment-check');
+  it('spots “see attached” and friends in what was written', () => {
+    expect(mentionsAttachment('Report', 'Hi, please see attached for the numbers.')).toBe('see attached');
+    expect(mentionsAttachment('Report', 'I’ve enclosed the contract')).toBe('I’ve enclosed');
+    expect(mentionsAttachment('Report', 'PFA')).toBe('PFA');
+    expect(mentionsAttachment('Attachment: invoice', 'Hello')).toBe('Attachment');
+    expect(mentionsAttachment('Lunch?', 'Want to grab lunch?')).toBeNull();
+    // A reply's subject came from the original message.
+    expect(mentionsAttachment('Re: Contract attached', 'Thanks, looks good')).toBeNull();
+    expect(mentionsAttachment('Fwd: attached', 'fyi')).toBeNull();
+  });
+});
+
+describe('dark mode for email bodies', async () => {
+  const { looksDesigned, luminance } = await import('../src/web/lib/dark-mail');
+  it('keeps designed mail on white and lets ordinary mail go dark', () => {
+    expect(looksDesigned('<div dir="ltr">Hey man<blockquote>On Fri… wrote: hi</blockquote></div>')).toBe(false);
+    expect(looksDesigned('<p><span style="color:rgb(34,34,34);background-color:rgb(255,255,255)">pasted</span></p>')).toBe(false);
+    expect(looksDesigned('<table width="600" bgcolor="#f4f4f4"><tr><td>Sale</td></tr></table>')).toBe(true);
+    expect(looksDesigned('<div style="background-color:#0b5fff;color:#fff">Brand</div>')).toBe(true);
+    expect(looksDesigned('<div style="background:url(https://x.example/a.png)">x</div>')).toBe(true);
+    expect(looksDesigned('<div style="max-width:600px;margin:auto">Newsletter</div>')).toBe(true);
+    expect(luminance([0, 0, 0])).toBe(0);
+    expect(luminance([255, 255, 255])).toBeCloseTo(1);
+  });
+});

@@ -49,7 +49,8 @@ async function request<T>(method: string, url: string, data?: Json | FormData, m
   if (!res.ok) {
     const err = new ApiError(parsed?.error || `Request failed (${res.status})`, res.status, parsed?.code);
     if (res.status === 401 && !url.startsWith('/api/auth/')) window.dispatchEvent(new CustomEvent('wren:unauthorized'));
-    if (parsed?.code === 'mfa_setup_required') window.dispatchEvent(new CustomEvent('wren:mfa-required'));
+    // Something must happen before anything else (2-step setup, a new password): reload the session to show it.
+    if (parsed?.code === 'mfa_setup_required' || parsed?.code === 'password_change_required') window.dispatchEvent(new CustomEvent('wren:mfa-required'));
     throw err;
   }
   return parsed as T;

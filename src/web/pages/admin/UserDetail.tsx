@@ -33,6 +33,7 @@ interface Detail {
     customSendLimit: boolean;
     sentToday: number;
     lockedUntil: number | null;
+    mustChangePassword: boolean;
   };
   mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
   exports: Parameters<typeof ExportCard>[0]['jobs'];
@@ -144,6 +145,17 @@ export function UserDetailPage() {
                     ]
                   : []),
                 { label: 'Set a password…', icon: <KeyRound className="size-4" />, onClick: () => setPassword(true) },
+                ...(self
+                  ? []
+                  : [
+                      u.mustChangePassword
+                        ? { label: 'Don’t require a new password', icon: <KeyRound className="size-4" />, onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { requirePasswordChange: false }), 'They no longer need a new password') }
+                        : {
+                            label: 'Require a new password at next sign-in',
+                            icon: <KeyRound className="size-4" />,
+                            onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { requirePasswordChange: true }), 'They’ll choose a new password before they can continue'),
+                          },
+                    ]),
                 ...(u.totpEnabled ? [{ label: 'Reset 2-step verification', icon: <ShieldOff className="size-4" />, onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/reset-2fa`), '2-step verification reset') }] : []),
                 ...(u.passkeys
                   ? [
@@ -187,7 +199,10 @@ export function UserDetailPage() {
               </>
             )}
             <dt className="text-muted">Password changed</dt>
-            <dd>{u.passwordChangedAt ? relativeTime(u.passwordChangedAt) : '—'}</dd>
+            <dd className="flex flex-wrap items-center gap-2">
+              {u.passwordChangedAt ? relativeTime(u.passwordChangedAt) : '—'}
+              {u.mustChangePassword && <Badge tone="warn">new one required</Badge>}
+            </dd>
             <dt className="text-muted">2-step verification</dt>
             <dd className="flex items-center gap-1.5">{u.totpEnabled ? <><ShieldCheck className="size-4 text-ok" /> On</> : 'Off'}</dd>
             <dt className="text-muted">Passkeys</dt>
@@ -303,7 +318,7 @@ export function UserDetailPage() {
       </div>
 
       <EditUserModal user={editing ? asAdminUser : null} onClose={() => setEditing(false)} onSaved={refresh} />
-      <ResetPasswordModal user={password ? asAdminUser : null} onClose={() => setPassword(false)} />
+      <ResetPasswordModal user={password ? asAdminUser : null} onClose={() => setPassword(false)} onSaved={refresh} />
       <SignInLinkModal user={link ? asAdminUser : null} onClose={() => setLink(false)} />
       <RenameModal
         user={u}

@@ -554,4 +554,9 @@ export const migrations: string[] = [
   `
   ALTER TABLE messages ADD COLUMN rsvp TEXT;
   `,
+
+  // 8: an admin can require a new password at the next sign-in (met once the password changes after this time).
+  `
+  ALTER TABLE users ADD COLUMN password_change_required_at INTEGER;
+  `,
 ];

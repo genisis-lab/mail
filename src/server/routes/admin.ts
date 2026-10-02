@@ -14,7 +14,7 @@ import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { createUser, getUser, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -140,6 +140,7 @@ function userDto(u: any, locked?: Set<string>) {
     aliases: u.aliases ?? 0,
     messages: u.messages ?? 0,
     recoveryEmail: u.recovery_email ?? null,
+    mustChangePassword: mustChangePassword(u),
   };
 }
 
@@ -218,9 +219,12 @@ adminRoutes.put('/users/:id', async (c) => {
       status: z.enum(['active', 'suspended']).optional(),
       quotaMb: z.number().int().min(1).nullable().optional(),
       sendLimitPerDay: z.number().int().min(0).nullable().optional(),
+      /** Ask for a new password before they can do anything else (true), or cancel that (false). */
+      requirePasswordChange: z.boolean().optional(),
     }),
   );
   if (u.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can modify the owner account');
+  if (input.requirePasswordChange && id === me.id) throw badRequest('Change your own password in Settings → Security');
   if (input.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can grant ownership');
   if (id === me.id && (input.status === 'suspended' || (input.role && input.role !== me.role))) throw badRequest('You cannot change your own role or suspend yourself');
   if (u.role === 'owner' && input.role && input.role !== 'owner') {
@@ -239,6 +243,7 @@ adminRoutes.put('/users/:id', async (c) => {
     }
     if (input.quotaMb !== undefined) run('UPDATE users SET quota_bytes = ? WHERE id = ?', [input.quotaMb ? input.quotaMb * 1024 * 1024 : null, id]);
     if (input.sendLimitPerDay !== undefined) run('UPDATE users SET send_limit_per_day = ? WHERE id = ?', [input.sendLimitPerDay, id]);
+    if (input.requirePasswordChange !== undefined) run('UPDATE users SET password_change_required_at = ? WHERE id = ?', [input.requirePasswordChange ? now() : null, id]);
   });
   act(c, 'admin.user_updated', u.email, input);
   return c.json({ ok: true });
@@ -263,11 +268,13 @@ adminRoutes.post('/users/:id/password', async (c) => {
   const u = getUser(id);
   if (!u) throw notFound();
   if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden();
-  const { password } = await body(c, z.object({ password: z.string().min(1).max(256) }));
+  const { password, mustChange } = await body(c, z.object({ password: z.string().min(1).max(256), mustChange: z.boolean().default(false) }));
   validatePassword(password);
-  run('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?', [await hashPassword(password), now(), id]);
+  const ts = now();
+  // With mustChange, this password only gets them to a "choose your own password" screen.
+  run('UPDATE users SET password_hash = ?, password_changed_at = ?, password_change_required_at = ? WHERE id = ?', [await hashPassword(password), ts, mustChange ? ts : null, id]);
   run('DELETE FROM sessions WHERE user_id = ?', [id]);
-  act(c, 'admin.user_password_reset', u.email);
+  act(c, 'admin.user_password_reset', u.email, { mustChange });
   return c.json({ ok: true });
 });
 

@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImageOff, MoreHorizontal } from 'lucide-react';
+import { ImageOff, Moon, MoreHorizontal, Sun } from 'lucide-react';
 import type { AttachmentInfo } from '../../shared/types';
+import { adaptForDark, looksDesigned } from '../lib/dark-mail';
 import { renderMailHtml, textToSafeHtml } from '../lib/sanitize';
 import { cx } from './ui';
+
+/** Body colours on the dark background (match the app's dark theme). */
+const DARK = { text: '#e6e8ec', muted: '#a1a7b3', link: '#8ab4f8' };
 
 const QUOTE_SELECTORS = ['.gmail_quote', 'blockquote[type="cite"]', '.wren-quote', '#divRplyFwdMsg', '.yahoo_quoted', '#appendonsend', '.moz-cite-prefix'];
 
@@ -37,18 +41,25 @@ export function MessageBody({
   useEffect(() => onBlockedImages?.(rendered.blockedImages), [rendered.blockedImages, onBlockedImages]);
 
   const dark = document.documentElement.classList.contains('dark');
+  // In dark mode: designed mail keeps white paper, ordinary mail goes dark. The reader can flip it.
+  const designed = useMemo(() => isHtml && looksDesigned(rendered.html), [isHtml, rendered.html]);
+  const [paperChoice, setPaperChoice] = useState<boolean | null>(null);
+  const paper = isHtml && (!dark || (paperChoice ?? designed));
+  const darkText = dark && !paper;
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">
 <style>
   html,body{margin:0;padding:0;}
+  /* Without this the browser paints an opaque white backdrop behind the frame in dark mode. */
+  :root{color-scheme:${darkText ? 'dark' : 'light'};}
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;
-    ${isHtml ? 'color:#222;background:#fff;' : dark ? 'color:#e6e8ec;background:transparent;' : 'color:#1d2129;background:transparent;'}}
+    ${paper ? 'color:#222;background:#fff;' : darkText ? `color:${DARK.text};background:transparent;` : 'color:#1d2129;background:transparent;'}}
   img{max-width:100%;height:auto;}
   table{max-width:100%;}
   pre{white-space:pre-wrap;}
-  a{color:${isHtml ? '#1a56db' : dark ? '#8ab4f8' : '#1a56db'};}
+  a{color:${darkText ? DARK.link : '#1a56db'};}
   blockquote{margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex;}
   .wren-hidden-quote{display:none !important;}
-  ${dark && !isHtml ? 'blockquote{border-color:#444;color:#a1a7b3}' : ''}
+  ${darkText ? `blockquote{border-color:#444;color:${DARK.muted}}` : ''}
 </style></head><body>${rendered.html}</body></html>`;
 
   useEffect(() => {
@@ -60,6 +71,7 @@ export function MessageBody({
       if (!doc) return;
       const quotes = QUOTE_SELECTORS.flatMap((s) => [...doc.querySelectorAll(s)]).filter((el) => !el.parentElement?.closest(QUOTE_SELECTORS.join(',')));
       setHasQuote(quotes.length > 0);
+      if (darkText && isHtml) adaptForDark(doc, DARK);
       quotes.forEach((q) => q.classList.toggle('wren-hidden-quote', !showQuote));
       const measure = () => setHeight(Math.max(40, doc.documentElement.scrollHeight));
       measure();
@@ -73,11 +85,11 @@ export function MessageBody({
       f.removeEventListener('load', onLoad);
       ro?.disconnect();
     };
-  }, [srcDoc, showQuote]);
+  }, [srcDoc, showQuote, darkText, isHtml]);
 
   return (
     <div>
-      <div className={cx(isHtml && 'overflow-hidden rounded-lg', isHtml && dark && 'bg-white p-3')}>
+      <div className={cx(isHtml && 'overflow-hidden rounded-lg', paper && dark && 'bg-white p-3')}>
         <iframe
           ref={frame}
           title="Message body"
@@ -87,14 +99,29 @@ export function MessageBody({
           className="block w-full border-0"
         />
       </div>
-      {hasQuote && (
-        <button
-          onClick={() => setShowQuote((s) => !s)}
-          title={showQuote ? 'Hide trimmed content' : 'Show trimmed content'}
-          className="mt-2 inline-flex h-4 items-center rounded-full bg-panel3 px-1.5 text-muted hover:bg-line-strong"
-        >
-          <MoreHorizontal className="size-4" />
-        </button>
+      {(hasQuote || (dark && isHtml)) && (
+        <div className="mt-2 flex items-center gap-2">
+          {hasQuote && (
+            <button
+              onClick={() => setShowQuote((s) => !s)}
+              title={showQuote ? 'Hide trimmed content' : 'Show trimmed content'}
+              aria-label={showQuote ? 'Hide trimmed content' : 'Show trimmed content'}
+              className="inline-flex h-4 items-center rounded-full bg-panel3 px-1.5 text-muted hover:bg-line-strong"
+            >
+              <MoreHorizontal className="size-4" />
+            </button>
+          )}
+          {dark && isHtml && (
+            <button
+              onClick={() => setPaperChoice(!paper)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted hover:bg-panel3 hover:text-fg"
+              title={paper ? 'Show this message with a dark background' : 'Show this message’s original colours'}
+            >
+              {paper ? <Moon className="size-3.5" aria-hidden /> : <Sun className="size-3.5" aria-hidden />}
+              {paper ? 'Dark background' : 'Original colours'}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -592,6 +592,67 @@ export function ForceTwoFactorPage({ instance }: { instance: Instance }) {
   );
 }
 
+/** An administrator asked for a new password: choose one before anything else. */
+export function ForcePasswordPage({ instance, email }: { instance: Instance; email: string }) {
+  const qc = useQueryClient();
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <AuthShell instance={instance}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (next !== confirm) return setError('The passwords don’t match');
+          setBusy(true);
+          setError(null);
+          try {
+            await api.post('/api/account/password/required', { next });
+            await qc.invalidateQueries({ queryKey: ['me'] });
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-ink">
+          <KeyRound className="size-6" aria-hidden />
+        </div>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Choose a new password</h1>
+          <p className="mt-1 text-sm text-muted">
+            Your administrator asked you to set a new password for <b className="text-fg">{email}</b> before you continue. Your other devices will be signed out.
+          </p>
+        </div>
+        {/* Lets password managers save the new password under the right account. */}
+        <input type="email" autoComplete="username" value={email} readOnly hidden />
+        <Field label="New password" help="A long one you don’t use anywhere else.">
+          <Input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} autoFocus required />
+        </Field>
+        <Field label="Type it again" error={error}>
+          <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+        </Field>
+        <Button type="submit" variant="primary" className="w-full" loading={busy}>
+          Save and continue
+        </Button>
+        <button
+          type="button"
+          className="block w-full text-center text-sm text-muted hover:text-fg"
+          onClick={async () => {
+            await api.post('/api/auth/logout');
+            qc.invalidateQueries({ queryKey: ['me'] });
+          }}
+        >
+          Sign out
+        </button>
+      </form>
+    </AuthShell>
+  );
+}
+
 /** "Forgot password?": a reset link goes to the account's confirmed recovery email. */
 export function ForgotPage({ instance }: { instance: Instance }) {
   const [params] = useSearchParams();

@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { SessionProvider, useMe, useTheme } from './lib/session';
 import { Spinner } from './components/ui';
 import { ComposeProvider } from './components/Compose';
-import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
+import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForcePasswordPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
 import { MailLayout } from './pages/MailLayout';
 import { AdminLayout } from './pages/admin/AdminLayout';
 
@@ -64,6 +64,10 @@ export function App() {
         <Route path="*" element={<LoginPage instance={instance} mfaPending={me.data.mfaPending} next={location.pathname} />} />
       </Routes>
     );
+  }
+
+  if (user.mustChangePassword) {
+    return <ForcePasswordPage instance={instance} email={user.email} />;
   }
 
   if (user.mustSetup2fa) {

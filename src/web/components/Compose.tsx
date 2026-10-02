@@ -6,6 +6,7 @@ import { CalendarClock, ChevronDown, FileText, Maximize2, Minimize2, Minus, Pape
 import { useQuery } from '@tanstack/react-query';
 import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../shared/types';
 import { apiFor, getApiMailbox } from '../lib/api';
+import { mentionsAttachment, ownText } from '../lib/attachment-check';
 import { fileSize } from '../lib/format';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
@@ -372,6 +373,10 @@ export function ComposeForm({
       return;
     }
     if (!subject.trim() && !window.confirm('Send this message without a subject?')) return;
+    if (!attachments.length && !uploading) {
+      const said = mentionsAttachment(subject, ownText(editor.current?.getHtml() ?? html.current));
+      if (said && !window.confirm(`Did you mean to attach files?\n\nYou wrote “${said}”, but there are no files attached. Send anyway?`)) return;
+    }
     if (uploading) {
       toast('Wait for attachments to finish uploading');
       return;
