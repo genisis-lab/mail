@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1
+
+README and screenshots for v0.2.0's features (a user's admin page, dark-mode email), and
+a shorter "Require a new password" menu label that no longer gets cut off. No upgrade
+steps.
+
 ## v0.2.0 — admin controls, plainer system mail, dark-mode email
 
 **Admin.** Change a user's address (their sign-in name), optionally keeping the old one
