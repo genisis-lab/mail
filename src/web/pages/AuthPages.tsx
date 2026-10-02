@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import type { Instance } from '../lib/session';
 import { Logo } from '../components/Logo';
 import { TwoFactorSetup } from '../components/TwoFactorSetup';
-import { Button, Field, Input, Select } from '../components/ui';
+import { Button, Field, Input, Select, Spinner } from '../components/ui';
 
 function AuthShell({ instance, children, wide }: { instance: Instance; children: ReactNode; wide?: boolean }) {
   return (
@@ -222,6 +222,108 @@ export function RegisterPage({ instance }: { instance: Instance }) {
             Sign in
           </Link>
         </p>
+      </form>
+    </AuthShell>
+  );
+}
+
+/** One-time link from a password reset or an admin-created account: choose a password. */
+export function ResetPage({ instance }: { instance: Instance }) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [info, setInfo] = useState<{ valid: boolean; kind?: 'reset' | 'setup'; email?: string; name?: string } | null>(token ? null : { valid: false });
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    api
+      .get(`/api/auth/reset/${encodeURIComponent(token)}`)
+      .then(setInfo)
+      .catch(() => setInfo({ valid: false }));
+  }, [token]);
+
+  if (!info) {
+    return (
+      <AuthShell instance={instance}>
+        <div className="flex justify-center py-6">
+          <Spinner className="size-6" />
+        </div>
+      </AuthShell>
+    );
+  }
+
+  if (needsSignIn) {
+    return (
+      <AuthShell instance={instance}>
+        <h1 className="text-xl font-semibold">Password updated</h1>
+        <p className="mt-2 text-sm text-muted">Sign in with your new password to continue.</p>
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent hover:underline">
+          Go to sign in
+        </Link>
+      </AuthShell>
+    );
+  }
+
+  if (!info.valid) {
+    return (
+      <AuthShell instance={instance}>
+        <h1 className="text-xl font-semibold">This link has expired</h1>
+        <p className="mt-2 text-sm text-muted">The link is invalid or was already used. Ask an administrator of {instance.name} for a new one.</p>
+        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent hover:underline">
+          Back to sign in
+        </Link>
+      </AuthShell>
+    );
+  }
+
+  const isSetup = info.kind === 'setup';
+  return (
+    <AuthShell instance={instance}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (password !== confirm) {
+            setError('The two passwords don’t match');
+            return;
+          }
+          setBusy(true);
+          setError(null);
+          try {
+            const r = await api.post<{ signedIn: boolean }>('/api/auth/reset', { token, password });
+            if (r.signedIn) {
+              await qc.invalidateQueries({ queryKey: ['me'] });
+              navigate('/inbox', { replace: true });
+            } else setNeedsSignIn(true);
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{isSetup ? 'Choose your password' : 'Reset your password'}</h1>
+          <p className="mt-1 text-sm text-muted">
+            for {info.email}
+            {isSetup ? ` on ${instance.name}` : ''}
+          </p>
+        </div>
+        <Field label="New password" help="Use a long passphrase you don’t use anywhere else.">
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required autoComplete="new-password" />
+        </Field>
+        <Field label="Confirm password" error={error}>
+          <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required autoComplete="new-password" />
+        </Field>
+        <Button type="submit" variant="primary" className="w-full" loading={busy}>
+          {isSetup ? 'Set password and sign in' : 'Update password'}
+        </Button>
       </form>
     </AuthShell>
   );
