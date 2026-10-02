@@ -63,10 +63,10 @@ adminOpsRoutes.delete('/cloudflare', (c) => {
 
 adminOpsRoutes.post('/domains/:id/cloudflare-setup', async (c) => {
   const id = intParam(c, 'id');
-  const { sending } = await body(c, z.object({ sending: z.boolean().default(true) }));
+  const { sending, replaceMx } = await body(c, z.object({ sending: z.boolean().default(true), replaceMx: z.boolean().default(false) }));
   let steps;
   try {
-    steps = await setUpDomainOnCloudflare(id, { sending });
+    steps = await setUpDomainOnCloudflare(id, { sending, replaceMx });
   } catch (err) {
     if (err instanceof CloudflareApiError) throw badRequest(err.message);
     throw err;

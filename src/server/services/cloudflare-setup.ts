@@ -95,7 +95,13 @@ const sameName = (a: string | undefined, b: string, zone: string) => {
 };
 const sameContent = (a: string | undefined, b: string | undefined) => (a ?? '').replace(/^"|"$/g, '').toLowerCase().replace(/\.$/, '') === (b ?? '').replace(/^"|"$/g, '').toLowerCase().replace(/\.$/, '');
 
-export async function setUpDomainOnCloudflare(domainId: number, opts: { sending: boolean }): Promise<SetupStep[]> {
+/**
+ * Point a domain at this Worker through Cloudflare. When the domain receives
+ * mail somewhere else today (its MX records point at another service), nothing
+ * is changed unless `replaceMx` is set: turning on Email Routing would take
+ * over its mail.
+ */
+export async function setUpDomainOnCloudflare(domainId: number, opts: { sending: boolean; replaceMx?: boolean }): Promise<SetupStep[]> {
   const token = cloudflareToken();
   if (!token) throw new CloudflareApiError('Add a Cloudflare API token first');
   const domain = get<{ id: number; name: string }>('SELECT id, name FROM domains WHERE id = ?', [domainId]);
@@ -122,6 +128,19 @@ export async function setUpDomainOnCloudflare(domainId: number, opts: { sending:
   // 2. Email Routing
   try {
     const settings = await cf<{ enabled: boolean; status?: string }>(token, 'GET', `/zones/${zone.id}/email/routing`);
+    if (!settings.enabled && !opts.replaceMx) {
+      const mx = await cf<DnsRecord[]>(token, 'GET', `/zones/${zone.id}/dns_records?type=MX&name=${encodeURIComponent(domain.name)}`);
+      const elsewhere = mx.filter((r) => !/(^|\.)mx\.cloudflare\.net\.?$/i.test(r.content ?? ''));
+      if (elsewhere.length) {
+        steps.push({
+          id: 'routing',
+          title: 'Enable Email Routing',
+          status: 'failed',
+          detail: `${domain.name} receives mail through ${elsewhere.map((r) => r.content).join(', ')} today. Turning on Email Routing would replace those MX records and move its mail to Cloudflare. Nothing was changed; confirm the switch to go ahead.`,
+        });
+        return steps;
+      }
+    }
     if (settings.enabled) {
       steps.push({ id: 'routing', title: 'Enable Email Routing', status: 'skipped', detail: `Already enabled${settings.status ? ` (${settings.status})` : ''}.` });
     } else {

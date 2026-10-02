@@ -145,6 +145,7 @@ describe('one-click Cloudflare setup', () => {
       const ok = (result: unknown) => Response.json({ success: true, result });
       if (path === '/zones?name=wren.test') return ok([{ id: 'z1', name: 'wren.test' }]);
       if (path === '/zones/z1/email/routing' && method === 'GET') return ok({ enabled: false });
+      if (path === '/zones/z1/dns_records?type=MX&name=wren.test') return ok([]);
       if (path === '/zones/z1/email/routing/dns' && method === 'POST') return ok({ enabled: true, status: 'ready' });
       if (path === '/zones/z1/email/routing/rules/catch_all' && method === 'GET') return ok({ enabled: true, actions: [{ type: 'forward', value: ['old@example.org'] }] });
       if (path === '/zones/z1/email/routing/rules/catch_all' && method === 'PUT') return ok({});
@@ -175,6 +176,35 @@ describe('one-click Cloudflare setup', () => {
     expect(put.body).toEqual({ actions: [{ type: 'worker', value: ['wren'] }], matchers: [{ type: 'all' }], enabled: true, name: 'Send everything to Wren' });
     const created = calls.filter((c) => c.method === 'POST' && c.path === '/zones/z1/dns_records');
     expect(created.map((c) => c.body.name)).toEqual(['cf2024-1._domainkey.wren.test']);
+  });
+
+  it('leaves a domain that receives mail elsewhere alone unless the switch is confirmed', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      const path = url.replace('https://api.cloudflare.com/client/v4', '');
+      const method = init.method ?? 'GET';
+      calls.push(`${method} ${path}`);
+      const ok = (result: unknown) => Response.json({ success: true, result });
+      if (path === '/zones?name=wren.test') return ok([{ id: 'z1', name: 'wren.test' }]);
+      if (path === '/zones/z1/email/routing') return ok({ enabled: false });
+      if (path === '/zones/z1/dns_records?type=MX&name=wren.test') return ok([{ type: 'MX', name: 'wren.test', content: 'inbound-smtp.us-east-1.amazonaws.com', priority: 10 }]);
+      if (path === '/zones/z1/email/routing/dns' && method === 'POST') return ok({ enabled: true });
+      if (path === '/zones/z1/email/routing/rules/catch_all' && method === 'GET') return ok({ enabled: false });
+      if (path === '/zones/z1/email/routing/rules/catch_all' && method === 'PUT') return ok({});
+      return Response.json({ success: false, errors: [{ code: 7003, message: `unexpected ${method} ${path}` }] }, { status: 404 });
+    });
+    const domainId = get<{ id: number }>(`SELECT id FROM domains WHERE name = 'wren.test'`)!.id;
+    const r = await h.call('POST', `/api/admin/domains/${domainId}/cloudflare-setup`, { sending: false });
+    expect(r.body.steps.map((s: any) => [s.id, s.status])).toEqual([
+      ['zone', 'done'],
+      ['routing', 'failed'],
+    ]);
+    expect(r.body.steps[1].detail).toMatch(/receives mail through inbound-smtp.us-east-1.amazonaws.com today.*Nothing was changed/);
+    expect(calls.filter((c) => !c.startsWith('GET'))).toEqual([]);
+
+    const confirmed = await h.call('POST', `/api/admin/domains/${domainId}/cloudflare-setup`, { sending: false, replaceMx: true });
+    expect(confirmed.body.steps.find((s: any) => s.id === 'routing').status).toBe('done');
+    expect(calls).toContain('PUT /zones/z1/email/routing/rules/catch_all');
   });
 
   it('explains a domain that is not on the account', async () => {
