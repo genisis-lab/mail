@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Globe, KeyRound, Mail, Send, ShieldCheck, Sparkles } from 'lucide-react';
 import { APP_NAME, APP_TAGLINE } from '../../shared/brand';
 import { api } from '../lib/api';
+import { passkeysSupported, signInWithPasskey } from '../lib/passkeys';
 import type { Instance } from '../lib/session';
 import { Logo } from '../components/Logo';
 import { TwoFactorSetup } from '../components/TwoFactorSetup';
@@ -33,6 +34,7 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const navigate = useNavigate();
 
   const done = async () => {
@@ -79,6 +81,29 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
           <Button type="submit" variant="primary" className="w-full" loading={busy}>
             Sign in
           </Button>
+          {passkeysSupported() && (
+            <Button
+              type="button"
+              className="w-full"
+              icon={<KeyRound className="size-4" />}
+              loading={passkeyBusy}
+              onClick={async () => {
+                setPasskeyBusy(true);
+                setError(null);
+                try {
+                  const r = await signInWithPasskey(email.trim() || undefined);
+                  if (r.mfaRequired) setStep('mfa');
+                  else await done();
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setPasskeyBusy(false);
+                }
+              }}
+            >
+              Sign in with a passkey
+            </Button>
+          )}
           {instance.registration !== 'closed' && (
             <p className="text-center text-sm text-muted">
               New here?{' '}

@@ -22,6 +22,7 @@ interface Detail {
     lastLoginAt: number | null;
     passwordChangedAt: number | null;
     totpEnabled: boolean;
+    passkeys: number;
     recoveryEmail: string | null;
     recoveryVerified: boolean;
     usedBytes: number;
@@ -35,7 +36,7 @@ interface Detail {
   addresses: { id: number; address: string; kind: string; enabled: number; can_send: number; created_by: number | null }[];
   shared: { id: number; email: string; name: string; canSend: boolean }[];
   sessions: { id: string; ip: string | null; userAgent: string | null; createdAt: number; lastSeenAt: number }[];
-  signIns: { action: string; ip: string | null; at: number; mfa: boolean }[];
+  signIns: { action: string; ip: string | null; at: number; mfa: boolean; passkey?: boolean }[];
 }
 
 const FOLDER_NAMES: Record<string, string> = { inbox: 'Inbox', archive: 'Archive', sent: 'Sent', drafts: 'Drafts', spam: 'Spam', trash: 'Trash' };
@@ -132,6 +133,15 @@ export function UserDetailPage() {
                   : []),
                 { label: 'Set a password…', icon: <KeyRound className="size-4" />, onClick: () => setPassword(true) },
                 ...(u.totpEnabled ? [{ label: 'Reset 2-step verification', icon: <ShieldOff className="size-4" />, onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/reset-2fa`), '2-step verification reset') }] : []),
+                ...(u.passkeys
+                  ? [
+                      {
+                        label: `Remove ${u.passkeys === 1 ? 'their passkey' : `their ${u.passkeys} passkeys`}`,
+                        icon: <ShieldOff className="size-4" />,
+                        onClick: () => window.confirm(`Remove ${u.email}’s passkeys? They’ll sign in with their password until they add new ones.`) && void call(() => api.del(`/api/admin/users/${u.id}/passkeys`), 'Passkeys removed'),
+                      },
+                    ]
+                  : []),
                 { label: 'Sign out everywhere', icon: <LogOut className="size-4" />, onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/signout`), 'Signed out of all sessions') },
                 { divider: true },
                 u.status === 'active'
@@ -154,6 +164,8 @@ export function UserDetailPage() {
             <dd>{u.passwordChangedAt ? relativeTime(u.passwordChangedAt) : '—'}</dd>
             <dt className="text-muted">2-step verification</dt>
             <dd className="flex items-center gap-1.5">{u.totpEnabled ? <><ShieldCheck className="size-4 text-ok" /> On</> : 'Off'}</dd>
+            <dt className="text-muted">Passkeys</dt>
+            <dd>{u.passkeys || 'None'}</dd>
             <dt className="text-muted">Recovery email</dt>
             <dd className="min-w-0 break-words">
               {u.recoveryEmail ? (
@@ -251,6 +263,7 @@ export function UserDetailPage() {
                   {s.action === 'auth.login_failed' ? <UserX className="size-4 text-danger" aria-hidden /> : <CheckCircle2 className="size-4 text-ok" aria-hidden />}
                   <span className={s.action === 'auth.login_failed' ? 'text-danger' : ''}>{SIGN_IN[s.action] ?? s.action}</span>
                   {s.mfa && <Badge tone="ok">2-step</Badge>}
+                  {s.passkey && <Badge tone="ok">passkey</Badge>}
                   <span className="text-muted">{s.ip ?? ''}</span>
                   <span className="ml-auto text-xs text-muted">{longDate(s.at)}</span>
                 </li>

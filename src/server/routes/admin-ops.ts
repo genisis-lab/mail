@@ -285,6 +285,17 @@ adminOpsRoutes.delete('/suppressions/:address', (c) => {
   return c.json({ ok: true });
 });
 
+/** Remove someone's passkeys (a lost or stolen device). */
+adminOpsRoutes.delete('/users/:id/passkeys', (c) => {
+  const id = intParam(c, 'id');
+  const u = getUser(id);
+  if (!u) throw notFound();
+  if (u.role === 'owner' && c.get('user').role !== 'owner') throw forbidden();
+  const removed = run('DELETE FROM passkeys WHERE user_id = ?', [id]).changes;
+  act(c, 'admin.user_passkeys_removed', u.email, { removed });
+  return c.json({ removed });
+});
+
 // ── Catch-all control ───────────────────────────────────────────────────────
 
 /** Addresses that only received mail through a domain's catch-all, and blocked addresses. */
@@ -387,7 +398,10 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
   const signIns = all<any>(
     `SELECT action, ip, created_at, details FROM audit_log WHERE user_id = ? AND action IN ('auth.login','auth.login_failed','auth.password_reset','auth.account_setup') ORDER BY id DESC LIMIT 25`,
     [id],
-  ).map((r) => ({ action: r.action, ip: r.ip, at: r.created_at, mfa: !!(r.details && JSON.parse(r.details).mfa) }));
+  ).map((r) => {
+    const d = r.details ? JSON.parse(r.details) : {};
+    return { action: r.action, ip: r.ip, at: r.created_at, mfa: !!d.mfa, passkey: typeof d.passkey === 'string' };
+  });
   const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
   return c.json({
     user: {
@@ -400,6 +414,7 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       lastLoginAt: u.last_login_at,
       passwordChangedAt: u.password_changed_at,
       totpEnabled: !!u.totp_enabled,
+      passkeys: get<{ c: number }>('SELECT COUNT(*) AS c FROM passkeys WHERE user_id = ?', [id])!.c,
       recoveryEmail: u.recovery_email,
       recoveryVerified: !!u.recovery_verified_at,
       usedBytes: u.used_bytes,

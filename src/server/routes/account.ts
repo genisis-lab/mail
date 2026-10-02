@@ -10,6 +10,8 @@ import { audit } from '../services/audit.js';
 import { getPrefs, getUser, identities, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
 import { sendRecoveryVerification } from '../services/account-links.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
+import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
+import { WebAuthnError } from '../lib/webauthn.js';
 
 export const accountRoutes = new Hono<AppEnv>();
 
@@ -209,6 +211,59 @@ accountRoutes.post('/2fa/disable', async (c) => {
   if (policy === 'all' || (policy === 'admins' && user.role !== 'user')) throw badRequest('Your administrator requires two-factor authentication');
   run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL WHERE id = ?', [user.id]);
   audit(user.id, 'account.2fa_disabled', user.email, undefined, clientIp(c));
+  return c.json({ ok: true });
+});
+
+// ── Passkeys ────────────────────────────────────────────────────────────────
+
+accountRoutes.get('/passkeys', (c) => c.json({ passkeys: listPasskeys(c.get('user').id) }));
+
+/** Start adding a passkey. Asks for the password, so a borrowed session can't add one. */
+accountRoutes.post('/passkeys/options', async (c) => {
+  const user = c.get('user');
+  const { password } = await body(c, z.object({ password: z.string().min(1).max(256) }));
+  rateLimit(`passkey-add:${user.id}`, 10, 15 * 60_000);
+  if (!(await verifyPassword(password, user.password_hash))) throw unauthorized('Password is incorrect');
+  try {
+    return c.json(registrationOptions(user));
+  } catch (err) {
+    if (err instanceof WebAuthnError) throw badRequest(err.message);
+    throw err;
+  }
+});
+
+accountRoutes.post('/passkeys', async (c) => {
+  const user = c.get('user');
+  const input = await body(
+    c,
+    z.object({
+      name: z.string().max(60).default(''),
+      response: z.object({ clientDataJSON: z.string().max(4000), attestationObject: z.string().max(20_000) }),
+      transports: z.array(z.string().max(20)).max(8).optional(),
+    }),
+  );
+  try {
+    const { id } = finishRegistration(user, input);
+    audit(user.id, 'account.passkey_added', input.name || 'Passkey', undefined, clientIp(c));
+    return c.json({ id });
+  } catch (err) {
+    if (err instanceof WebAuthnError) throw badRequest(err.message);
+    throw err;
+  }
+});
+
+accountRoutes.put('/passkeys/:id', async (c) => {
+  const { name } = await body(c, z.object({ name: z.string().trim().min(1).max(60) }));
+  if (!run('UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?', [name, intParam(c, 'id'), c.get('user').id]).changes) throw notFound();
+  return c.json({ ok: true });
+});
+
+accountRoutes.delete('/passkeys/:id', (c) => {
+  const user = c.get('user');
+  const pk = get<{ name: string }>('SELECT name FROM passkeys WHERE id = ? AND user_id = ?', [intParam(c, 'id'), user.id]);
+  if (!pk) throw notFound();
+  run('DELETE FROM passkeys WHERE id = ?', [intParam(c, 'id')]);
+  audit(user.id, 'account.passkey_removed', pk.name, undefined, clientIp(c));
   return c.json({ ok: true });
 });
 

@@ -14,6 +14,9 @@ import { markRecoveryVerified, sendPasswordReset, welcomeUser } from '../service
 import { consumeToken, peekToken } from '../services/tokens.js';
 import { body, clearRateLimit, clientIp, createSession, destroySession, getPendingSession, rateLimit, SESSION_COOKIE, type AppEnv } from '../http/context.js';
 import { getCookie } from 'hono/cookie';
+import { finishLogin, loginOptions } from '../services/passkeys.js';
+import { noteSignIn } from '../services/signin-alerts.js';
+import { WebAuthnError } from '../lib/webauthn.js';
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -76,6 +79,7 @@ authRoutes.post('/login', async (c) => {
   createSession(c, user.id);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, undefined, ip);
+  await noteSignIn(c, user, 'your password');
   return c.json({ user: sessionUser(user) });
 });
 
@@ -102,6 +106,49 @@ authRoutes.post('/mfa', async (c) => {
   createSession(c, user.id);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { mfa: true }, clientIp(c));
+  await noteSignIn(c, user, pending.passkey ? 'a passkey and 2-step verification' : 'your password and 2-step verification');
+  return c.json({ user: sessionUser(user) });
+});
+
+// ── Passkeys ────────────────────────────────────────────────────────────────
+
+authRoutes.post('/passkey/options', async (c) => {
+  const { email } = await body(c, z.object({ email: z.string().max(254).optional() }));
+  rateLimit(`passkey:ip:${clientIp(c)}`, 60, 15 * 60_000);
+  return c.json(loginOptions(email?.trim() || undefined));
+});
+
+const assertionSchema = z.object({
+  id: z.string().min(8).max(1400),
+  response: z.object({ clientDataJSON: z.string().max(4000), authenticatorData: z.string().max(4000), signature: z.string().max(2000), userHandle: z.string().max(400).nullish() }),
+});
+
+authRoutes.post('/passkey', async (c) => {
+  const input = await body(c, assertionSchema);
+  const ip = clientIp(c);
+  rateLimit(`passkey:ip:${ip}`, 60, 15 * 60_000);
+  let result;
+  try {
+    result = await finishLogin(input);
+  } catch (err) {
+    if (err instanceof WebAuthnError) {
+      audit(null, 'auth.login_failed', 'passkey', { reason: err.message }, ip);
+      throw unauthorized(err.message);
+    }
+    throw err;
+  }
+  const { user, userVerified, passkeyName } = result;
+  if (user.kind === 'shared') throw unauthorized('Shared mailboxes can’t sign in');
+  if (user.status !== 'active') throw forbidden('This account is suspended. Contact your administrator.');
+  // A passkey that checked a PIN or biometric is two factors; one that didn't still needs the 2-step code.
+  if (user.totp_enabled && !userVerified) {
+    createSession(c, user.id, true, true);
+    return c.json({ mfaRequired: true });
+  }
+  createSession(c, user.id);
+  run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
+  audit(user.id, 'auth.login', user.email, { passkey: passkeyName }, ip);
+  await noteSignIn(c, user, 'a passkey');
   return c.json({ user: sessionUser(user) });
 });
 

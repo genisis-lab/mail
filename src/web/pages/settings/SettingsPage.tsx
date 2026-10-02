@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Bell, Copy, Download, KeyRound, Laptop, LifeBuoy, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bell, Copy, Download, Fingerprint, KeyRound, Laptop, LifeBuoy, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
 import type { FilterActions, FilterCriteria, Label, SwipeAction, UserPrefs } from '../../../shared/types';
 import { api } from '../../lib/api';
 import { longDate, relativeTime } from '../../lib/format';
@@ -13,6 +13,7 @@ import { Badge, Button, Card, Checkbox, cx, Empty, Field, IconButton, Input, Mod
 import { LabelDialog } from '../MailLayout';
 import { currentPushSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, useInstallPrompt } from '../../lib/pwa';
 import { ImportExportTab } from './ImportExport';
+import { addPasskey, deviceName, passkeysSupported } from '../../lib/passkeys';
 import { SavedRepliesTab } from './SavedReplies';
 
 type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'replies' | 'import' | 'security';
@@ -987,6 +988,10 @@ function SecurityTab() {
 
       <RecoveryCard />
 
+      <PasskeysCard />
+
+      <SignInAlertsCard />
+
       <Card
         title="2-step verification"
         description="Require a code from an authenticator app when signing in."
@@ -1372,5 +1377,152 @@ function ThrowawayDialog({ open, onClose, onCreated }: { open: boolean; onClose:
         </Field>
       </form>
     </Modal>
+  );
+}
+
+interface PasskeyInfo {
+  id: number;
+  name: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  transports: string[];
+}
+
+function PasskeysCard() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const list = useQuery({ queryKey: ['passkeys'], queryFn: () => api.get<{ passkeys: PasskeyInfo[] }>('/api/account/passkeys').then((r) => r.passkeys) });
+  const supported = passkeysSupported();
+  return (
+    <Card
+      title="Passkeys"
+      description="Sign in with your fingerprint, face or device PIN instead of your password. A passkey only works on this site, so it can’t be phished."
+      actions={
+        <Button
+          variant="primary"
+          icon={<Fingerprint className="size-4" />}
+          disabled={!supported}
+          onClick={() => {
+            setPassword('');
+            setName(deviceName());
+            setAdding(true);
+          }}
+        >
+          Add a passkey
+        </Button>
+      }
+    >
+      {!supported && <p className="mb-3 text-sm text-muted">This browser doesn’t support passkeys.</p>}
+      {list.data?.length ? (
+        <ul className="-my-2 divide-y divide-line">
+          {list.data.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
+              <span className="min-w-0 flex-1 text-sm">
+                <span className="font-medium">{p.name}</span>
+                <span className="block text-xs text-muted">
+                  Added {relativeTime(p.createdAt)} · {p.lastUsedAt ? `last used ${relativeTime(p.lastUsedAt)}` : 'not used yet'}
+                </span>
+              </span>
+              <IconButton
+                size="sm"
+                label={`Rename ${p.name}`}
+                onClick={async () => {
+                  const next = window.prompt('Name this passkey', p.name)?.trim();
+                  if (!next || next === p.name) return;
+                  await api.put(`/api/account/passkeys/${p.id}`, { name: next });
+                  qc.invalidateQueries({ queryKey: ['passkeys'] });
+                }}
+              >
+                <Pencil className="size-4" />
+              </IconButton>
+              <IconButton
+                size="sm"
+                label={`Remove ${p.name}`}
+                onClick={async () => {
+                  if (!window.confirm(`Remove “${p.name}”? You won’t be able to sign in with it any more.`)) return;
+                  await api.del(`/api/account/passkeys/${p.id}`);
+                  qc.invalidateQueries({ queryKey: ['passkeys'] });
+                  toast('Passkey removed');
+                }}
+              >
+                <Trash2 className="size-4" />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        list.isSuccess && <p className="text-sm text-muted">No passkeys yet.</p>
+      )}
+      <Modal
+        open={adding}
+        onClose={() => setAdding(false)}
+        title="Add a passkey"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" form="passkey-form" variant="primary" loading={busy}>
+              Continue
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="passkey-form"
+          className="space-y-4"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            try {
+              await addPasskey(password, name);
+              setAdding(false);
+              qc.invalidateQueries({ queryKey: ['passkeys'] });
+              toast('Passkey added. Next time, choose “Sign in with a passkey”.');
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <p className="text-sm text-muted">Your browser or phone will ask you to confirm with your fingerprint, face or PIN.</p>
+          <Field label="Your password">
+            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
+          </Field>
+          <Field label="Name">
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+          </Field>
+        </form>
+      </Modal>
+    </Card>
+  );
+}
+
+function SignInAlertsCard() {
+  const { prefs, refresh } = useSession();
+  const toast = useToast();
+  return (
+    <Card title="Sign-in alerts">
+      <Switch
+        checked={prefs.signInAlerts}
+        onChange={async (v) => {
+          try {
+            await api.put('/api/account/prefs', { signInAlerts: v });
+            await refresh();
+            toast(v ? 'You’ll get an email when a new device signs in' : 'Sign-in alerts are off');
+          } catch (err) {
+            toast({ message: (err as Error).message, tone: 'error' });
+          }
+        }}
+        label="Email me when my account is signed in to from a new device"
+        description="Sent to this mailbox and to your verified recovery email."
+      />
+    </Card>
   );
 }

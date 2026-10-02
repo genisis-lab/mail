@@ -12,18 +12,29 @@ export function harness() {
   openDb(withDurableObjectLimits(nodeSqlDriver(':memory:')));
   invalidateSettings();
   const app = createApp();
-  const jars: Record<string, string> = {};
+  /** Cookies per identity (session, device…). */
+  const jars: Record<string, Record<string, string>> = {};
   let current = 'default';
+  const cookieHeader = () => Object.entries(jars[current] ?? {}).map(([k, v]) => `${k}=${v}`).join('; ');
+  const keepCookies = (res: Response) => {
+    for (const c of res.headers.getSetCookie()) {
+      const [pair] = c.split(';');
+      const i = pair.indexOf('=');
+      const jar = (jars[current] ??= {});
+      const value = pair.slice(i + 1);
+      if (!value || /max-age=0|expires=thu, 01 jan 1970/i.test(c)) delete jar[pair.slice(0, i)];
+      else jar[pair.slice(0, i)] = value;
+    }
+  };
 
   async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
-    const cookie = jars[current];
+    const cookie = cookieHeader();
     const res = await app.request(path, {
       method,
       headers: { 'Content-Type': 'application/json', 'X-Wren': '1', ...(cookie ? { cookie } : {}), ...headers },
       body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
     });
-    const set = res.headers.get('set-cookie');
-    if (set && set.includes('wren_sid=')) jars[current] = set.split(';')[0];
+    keepCookies(res);
     const text = await res.text();
     let parsed: any = text;
     try {
@@ -39,12 +50,16 @@ export function harness() {
     call,
     /** A raw request as the current identity, for downloads. */
     request(path: string, init: RequestInit = {}) {
-      const cookie = jars[current];
+      const cookie = cookieHeader();
       return app.request(path, { ...init, headers: { 'X-Wren': '1', ...(cookie ? { cookie } : {}), ...((init.headers as Record<string, string>) ?? {}) } });
     },
     /** Switch to another signed-in identity (separate cookie jar). */
     as(name: string) {
       current = name;
+    },
+    /** Forget an identity's cookies (a new browser). */
+    forget(name: string) {
+      delete jars[name];
     },
     async setup(email = { provider: 'later' as const }) {
       return call('POST', '/api/setup', { instanceName: 'Fernhill', domain: 'wren.test', localPart: 'admin', name: 'Ada Admin', password: 'a very long password', email });

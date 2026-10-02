@@ -40,14 +40,15 @@ export function clientIp(c: Context): string {
   return c.req.header('cf-connecting-ip') ?? '';
 }
 
-export function createSession(c: Context, userId: number, mfaPending = false): string {
+/** A full session, or (mfaPending) one waiting for the 2-step code; `viaPasskey` marks a passkey sign-in waiting for it. */
+export function createSession(c: Context, userId: number, mfaPending = false, viaPasskey = false): string {
   const token = randomToken(32);
   const ts = now();
   const days = getSettings()['security.sessionDays'];
   const expires = mfaPending ? ts + 10 * 60_000 : ts + days * 86_400_000;
   run(
     `INSERT INTO sessions (id, user_id, mfa_pending, ip, user_agent, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sha256(token), userId, mfaPending ? 1 : 0, clientIp(c), (c.req.header('user-agent') ?? '').slice(0, 300), ts, ts, expires],
+    [sha256(token), userId, mfaPending ? (viaPasskey ? 2 : 1) : 0, clientIp(c), (c.req.header('user-agent') ?? '').slice(0, 300), ts, ts, expires],
   );
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
@@ -147,13 +148,13 @@ export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-export function getPendingSession(c: Context): { session: SessionRow; user: UserRow } | null {
+export function getPendingSession(c: Context): { session: SessionRow; user: UserRow; passkey: boolean } | null {
   const token = getCookie(c, SESSION_COOKIE);
   if (!token) return null;
-  const session = get<SessionRow>('SELECT * FROM sessions WHERE id = ? AND mfa_pending = 1', [sha256(token)]);
+  const session = get<SessionRow>('SELECT * FROM sessions WHERE id = ? AND mfa_pending > 0', [sha256(token)]);
   if (!session || session.expires_at < now()) return null;
   const user = getUser(session.user_id);
-  return user && user.status === 'active' ? { session, user } : null;
+  return user && user.status === 'active' ? { session, user, passkey: session.mfa_pending === 2 } : null;
 }
 
 /** Fixed-window rate limiter backed by SQLite (survives restarts). */
