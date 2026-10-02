@@ -8,6 +8,7 @@ import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRout
 import { apiV1Routes, composeRoutes } from './routes/compose.js';
 import { adminRoutes, runtimeInfo } from './routes/admin.js';
 import { adminOpsRoutes } from './routes/admin-ops.js';
+import { meRoutes } from './routes/me.js';
 import { inboundRoutes } from './routes/inbound.js';
 
 const log = logger('http');
@@ -66,7 +67,7 @@ export function createApp() {
   app.use('/api/account/*', requireUser);
   app.route('/api/account', accountRoutes);
 
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me']) {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
@@ -83,6 +84,7 @@ export function createApp() {
   app.route('/api/contacts', contactRoutes);
   app.route('/api/filters', filterRoutes);
   app.route('/api/blocked', blockedRoutes);
+  app.route('/api/me', meRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminOpsRoutes);
 

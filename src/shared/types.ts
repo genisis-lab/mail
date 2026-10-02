@@ -37,10 +37,18 @@ export interface ForwardingPrefs {
   keep: 'inbox' | 'archive' | 'read' | 'trash';
 }
 
+export type SwipeAction = 'archive' | 'trash' | 'read' | 'none';
+
 export interface UserPrefs {
   theme: 'system' | 'light' | 'dark';
   density: 'comfortable' | 'compact';
   signature: string;
+  /** Per-address signatures (From address → HTML); falls back to `signature`. */
+  signatures: Record<string, string>;
+  swipeLeft: SwipeAction;
+  swipeRight: SwipeAction;
+  /** Show a notification for new mail while the app is open in a background tab. */
+  notifications: boolean;
   signatureOnReplies: boolean;
   showImages: 'ask' | 'always';
   undoSendSeconds: number;
@@ -56,6 +64,10 @@ export const DEFAULT_PREFS: UserPrefs = {
   theme: 'system',
   density: 'comfortable',
   signature: '',
+  signatures: {},
+  swipeLeft: 'archive',
+  swipeRight: 'read',
+  notifications: false,
   signatureOnReplies: true,
   showImages: 'ask',
   undoSendSeconds: 5,

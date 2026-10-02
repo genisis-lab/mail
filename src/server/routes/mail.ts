@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { View } from '../../shared/types.js';
-import { all, get, insert, now, run } from '../db/index.js';
+import { all, get, insert, now, run, tx } from '../db/index.js';
 import { badRequest, notFound } from '../lib/http.js';
 import { isEmail, normalizeEmail } from '../lib/addr.js';
 import { getBlob } from '../mail/blobs.js';
@@ -95,6 +95,23 @@ mailRoutes.post('/messages/:id/actions', async (c) => {
     purgeMessages([id]);
   } else run(`UPDATE messages SET ${set[type]} WHERE id = ?`, [id]);
   return c.json({ ok: true });
+});
+
+/** New inbox mail since `after` (a message id), for notifications. */
+mailRoutes.get('/recent', (c) => {
+  const user = c.get('user');
+  const after = Number(c.req.query('after') ?? 0) || 0;
+  const latest = get<{ id: number | null }>(`SELECT MAX(id) AS id FROM messages WHERE user_id = ? AND direction = 'in' AND folder = 'inbox'`, [user.id])?.id ?? 0;
+  if (!after) return c.json({ latestId: latest, messages: [] });
+  const rows = all<any>(
+    `SELECT id, thread_id, from_addr, from_name, subject, snippet, date FROM messages
+      WHERE user_id = ? AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND id > ? ORDER BY id DESC LIMIT 10`,
+    [user.id, after],
+  );
+  return c.json({
+    latestId: latest,
+    messages: rows.map((r) => ({ id: r.id, threadId: r.thread_id, from: { address: r.from_addr, name: r.from_name }, subject: r.subject, snippet: r.snippet, date: r.date })),
+  });
 });
 
 mailRoutes.get('/messages/:id', async (c) => {
@@ -260,6 +277,94 @@ contactRoutes.post('/', async (c) => {
     [user.id, normalizeEmail(input.email), input.name, input.phone, input.company, input.notes, now()],
   );
   return c.json({ ok: true });
+});
+
+/** Bulk import (the browser parses CSV / vCard files). Existing contacts keep their details unless the file has more. */
+contactRoutes.post('/import', async (c) => {
+  const user = c.get('user');
+  const { contacts } = await body(
+    c,
+    z.object({
+      contacts: z
+        .array(
+          z.object({
+            email: z.string().max(254),
+            name: z.string().max(100).default(''),
+            phone: z.string().max(50).default(''),
+            company: z.string().max(100).default(''),
+            notes: z.string().max(5000).default(''),
+          }),
+        )
+        .min(1)
+        .max(5000),
+    }),
+  );
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
+  tx(() => {
+    for (const ct of contacts) {
+      const email = normalizeEmail(ct.email);
+      if (!isEmail(email)) {
+        skipped++;
+        continue;
+      }
+      const existing = get<{ id: number }>('SELECT id FROM contacts WHERE user_id = ? AND email = ?', [user.id, email]);
+      if (existing) {
+        run(
+          `UPDATE contacts SET name = COALESCE(NULLIF(?, ''), name), phone = COALESCE(NULLIF(?, ''), phone), company = COALESCE(NULLIF(?, ''), company),
+             notes = COALESCE(NULLIF(?, ''), notes), saved = 1 WHERE id = ?`,
+          [ct.name.trim(), ct.phone.trim(), ct.company.trim(), ct.notes.trim(), existing.id],
+        );
+        updated++;
+      } else {
+        insert('INSERT INTO contacts (user_id, email, name, phone, company, notes, saved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', [
+          user.id,
+          email,
+          ct.name.trim(),
+          ct.phone.trim(),
+          ct.company.trim(),
+          ct.notes.trim(),
+          now(),
+        ]);
+        added++;
+      }
+    }
+  });
+  return c.json({ added, updated, skipped });
+});
+
+const vEscape = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
+const csvCell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+
+contactRoutes.get('/export', (c) => {
+  const format = c.req.query('format') === 'csv' ? 'csv' : 'vcf';
+  const rows = all<any>('SELECT * FROM contacts WHERE user_id = ? AND saved = 1 ORDER BY name COLLATE NOCASE, email', [c.get('user').id]);
+  const out =
+    format === 'csv'
+      ? ['Name,Email,Phone,Company,Notes', ...rows.map((r) => [r.name, r.email, r.phone, r.company, r.notes].map(csvCell).join(','))].join('\r\n') + '\r\n'
+      : rows
+          .map((r) =>
+            [
+              'BEGIN:VCARD',
+              'VERSION:3.0',
+              `FN:${vEscape(r.name || r.email)}`,
+              `EMAIL;TYPE=INTERNET:${r.email}`,
+              r.phone ? `TEL:${vEscape(r.phone)}` : '',
+              r.company ? `ORG:${vEscape(r.company)}` : '',
+              r.notes ? `NOTE:${vEscape(r.notes)}` : '',
+              'END:VCARD',
+            ]
+              .filter(Boolean)
+              .join('\r\n'),
+          )
+          .join('\r\n') + '\r\n';
+  return new Response(out, {
+    headers: {
+      'Content-Type': format === 'csv' ? 'text/csv; charset=utf-8' : 'text/vcard; charset=utf-8',
+      'Content-Disposition': `attachment; filename="contacts.${format}"`,
+    },
+  });
 });
 
 contactRoutes.put('/:id', async (c) => {

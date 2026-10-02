@@ -26,6 +26,10 @@ const prefsSchema = z
     theme: z.enum(['system', 'light', 'dark']),
     density: z.enum(['comfortable', 'compact']),
     signature: z.string().max(20_000),
+    signatures: z.record(z.string().max(254), z.string().max(20_000)),
+    swipeLeft: z.enum(['archive', 'trash', 'read', 'none']),
+    swipeRight: z.enum(['archive', 'trash', 'read', 'none']),
+    notifications: z.boolean(),
     signatureOnReplies: z.boolean(),
     showImages: z.enum(['ask', 'always']),
     undoSendSeconds: z.number().int().min(0).max(30),
@@ -63,7 +67,10 @@ accountRoutes.put('/prefs', async (c) => {
     if (!getSettings()['mail.allowExternalForwarding']) throw badRequest('Forwarding is disabled by your administrator');
     if (!isEmail(next.forwarding.to)) throw badRequest('Enter a valid forwarding address');
   }
-  if (next.defaultFrom && !identities(user.id).some((i) => i.address === next.defaultFrom)) next.defaultFrom = '';
+  const mine = identities(user.id).map((i) => i.address.toLowerCase());
+  if (next.defaultFrom && !mine.includes(next.defaultFrom.toLowerCase())) next.defaultFrom = '';
+  // Signatures only for addresses this person can send from, and only non-empty ones.
+  next.signatures = Object.fromEntries(Object.entries(next.signatures).filter(([a, html]) => mine.includes(a.toLowerCase()) && html.trim()).map(([a, html]) => [a.toLowerCase(), html]));
   savePrefs(user.id, next);
   if (patch.forwarding) audit(user.id, 'account.forwarding', next.forwarding.enabled ? next.forwarding.to : 'disabled', undefined, clientIp(c));
   return c.json({ prefs: next });

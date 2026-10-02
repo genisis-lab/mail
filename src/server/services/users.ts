@@ -47,6 +47,7 @@ export function parsePrefs(json: string | null | undefined): UserPrefs {
     ...p,
     vacation: { ...DEFAULT_PREFS.vacation, ...(p.vacation ?? {}) },
     forwarding: { ...DEFAULT_PREFS.forwarding, ...(p.forwarding ?? {}) },
+    signatures: { ...(p.signatures ?? {}) },
   };
 }
 
