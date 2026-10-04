@@ -42,8 +42,7 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then((res) => {
           if (res.ok && (res.headers.get('content-type') || '').includes('text/html')) {
-            const copy = res.clone();
-            event.waitUntil(copy.text().then((html) => keepShell(html)));
+            event.waitUntil(keepShell(res.clone()));
           }
           return res;
         })
@@ -71,9 +70,11 @@ self.addEventListener('fetch', (event) => {
 });
 
 /** Store the latest page and drop build assets it no longer uses (each deploy has new file names). */
-async function keepShell(html) {
+async function keepShell(response) {
+  const html = await response.clone().text();
   const cache = await caches.open(SHELL);
-  await cache.put('/', new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+  // Keep the original CSP and other security headers on offline navigations.
+  await cache.put('/', response);
   const used = new Set(Array.from(html.matchAll(/\/assets\/[^"'\s)>]+/g), (m) => m[0]));
   for (const key of await cache.keys()) {
     const path = new URL(key.url).pathname;

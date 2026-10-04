@@ -6,6 +6,31 @@ export interface RenderResult {
   blockedImages: number;
 }
 
+/** HTML shown in the main document while composing must be safe even without a CSP. */
+export function sanitizeEditorHtml(html: string): string {
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    const el = node as Element;
+    const classes = el.getAttribute('class');
+    if (classes) {
+      const allowed = classes.split(/\s+/).filter((name) => ['wren-quote', 'wren-forward', 'wren-signature'].includes(name));
+      if (allowed.length) el.setAttribute('class', allowed.join(' '));
+      else el.removeAttribute('class');
+    }
+    if (el.tagName === 'IMG') {
+      const src = el.getAttribute('src');
+      if (src && !/^\/api\/attachments\/\d+\?inline=1$/.test(src)) el.removeAttribute('src');
+    }
+  });
+  try {
+    return DOMPurify.sanitize(html, {
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base', 'svg', 'math', 'audio', 'video'],
+      FORBID_ATTR: ['style', 'id', 'srcset', 'background', 'formaction'],
+    }) as string;
+  } finally {
+    DOMPurify.removeHook('afterSanitizeAttributes');
+  }
+}
+
 /**
  * Sanitize message HTML for display:
  *  - strips scripts, forms, event handlers (DOMPurify)

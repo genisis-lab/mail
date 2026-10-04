@@ -8,6 +8,7 @@ import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../share
 import { apiFor, getApiMailbox } from '../lib/api';
 import { mentionsAttachment, ownText } from '../lib/attachment-check';
 import { fileSize } from '../lib/format';
+import { sanitizeEditorHtml } from '../lib/sanitize';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
 import { RecipientInput } from './RecipientInput';
@@ -70,9 +71,9 @@ export function signatureFor(prefs: Pick<UserPrefs, 'signature' | 'signatures'>,
 /** Replace the signature block in a message body (or add one before the quoted text). */
 export function swapSignature(html: string, sig: string): string {
   const doc = document.createElement('div');
-  doc.innerHTML = html;
+  doc.innerHTML = sanitizeEditorHtml(html);
   const current = doc.querySelector('.wren-signature');
-  const next = signatureHtml(sig);
+  const next = sanitizeEditorHtml(signatureHtml(sig));
   if (current) {
     if (next) current.outerHTML = next;
     else current.remove();

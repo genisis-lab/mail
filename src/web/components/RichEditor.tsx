@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import DOMPurify from 'dompurify';
+import { sanitizeEditorHtml } from '../lib/sanitize';
 import {
   Bold,
   Italic,
@@ -44,7 +44,7 @@ export const RichEditor = forwardRef<
   const [, force] = useState(0);
 
   useEffect(() => {
-    if (el.current) el.current.innerHTML = initialHtml;
+    if (el.current) el.current.innerHTML = sanitizeEditorHtml(initialHtml);
     if (autoFocus) {
       el.current?.focus();
       // Place the caret at the very start (above any quote/signature).
@@ -64,11 +64,11 @@ export const RichEditor = forwardRef<
     focus: () => el.current?.focus(),
     getHtml: () => el.current?.innerHTML ?? '',
     setHtml: (html: string) => {
-      if (el.current) el.current.innerHTML = html;
+      if (el.current) el.current.innerHTML = sanitizeEditorHtml(html);
     },
     insertHtml: (html: string) => {
       el.current?.focus();
-      exec('insertHTML', html);
+      exec('insertHTML', sanitizeEditorHtml(html));
       onChange(el.current?.innerHTML ?? '');
     },
   }));
@@ -133,8 +133,7 @@ export const RichEditor = forwardRef<
           const html = e.clipboardData.getData('text/html');
           if (html) {
             e.preventDefault();
-            const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ['style', 'script', 'meta', 'link', 'form', 'input'], FORBID_ATTR: ['class', 'id'] });
-            exec('insertHTML', clean as string);
+            exec('insertHTML', sanitizeEditorHtml(html));
             emit();
           }
         }}
@@ -143,6 +142,13 @@ export const RichEditor = forwardRef<
           if (files.length && onPasteFiles) {
             e.preventDefault();
             onPasteFiles(files);
+            return;
+          }
+          const html = e.dataTransfer.getData('text/html');
+          if (html) {
+            e.preventDefault();
+            exec('insertHTML', sanitizeEditorHtml(html));
+            emit();
           }
         }}
       />
