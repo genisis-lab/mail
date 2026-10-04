@@ -559,4 +559,12 @@ export const migrations: string[] = [
   `
   ALTER TABLE users ADD COLUMN password_change_required_at INTEGER;
   `,
+
+  // 9: conversations started from an autosaved draft kept the subject as first saved (often
+  //    blank or half-typed). Give each the subject of its first message.
+  `
+  UPDATE threads SET subject = (SELECT m.subject FROM messages m WHERE m.thread_id = threads.id ORDER BY m.date, m.id LIMIT 1)
+   WHERE EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)
+     AND subject IS NOT (SELECT m.subject FROM messages m WHERE m.thread_id = threads.id ORDER BY m.date, m.id LIMIT 1);
+  `,
 ];

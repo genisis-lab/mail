@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { get, run } from '../src/server/db/index';
+import { ingest } from '../src/server/mail/ingest';
 import { harness, processQueue } from './harness';
 
 const h = harness();
@@ -88,5 +89,58 @@ describe('requiring a new password', () => {
     expect(bulk.map((r: any) => r.ok)).toEqual([true, false]);
     expect((await h.call('GET', `/api/admin/users/${sam}/detail`)).body.user.mustChangePassword).toBe(true);
     run('UPDATE users SET password_change_required_at = NULL WHERE id = ?', [sam]);
+  });
+});
+
+describe('replies to a new email join its conversation', () => {
+  /** A reply from Gmail to mail that went out through Resend: it points at the Message-ID SES gave our email, which we never saw. */
+  const gmailReply = (subject: string, n: number) =>
+    Buffer.from(
+      [
+        'From: Kim Park <kim@gmail.example>', 'To: Ada Admin <admin@wren.test>', `Subject: ${subject}`, `Message-ID: <CAreply${n}@mail.gmail.com>`,
+        `In-Reply-To: <0100019${n}-ses@email.amazonses.com>`, `References: <0100019${n}-ses@email.amazonses.com>`, `Date: ${new Date(Date.now() + 60_000).toUTCString()}`,
+        'MIME-Version: 1.0', 'Content-Type: text/html; charset=utf-8', '',
+        '<div dir="ltr">I’m here, how are you?</div><div class="gmail_quote">On Sat, Ada Admin wrote:<blockquote class="gmail_quote">Hey, you okay?</blockquote></div>', '',
+      ].join('\r\n'),
+    );
+  const admin = () => get<{ id: number }>(`SELECT id FROM users WHERE email = 'admin@wren.test'`)!.id;
+
+  it('even when the draft was first autosaved before the subject was typed', async () => {
+    h.as('admin@wren.test');
+    await h.call('POST', '/api/admin/providers', { name: 'Log', type: 'log', isDefault: true, config: {} });
+    const to = [{ address: 'kim@gmail.example', name: 'Kim Park' }];
+    // Autosave fires while the subject is still empty, then again once it's typed.
+    const draft = (await h.call('POST', '/api/compose/drafts', { to, subject: '', html: '<p>Hey, you okay?</p>' })).body.id;
+    await h.call('PUT', `/api/compose/drafts/${draft}`, { to, subject: 'Where are', html: '<p>Hey, you okay?</p>' });
+    await h.call('PUT', `/api/compose/drafts/${draft}`, { to, subject: 'Where are you?', html: '<p>Hey, you okay?</p>' });
+    expect((await h.call('POST', `/api/compose/drafts/${draft}/send`, {})).status).toBe(200);
+    await deliverNow();
+    const sent = get<{ thread_id: number }>('SELECT thread_id FROM messages WHERE id = ?', [draft])!;
+    expect(get<{ subject: string }>('SELECT subject FROM threads WHERE id = ?', [sent.thread_id])!.subject).toBe('Where are you?');
+
+    await ingest(gmailReply('Re: Where are you?', 1), { rcptTo: ['admin@wren.test'], source: 'resend' });
+    const reply = get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE message_id = 'CAreply1@mail.gmail.com' AND user_id = ?`, [admin()])!;
+    expect(reply.thread_id).toBe(sent.thread_id);
+    const thread = (await h.call('GET', `/api/mail/threads/${sent.thread_id}`)).body;
+    expect(thread.messages.map((m: any) => m.direction)).toEqual(['out', 'in']);
+  });
+
+  it('for conversations saved with a stale subject before this fix', async () => {
+    const r = await h.call('POST', '/api/compose/send', { to: [{ address: 'kim@gmail.example' }], subject: 'Lunch Friday?', html: '<p>Ramen?</p>' });
+    await deliverNow();
+    const sent = get<{ thread_id: number }>('SELECT thread_id FROM messages WHERE id = ?', [r.body.id])!;
+    run(`UPDATE threads SET subject = 'Lun' WHERE id = ?`, [sent.thread_id]);
+    await ingest(gmailReply('Re: Lunch Friday?', 2), { rcptTo: ['admin@wren.test'], source: 'resend' });
+    expect(get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE message_id = 'CAreply2@mail.gmail.com'`)!.thread_id).toBe(sent.thread_id);
+  });
+
+  it('but not with someone else’s conversation that happens to share the subject', async () => {
+    await ingest(
+      Buffer.from(['From: Lee <lee@other.example>', 'To: admin@wren.test', 'Subject: Re: Lunch Friday?', 'Message-ID: <lee1@other.example>', `Date: ${new Date().toUTCString()}`, '', 'Different lunch', ''].join('\r\n')),
+      { rcptTo: ['admin@wren.test'], source: 'resend' },
+    );
+    const lee = get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE message_id = 'lee1@other.example'`)!;
+    const kim = get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE message_id = 'CAreply2@mail.gmail.com'`)!;
+    expect(lee.thread_id).not.toBe(kim.thread_id);
   });
 });

@@ -89,6 +89,11 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
            html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ? WHERE id = ?`,
         [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, html.length, draftId],
       );
+      // A new conversation takes its subject from the draft as it's finished, not as first autosaved.
+      run('UPDATE threads SET subject = ? WHERE id = (SELECT thread_id FROM messages WHERE id = ?) AND (SELECT COUNT(*) FROM messages WHERE thread_id = threads.id) = 1', [
+        subject,
+        draftId,
+      ]);
     } else {
       // Thread the draft with the message it replies to / forwards.
       let threadId: number | null = null;

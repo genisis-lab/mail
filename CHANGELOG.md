@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.2
+
+**Fix: replies to a new email now land in its conversation.** When you started a new
+email, its conversation kept the subject from the first autosave (often blank or
+half-typed). Replies to mail sent through Resend (or SES) refer to a Message-ID Wren never
+saw, so Wren matches them by subject and people instead, and the stale subject made the
+first reply start a separate conversation without your original email. Wren now matches
+on the messages' own subjects and keeps a new conversation's subject current. Existing
+conversations are repaired on upgrade, though replies already split off stay where they are.
+
+**Upgrading.** Redeploy; the repair runs by itself on the first request.
+
 ## v0.2.1
 
 README and screenshots for v0.2.0's features (a user's admin page, dark-mode email), and

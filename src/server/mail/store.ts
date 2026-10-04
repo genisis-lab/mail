@@ -43,16 +43,19 @@ export function findThread(
     );
     if (row) return row.thread_id;
   }
+  // A reply whose references we don't know: the provider that sent our message may have
+  // replaced its Message-ID (Resend and SES do). Match the subject of a recent message
+  // (not the thread's stored subject, which a draft may have saved half-typed) plus a shared participant.
   if (isReplySubject(opts.subject) && opts.participants.length) {
     const norm = normalizeSubject(opts.subject);
     if (!norm) return null;
     const since = now() - 30 * 24 * 3600 * 1000;
-    const candidates = all<{ id: number; subject: string }>(
-      `SELECT id, subject FROM threads WHERE user_id = ? AND last_date > ? ORDER BY last_date DESC LIMIT 200`,
+    const recent = all<{ thread_id: number; subject: string }>(
+      `SELECT thread_id, subject FROM messages WHERE user_id = ? AND date > ? ORDER BY date DESC LIMIT 1000`,
       [userId, since],
     );
+    const candidates = [...new Set(recent.filter((m) => normalizeSubject(m.subject) === norm).map((m) => m.thread_id))].map((id) => ({ id }));
     for (const t of candidates) {
-      if (normalizeSubject(t.subject) !== norm) continue;
       const people = new Set(
         all<{ a: string | null }>(
           `SELECT from_addr AS a FROM messages WHERE thread_id = ?
