@@ -19,7 +19,7 @@ import { notifyNewMail } from './push.js';
 const log = logger('alerts');
 const RENOTIFY_MS = 24 * 3600_000;
 
-export type AlertKind = 'provider' | 'queue' | 'quota' | 'dns' | 'backup';
+export type AlertKind = 'provider' | 'queue' | 'quota' | 'dns' | 'backup' | 'phishing';
 export type Severity = 'info' | 'warn' | 'critical';
 
 export interface AlertInput {

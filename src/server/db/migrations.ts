@@ -567,4 +567,28 @@ export const migrations: string[] = [
    WHERE EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)
      AND subject IS NOT (SELECT m.subject FROM messages m WHERE m.thread_id = threads.id ORDER BY m.date, m.id LIMIT 1);
   `,
+
+  // 10: muted conversations, "remind me if no reply", one-time codes in mail, contact groups.
+  `
+  ALTER TABLE threads ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE threads ADD COLUMN follow_up_at INTEGER;
+  ALTER TABLE threads ADD COLUMN follow_up_since INTEGER;
+  CREATE INDEX idx_threads_follow_up ON threads(follow_up_at) WHERE follow_up_at IS NOT NULL;
+  ALTER TABLE messages ADD COLUMN otp TEXT;
+  ALTER TABLE messages ADD COLUMN nudged_at INTEGER;
+
+  CREATE TABLE contact_groups (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL COLLATE NOCASE,
+    created_at INTEGER NOT NULL,
+    UNIQUE (user_id, name)
+  );
+  CREATE TABLE contact_group_members (
+    group_id INTEGER NOT NULL REFERENCES contact_groups(id) ON DELETE CASCADE,
+    address  TEXT NOT NULL COLLATE NOCASE,
+    name     TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, address)
+  );
+  `,
 ];

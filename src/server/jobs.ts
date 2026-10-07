@@ -4,7 +4,7 @@ import { getSettings } from './settings.js';
 import { collectGarbage } from './mail/blobs.js';
 import { processQueue } from './mail/outbound.js';
 import { purgeMessages } from './mail/store.js';
-import { wakeSnoozed } from './mail/threads.js';
+import { dueFollowUps, wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
 import { pruneTokens } from './services/tokens.js';
 import { runAlertChecks } from './services/alerts.js';
@@ -46,6 +46,7 @@ export function runMaintenance() {
 export async function runDueWork(opts: { gc?: boolean } = {}) {
   await processQueue();
   wakeSnoozed();
+  dueFollowUps();
   continueSearchRebuild();
   const ts = now();
   if (ts - lastRun('maintenance') > HOUR) {
@@ -75,8 +76,9 @@ export function nextWakeAt(): number {
   const ts = now();
   const queue = get<{ t: number | null }>(`SELECT MIN(next_attempt_at) AS t FROM outbox WHERE status = 'queued'`)?.t ?? Infinity;
   const snooze = get<{ t: number | null }>(`SELECT MIN(snoozed_until) AS t FROM messages WHERE snoozed_until IS NOT NULL`)?.t ?? Infinity;
+  const followUp = get<{ t: number | null }>(`SELECT MIN(follow_up_at) AS t FROM threads WHERE follow_up_at IS NOT NULL`)?.t ?? Infinity;
   const maintenance = (lastRun('maintenance') || ts) + HOUR;
   const rebuild = searchRebuildPending() ? ts : Infinity;
   const alerts = (lastRun('alerts') || ts) + 10 * 60_000;
-  return Math.max(ts + 500, Math.min(queue, snooze, maintenance, rebuild, alerts, jobsDueAt(), nextBackupAt(ts)));
+  return Math.max(ts + 500, Math.min(queue, snooze, followUp, maintenance, rebuild, alerts, jobsDueAt(), nextBackupAt(ts)));
 }

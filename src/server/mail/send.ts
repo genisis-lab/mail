@@ -211,6 +211,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     );
     // A reply to a thread that is otherwise only a draft keeps the thread subject in sync.
     run('UPDATE threads SET last_date = MAX(last_date, ?) WHERE id = ?', [ts, d.thread_id]);
+    // Following up yourself answers a "no reply yet" nudge.
+    run('UPDATE messages SET nudged_at = NULL WHERE thread_id = ? AND nudged_at IS NOT NULL', [d.thread_id]);
     run('UPDATE users SET used_bytes = used_bytes + ? WHERE id = ?', [raw.length, userId]);
     enqueue({
       kind: opts.kind ?? 'user',

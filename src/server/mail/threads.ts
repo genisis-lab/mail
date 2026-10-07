@@ -10,7 +10,8 @@ export const VIEWS: View[] = ['inbox', 'starred', 'snoozed', 'important', 'sent'
 function viewCondition(view: View | undefined, ts: number): { sql: string; params: unknown[] } {
   switch (view) {
     case 'inbox':
-      return { sql: `m.folder = 'inbox' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`, params: [ts] };
+      // Plus sent messages nudged back because nobody replied ("remind me if no reply").
+      return { sql: `((m.folder = 'inbox' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)) OR (m.folder = 'sent' AND m.nudged_at IS NOT NULL))`, params: [ts] };
     case 'starred':
       return { sql: `m.is_starred = 1 AND m.folder NOT IN ('spam','trash')`, params: [] };
     case 'snoozed':
@@ -64,6 +65,8 @@ interface SummaryRow {
   labels: string | null;
   delivered_to: string | null;
   category: Category;
+  otp: string | null;
+  nudged_at: number | null;
 }
 
 export function listThreads(userId: number, opts: ListOptions): { threads: ThreadSummary[]; total: number; page: number; pageSize: number } {
@@ -112,7 +115,7 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
   const hideFolders = opts.view === 'trash' || opts.view === 'spam' ? [] : ['spam', 'trash'];
   const rows = all<SummaryRow>(
     `SELECT m.id, m.thread_id, m.folder, m.direction, m.from_addr, m.from_name, m.to_json, m.subject, m.snippet, m.date,
-            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until, m.delivered_to, m.category,
+            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until, m.delivered_to, m.category, m.otp, m.nudged_at,
             (SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS labels
        FROM messages m
       WHERE m.thread_id IN ${IN_LIST}
@@ -126,6 +129,10 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
   for (const r of rows) byThread.set(r.thread_id, [...(byThread.get(r.thread_id) ?? []), r]);
 
   const recipientsView = opts.view === 'sent' || opts.view === 'drafts' || opts.view === 'scheduled';
+  const muted = new Set(
+    all<{ id: number }>(`SELECT id FROM threads WHERE muted = 1 AND id IN ${IN_LIST}`, [listParam(threadIds)]).map((r) => r.id),
+  );
+  const codeSince = ts - 24 * 3600_000;
   const threads: ThreadSummary[] = [];
   for (const { thread_id } of pageRows) {
     const msgs = byThread.get(thread_id) ?? [];
@@ -175,6 +182,13 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
       snoozedUntil: viewMsgs.find((m) => m.snoozed_until && m.snoozed_until > now())?.snoozed_until ?? null,
       category: latest.category ?? 'primary',
       via,
+      // Codes expire quickly: only offer recent ones in the list.
+      code: [...viewMsgs].reverse().find((m) => m.direction === 'in' && m.otp && m.date > codeSince)?.otp ?? null,
+      muted: muted.has(thread_id),
+      nudge: (() => {
+        const n = msgs.find((m) => m.nudged_at);
+        return n ? { sentAt: n.date } : null;
+      })(),
     });
   }
   return { threads, total, page, pageSize };
@@ -233,7 +247,23 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     unsubscribed: !!r.unsubscribed,
     hasInvite: atts.some((a) => /^(text\/calendar|application\/ics)\b/i.test(a.contentType) || /\.ics$/i.test(a.filename)),
     rsvp: r.rsvp ?? null,
+    code: r.direction === 'in' ? r.otp ?? null : null,
+    spoofWarning: spoofed(r),
   };
+}
+
+/**
+ * Mail that claims to come from one of this server's own domains, arrived from
+ * outside, and failed every authentication check the receiving side reported.
+ * No reported results means no warning (nothing to judge by).
+ */
+function spoofed(r: any): boolean {
+  if (r.direction !== 'in' || ['local', 'system', 'import'].includes(r.source ?? '')) return false;
+  const auth = r.auth_results ? (JSON.parse(r.auth_results) as Record<string, string>) : null;
+  if (!auth || !['spf', 'dkim', 'dmarc'].some((k) => auth[k])) return false;
+  if (['spf', 'dkim', 'dmarc'].some((k) => auth[k] === 'pass')) return false;
+  const domain = String(r.from_addr ?? '').split('@')[1]?.toLowerCase();
+  return !!domain && !!get('SELECT 1 FROM domains WHERE name = ?', [domain]);
 }
 
 export async function getMessage(userId: number, id: number): Promise<MessageDetail | null> {
@@ -249,7 +279,7 @@ export async function getMessage(userId: number, id: number): Promise<MessageDet
 }
 
 export async function getThread(userId: number, threadId: number): Promise<ThreadDetail | null> {
-  const t = get<{ id: number; subject: string }>('SELECT id, subject FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
+  const t = get<{ id: number; subject: string; muted: number; follow_up_at: number | null }>('SELECT id, subject, muted, follow_up_at FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
   if (!t) return null;
   const cols =
     'm.*, sb.name AS sent_by_name, sb.email AS sent_by_email, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by';
@@ -264,7 +294,14 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
   const labelMap = new Map<number, number[]>();
   for (const l of labelRows) labelMap.set(l.message_id, [...(labelMap.get(l.message_id) ?? []), l.label_id]);
   const subject = rows.find((r) => r.folder !== 'drafts')?.subject ?? t.subject;
-  return { id: t.id, subject, messages: rows.map((r) => toDetail(r, atts.get(r.id) ?? [], labelMap.get(r.id) ?? [])) };
+  return {
+    id: t.id,
+    subject,
+    messages: rows.map((r) => toDetail(r, atts.get(r.id) ?? [], labelMap.get(r.id) ?? [])),
+    muted: !!t.muted,
+    followUpAt: t.follow_up_at,
+    nudged: rows.some((r) => r.nudged_at),
+  };
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────
@@ -274,7 +311,20 @@ export type ThreadAction =
   | { type: 'snooze'; until: number }
   | { type: 'label' | 'unlabel'; labelId: number }
   /** Move to an inbox tab; future mail from the same sender follows. */
-  | { type: 'category'; category: Category };
+  | { type: 'category'; category: Category }
+  /** Mute: new replies skip the inbox (and the conversation leaves it now). */
+  | { type: 'mute' | 'unmute' }
+  /** "Remind me if no reply" by `at`; or cancel it. */
+  | { type: 'followUp'; at: number }
+  | { type: 'cancelFollowUp' }
+  /** Make the selected conversations one (the oldest keeps its place). */
+  | { type: 'merge' };
+
+/** The given conversations that belong to this user. */
+function ownThreads(userId: number, threadIds: number[]): number[] {
+  if (!threadIds.length) return [];
+  return all<{ id: number }>(`SELECT id FROM threads WHERE user_id = ? AND id IN ${IN_LIST}`, [userId, listParam(threadIds)]).map((r) => r.id);
+}
 
 /** Message ids a thread action applies to. Drafts are never moved by thread actions. */
 function threadMessageIds(userId: number, threadIds: number[], extra = ''): number[] {
@@ -320,10 +370,12 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
       case 'unimportant':
         return upd('is_important = 0', ids());
       case 'archive':
+        upd('nudged_at = NULL', ids('AND nudged_at IS NOT NULL'));
         return upd(`folder = 'archive', snoozed_until = NULL`, ids(`AND folder = 'inbox'`));
       case 'inbox':
         return upd(`folder = 'inbox', trashed_at = NULL`, ids(`AND direction = 'in' AND folder IN ('archive','spam','trash')`));
       case 'trash':
+        upd('nudged_at = NULL', ids('AND nudged_at IS NOT NULL'));
         return upd(`folder = 'trash', trashed_at = ?, snoozed_until = NULL`, ids(`AND folder != 'trash'`), ts);
       case 'untrash': {
         const list = ids(`AND folder = 'trash'`);
@@ -367,6 +419,49 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
         }
         return upd('category = ?', list, action.category);
       }
+      case 'mute':
+      case 'unmute': {
+        const own = ownThreads(userId, threadIds);
+        if (!own.length) return 0;
+        run(`UPDATE threads SET muted = ? WHERE id IN ${IN_LIST}`, [action.type === 'mute' ? 1 : 0, listParam(own)]);
+        if (action.type === 'mute') {
+          upd('nudged_at = NULL', ids('AND nudged_at IS NOT NULL'));
+          upd(`folder = 'archive', snoozed_until = NULL`, ids(`AND folder = 'inbox'`));
+        }
+        return own.length;
+      }
+      case 'followUp': {
+        if (!(action.at > ts)) return 0;
+        let n = 0;
+        for (const t of ownThreads(userId, threadIds)) {
+          // Waits on the latest message I sent in the conversation.
+          const sent = get<{ date: number }>(`SELECT date FROM messages WHERE thread_id = ? AND user_id = ? AND direction = 'out' AND folder = 'sent' ORDER BY date DESC LIMIT 1`, [t, userId]);
+          if (!sent) continue;
+          n += run('UPDATE threads SET follow_up_at = ?, follow_up_since = ? WHERE id = ?', [action.at, sent.date, t]).changes;
+        }
+        return n;
+      }
+      case 'cancelFollowUp': {
+        const own = ownThreads(userId, threadIds);
+        if (!own.length) return 0;
+        upd('nudged_at = NULL', ids('AND nudged_at IS NOT NULL'));
+        return run(`UPDATE threads SET follow_up_at = NULL, follow_up_since = NULL WHERE id IN ${IN_LIST}`, [listParam(own)]).changes;
+      }
+      case 'merge': {
+        const own = ownThreads(userId, threadIds);
+        if (own.length < 2) return 0;
+        // The conversation that started first keeps its id (and subject); the others join it.
+        const first = get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE thread_id IN ${IN_LIST} ORDER BY date ASC, id ASC LIMIT 1`, [listParam(own)])?.thread_id ?? own[0];
+        const others = own.filter((t) => t !== first);
+        const moved = run(`UPDATE messages SET thread_id = ? WHERE user_id = ? AND thread_id IN ${IN_LIST}`, [first, userId, listParam(others)]).changes;
+        const agg = get<{ last: number; muted: number; fu: number | null }>(
+          `SELECT MAX(last_date) AS last, MAX(muted) AS muted, MAX(follow_up_at) AS fu FROM threads WHERE id IN ${IN_LIST}`,
+          [listParam(own)],
+        )!;
+        run('UPDATE threads SET last_date = ?, muted = ? WHERE id = ?', [agg.last, agg.muted, first]);
+        run(`DELETE FROM threads WHERE id IN ${IN_LIST}`, [listParam(others)]);
+        return moved;
+      }
     }
     return 0;
   });
@@ -377,14 +472,14 @@ export function counters(userId: number) {
   const ts = now();
   const c = get<any>(
     `SELECT
-       COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS inbox,
+       COUNT(DISTINCT CASE WHEN ((folder = 'inbox' AND (snoozed_until IS NULL OR snoozed_until <= ?)) OR (folder = 'sent' AND nudged_at IS NOT NULL)) AND is_read = 0 THEN thread_id END) AS inbox,
        COUNT(DISTINCT CASE WHEN folder = 'spam' AND is_read = 0 THEN thread_id END) AS spam,
        COUNT(CASE WHEN folder = 'drafts' THEN 1 END) AS drafts,
        COUNT(DISTINCT CASE WHEN folder = 'sent' AND status = 'queued' AND is_scheduled = 1 THEN thread_id END) AS scheduled,
        COUNT(DISTINCT CASE WHEN snoozed_until > ? AND folder NOT IN ('spam','trash') THEN thread_id END) AS snoozed,
        COUNT(DISTINCT CASE WHEN is_starred = 1 AND is_read = 0 AND folder NOT IN ('spam','trash') THEN thread_id END) AS starred,
        COUNT(DISTINCT CASE WHEN is_important = 1 AND is_read = 0 AND folder NOT IN ('spam','trash','drafts') THEN thread_id END) AS important,
-       COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'primary' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS primary_unread,
+       COUNT(DISTINCT CASE WHEN ((folder = 'inbox' AND (snoozed_until IS NULL OR snoozed_until <= ?)) OR (folder = 'sent' AND nudged_at IS NOT NULL)) AND is_read = 0 AND category = 'primary' THEN thread_id END) AS primary_unread,
        COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'updates' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS updates_unread,
        COUNT(DISTINCT CASE WHEN folder = 'inbox' AND is_read = 0 AND category = 'promotions' AND (snoozed_until IS NULL OR snoozed_until <= ?) THEN thread_id END) AS promotions_unread
      FROM messages WHERE user_id = ?`,
@@ -419,4 +514,30 @@ export function wakeSnoozed(): number {
     }
   });
   return rows.length;
+}
+
+/**
+ * "Remind me if no reply": when the time comes and nobody has answered, the
+ * message I sent comes back to the top of the inbox, unread, marked as
+ * waiting for a reply.
+ */
+export function dueFollowUps(): number {
+  const ts = now();
+  const due = all<{ id: number; user_id: number; follow_up_since: number }>('SELECT id, user_id, follow_up_since FROM threads WHERE follow_up_at IS NOT NULL AND follow_up_at <= ?', [ts]);
+  if (!due.length) return 0;
+  let nudged = 0;
+  tx(() => {
+    for (const t of due) {
+      run('UPDATE threads SET follow_up_at = NULL, follow_up_since = NULL WHERE id = ?', [t.id]);
+      const mine = new Set(userAddresses(t.user_id));
+      const replies = all<{ from_addr: string }>(`SELECT from_addr FROM messages WHERE thread_id = ? AND direction = 'in' AND folder != 'spam' AND date > ?`, [t.id, t.follow_up_since]);
+      if (replies.some((r) => !mine.has(r.from_addr.toLowerCase()))) continue;
+      const sent = get<{ id: number }>(`SELECT id FROM messages WHERE thread_id = ? AND direction = 'out' AND folder = 'sent' ORDER BY date DESC LIMIT 1`, [t.id]);
+      if (!sent) continue;
+      run('UPDATE messages SET nudged_at = ?, woke_at = ?, is_read = 0 WHERE id = ?', [ts, ts, sent.id]);
+      run('UPDATE threads SET last_date = ? WHERE id = ?', [ts, t.id]);
+      nudged++;
+    }
+  });
+  return nudged;
 }

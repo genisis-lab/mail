@@ -136,6 +136,12 @@ export interface ThreadSummary {
   category?: Category;
   /** The alias or other address of the user's that the latest incoming message was sent to, when it isn't their main one. */
   via?: string | null;
+  /** A one-time code in recent incoming mail ("980708"), for a one-tap copy. */
+  code?: string | null;
+  /** New replies skip the inbox. */
+  muted?: boolean;
+  /** Back in the inbox because nobody replied: when the message waiting for an answer was sent. */
+  nudge?: { sentAt: number } | null;
 }
 
 export interface AttachmentInfo {
@@ -190,12 +196,22 @@ export interface MessageDetail {
   hasInvite?: boolean;
   /** The answer sent to the invitation from Wren: ACCEPTED, TENTATIVE or DECLINED. */
   rsvp?: string | null;
+  /** A one-time code found in the message ("980708"). */
+  code?: string | null;
+  /** Claims to be from one of this server's domains but failed every authentication check. */
+  spoofWarning?: boolean;
 }
 
 export interface ThreadDetail {
   id: number;
   subject: string;
   messages: MessageDetail[];
+  /** New replies skip the inbox. */
+  muted?: boolean;
+  /** "Remind me if no reply": when, if nobody has answered by then. */
+  followUpAt?: number | null;
+  /** Nobody replied in time; the conversation is back in the inbox. */
+  nudged?: boolean;
 }
 
 export interface FilterCriteria {

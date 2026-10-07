@@ -12,7 +12,9 @@ import { purgeMessages } from '../mail/store.js';
 import { unsubscribe } from '../services/unsubscribe.js';
 import { inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
 import type { Rsvp } from '../../shared/ics.js';
-import { body, intParam, type AppEnv } from '../http/context.js';
+import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { audit } from '../services/audit.js';
+import { raiseAlert } from '../services/alerts.js';
 
 export const mailRoutes = new Hono<AppEnv>();
 
@@ -56,6 +58,8 @@ const actionSchema = z.object({
     z.object({ type: z.literal('snooze'), until: z.number().int() }),
     z.object({ type: z.enum(['label', 'unlabel']), labelId: z.number().int().positive() }),
     z.object({ type: z.literal('category'), category: z.enum(['primary', 'updates', 'promotions']) }),
+    z.object({ type: z.enum(['mute', 'unmute', 'cancelFollowUp', 'merge']) }),
+    z.object({ type: z.literal('followUp'), at: z.number().int() }),
   ]),
 });
 
@@ -105,6 +109,33 @@ mailRoutes.post('/messages/:id/actions', async (c) => {
     if (m.folder !== 'trash' && m.folder !== 'spam') throw badRequest('Move the message to Trash first');
     purgeMessages([id]);
   } else run(`UPDATE messages SET ${set[type]} WHERE id = ?`, [id]);
+  return c.json({ ok: true });
+});
+
+/**
+ * "Report phishing": the message goes to Spam, and admins get an alert so they
+ * can warn others or block the sender server-wide. The reporter's own inbox
+ * is all that changes; nothing is sent anywhere.
+ */
+mailRoutes.post('/messages/:id/phishing', async (c) => {
+  const user = c.get('user');
+  const m = get<{ id: number; thread_id: number; from_addr: string; from_name: string; subject: string; direction: string }>(
+    'SELECT id, thread_id, from_addr, from_name, subject, direction FROM messages WHERE id = ? AND user_id = ?',
+    [intParam(c, 'id'), user.id],
+  );
+  if (!m) throw notFound();
+  if (m.direction !== 'in') throw badRequest('Only received mail can be reported');
+  // Everything this sender put in the conversation goes to Spam.
+  run(`UPDATE messages SET folder = 'spam', snoozed_until = NULL WHERE thread_id = ? AND user_id = ? AND direction = 'in' AND lower(from_addr) = lower(?)`, [m.thread_id, user.id, m.from_addr]);
+  audit(user.id, 'mail.phishing_reported', m.from_addr, { subject: m.subject.slice(0, 200) }, clientIp(c));
+  await raiseAlert({
+    kind: 'phishing',
+    key: `${user.id}:${m.id}`,
+    severity: 'warn',
+    title: `Phishing reported by ${user.email}`,
+    detail: `From ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr}: “${m.subject.slice(0, 150) || '(no subject)'}”. Block the sender under Settings & policies → Spam if others got it too.`,
+    link: '/admin/settings/spam',
+  }).catch(() => {});
   return c.json({ ok: true });
 });
 
@@ -277,6 +308,66 @@ const contactSchema = z.object({
   notes: z.string().max(5000).default(''),
 });
 
+// Contact groups: a name ("Design team") that adds everyone in it as recipients.
+
+interface GroupRow {
+  id: number;
+  name: string;
+}
+
+function groupsFor(userId: number, q?: string) {
+  const groups = q
+    ? all<GroupRow>('SELECT id, name FROM contact_groups WHERE user_id = ? AND name LIKE ? ORDER BY name LIMIT 5', [userId, `%${q}%`])
+    : all<GroupRow>('SELECT id, name FROM contact_groups WHERE user_id = ? ORDER BY name', [userId]);
+  return groups.map((g) => ({
+    id: g.id,
+    name: g.name,
+    members: all<{ address: string; name: string }>('SELECT address, name FROM contact_group_members WHERE group_id = ? ORDER BY rowid', [g.id]),
+  }));
+}
+
+const groupSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  members: z.array(z.object({ address: z.string().email().max(254), name: z.string().max(100).default('') })).min(1).max(500),
+});
+
+function saveMembers(groupId: number, members: z.infer<typeof groupSchema>['members']) {
+  run('DELETE FROM contact_group_members WHERE group_id = ?', [groupId]);
+  for (const m of members) run('INSERT OR IGNORE INTO contact_group_members (group_id, address, name) VALUES (?, ?, ?)', [groupId, normalizeEmail(m.address), m.name.trim()]);
+}
+
+contactRoutes.get('/groups', (c) => c.json({ groups: groupsFor(c.get('user').id) }));
+
+contactRoutes.post('/groups', async (c) => {
+  const user = c.get('user');
+  const input = await body(c, groupSchema);
+  if (get('SELECT 1 FROM contact_groups WHERE user_id = ? AND name = ?', [user.id, input.name])) throw badRequest('You already have a group with that name');
+  const id = tx(() => {
+    const gid = insert('INSERT INTO contact_groups (user_id, name, created_at) VALUES (?, ?, ?)', [user.id, input.name, now()]);
+    saveMembers(gid, input.members);
+    return gid;
+  });
+  return c.json({ id });
+});
+
+contactRoutes.put('/groups/:id', async (c) => {
+  const user = c.get('user');
+  const id = intParam(c, 'id');
+  const input = await body(c, groupSchema);
+  if (!get('SELECT 1 FROM contact_groups WHERE id = ? AND user_id = ?', [id, user.id])) throw notFound();
+  if (get('SELECT 1 FROM contact_groups WHERE user_id = ? AND name = ? AND id != ?', [user.id, input.name, id])) throw badRequest('You already have a group with that name');
+  tx(() => {
+    run('UPDATE contact_groups SET name = ? WHERE id = ?', [input.name, id]);
+    saveMembers(id, input.members);
+  });
+  return c.json({ ok: true });
+});
+
+contactRoutes.delete('/groups/:id', (c) => {
+  if (!run('DELETE FROM contact_groups WHERE id = ? AND user_id = ?', [intParam(c, 'id'), c.get('user').id]).changes) throw notFound();
+  return c.json({ ok: true });
+});
+
 contactRoutes.get('/', (c) => {
   const user = c.get('user');
   const q = (c.req.query('q') ?? '').trim();
@@ -314,6 +405,8 @@ contactRoutes.get('/', (c) => {
       timesContacted: r.times_contacted,
       lastContactedAt: r.last_contacted_at,
     })),
+    // Autocomplete: groups whose name matches, to add everyone at once.
+    ...(q ? { groups: groupsFor(user.id, q) } : {}),
   });
 });
 

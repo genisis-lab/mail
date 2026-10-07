@@ -9,7 +9,8 @@ import { putBlob } from './blobs.js';
 import { buildMime, textToHtml } from './compose.js';
 import { applyFilters, toMatchable } from './filters.js';
 import { enqueue, setLocalDeliver } from './outbound.js';
-import { getHeader, parseMail, type Parsed } from './parse.js';
+import { getHeader, htmlToText, parseMail, type Parsed } from './parse.js';
+import { findOneTimeCode } from './otp.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
@@ -248,6 +249,21 @@ async function deliverToUser(
     listUnsubscribePost: getHeader(p, 'list-unsubscribe-post') || null,
   });
   if (folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
+
+  // A one-time code ("980708 is your sign-in code"), offered as a one-tap copy.
+  const code = findOneTimeCode(p.subject, p.text ?? (p.html ? htmlToText(p.html) : null));
+  if (code) run('UPDATE messages SET otp = ? WHERE id = ?', [code, id]);
+  const thread = get<{ id: number; muted: number }>('SELECT t.id, t.muted FROM threads t JOIN messages m ON m.thread_id = t.id WHERE m.id = ?', [id]);
+  if (thread && folder !== 'spam' && !userAddresses(userId).includes(sender)) {
+    // Someone replied: no "remind me if no reply" needed, and any "no reply yet" nudge is done.
+    run('UPDATE threads SET follow_up_at = NULL, follow_up_since = NULL WHERE id = ? AND follow_up_at IS NOT NULL', [thread.id]);
+    run('UPDATE messages SET nudged_at = NULL WHERE thread_id = ? AND nudged_at IS NOT NULL', [thread.id]);
+  }
+  // A muted conversation: new messages skip the inbox (and don't notify).
+  if (thread?.muted && folder === 'inbox') {
+    folder = 'archive';
+    run(`UPDATE messages SET folder = 'archive' WHERE id = ?`, [id]);
+  }
   if (folder === 'inbox' && !isRead && opts.source !== 'system') notifyNewMail(userId);
 
   if (folder !== 'spam') {
