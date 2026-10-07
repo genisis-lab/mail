@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
@@ -26,6 +26,8 @@ import {
   File as FileIcon,
   Megaphone,
   BellRing,
+  BellOff,
+  Combine,
 } from 'lucide-react';
 import type { Category, Label, ThreadSummary, View } from '../../../shared/types';
 import { api, qs } from '../../lib/api';
@@ -41,6 +43,8 @@ import { LabelDialog, SaveSearchButton } from '../MailLayout';
 import { setListContext } from './listContext';
 import { PhoneRow } from './PhoneRow';
 import { ViaChip } from './Via';
+import { NudgeChip } from './NudgeChip';
+import { CodeChip } from '../../components/CodeChip';
 
 export const TABS: { id: Category; label: string; icon: React.ReactNode; empty: string }[] = [
   { id: 'primary', label: 'Primary', icon: <Inbox className="size-[18px]" />, empty: 'You’re all caught up' },
@@ -93,6 +97,9 @@ export function ThreadList() {
   const toast = useToast();
   const { run, refresh } = useThreadActions();
   const phone = useMediaQuery(PHONE);
+  const pull = usePullToRefresh(phone, async () => {
+    await Promise.all([list.refetch(), counters.refetch()]);
+  });
 
   const view = (params.view as View | undefined) ?? (params.labelId || params.q ? undefined : 'inbox');
   const labelId = params.labelId ? Number(params.labelId) : undefined;
@@ -391,6 +398,19 @@ export function ThreadList() {
                 { label: 'Mark as not important', onClick: () => void act({ type: 'unimportant' }) },
                 { label: 'Add star', icon: <Star className="size-4" />, onClick: () => void act({ type: 'star' }) },
                 { label: 'Remove star', onClick: () => void act({ type: 'unstar' }) },
+                { divider: true },
+                threads.filter((t) => selected.has(t.id)).every((t) => t.muted)
+                  ? { label: 'Unmute', icon: <BellRing className="size-4" />, onClick: () => void act({ type: 'unmute' }) }
+                  : { label: 'Mute', icon: <BellOff className="size-4" />, onClick: () => void act({ type: 'mute' }) },
+                ...(selected.size >= 2 && !allMatching
+                  ? [
+                      {
+                        label: 'Merge conversations',
+                        icon: <Combine className="size-4" />,
+                        onClick: () => window.confirm(`Merge these ${selected.size} conversations into one?`) && void act({ type: 'merge' }),
+                      },
+                    ]
+                  : []),
                 ...(label ? [{ divider: true }, { label: `Remove label “${label.name}”`, onClick: () => void act({ type: 'unlabel', labelId: label.id }) }] : []),
               ]}
             />
@@ -453,7 +473,13 @@ export function ThreadList() {
       )}
 
       {/* List */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      {phone && <PullIndicator offset={pull.offset} refreshing={pull.refreshing} />}
+      <div
+        ref={pull.ref}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
+        style={pull.offset ? { transform: `translateY(${pull.offset}px)`, transition: pull.dragging ? 'none' : 'transform 0.2s ease-out' } : undefined}
+      >
         {q && (
           <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 text-[13px] text-muted">
             <Search className="size-4 shrink-0" aria-hidden /> <span className="min-w-0 truncate">Results for <span className="font-medium text-fg">{q}</span></span>
@@ -533,6 +559,7 @@ export function ThreadList() {
           </div>
         )}
         {!list.isLoading && threads.length > 0 && <div className="h-20" aria-hidden />}
+      </div>
       </div>
 
       <LabelDialog label={labelDialog ? { name: '' } : null} onClose={() => setLabelDialog(false)} onCreated={(l) => void act({ type: 'label', labelId: l.id })} />
@@ -653,6 +680,9 @@ function ThreadRow({
         ))}
         {t.status === 'failed' && <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium text-danger">Failed</span>}
         {scheduled && <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[11px] leading-[18px] font-medium text-accent-ink">Scheduled</span>}
+        {t.nudge && <NudgeChip sentAt={t.nudge.sentAt} />}
+        {t.muted && <BellOff className="size-3.5 shrink-0 text-muted" aria-label="Muted" />}
+        {t.code && <CodeChip code={t.code} />}
         <span className="min-w-0 truncate">
           <span className={t.unread ? 'font-bold' : ''}>{t.subject || '(no subject)'}</span>
           {t.snippet && <span className="text-muted"> – {t.snippet}</span>}
@@ -732,6 +762,93 @@ function InboxTabs({ current, onPick }: { current: Category; onPick: (c: Categor
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Pull down at the top of the list to refresh (phones; an installed app on
+ * iOS has no browser pull-to-refresh of its own).
+ */
+function usePullToRefresh(enabled: boolean, onRefresh: () => Promise<unknown>) {
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const TRIGGER = 64;
+  // The latest callback, without re-attaching the touch listeners mid-gesture.
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
+
+  useEffect(() => {
+    if (!enabled || !node) return;
+    let start: { y: number; x: number } | null = null;
+    let dist = 0;
+    let busy = false;
+    const down = (e: TouchEvent) => {
+      if (busy || node.scrollTop > 0 || e.touches.length !== 1) return;
+      start = { y: e.touches[0].clientY, x: e.touches[0].clientX };
+      dist = 0;
+    };
+    const move = (e: TouchEvent) => {
+      if (!start) return;
+      const dy = e.touches[0].clientY - start.y;
+      const dx = Math.abs(e.touches[0].clientX - start.x);
+      // Only a downward pull from the very top; sideways swipes belong to the rows.
+      if (dy <= 0 || node.scrollTop > 0 || dx > dy) {
+        if (dist) setOffset(0);
+        start = dist ? start : null;
+        return;
+      }
+      dist = Math.min(110, dy * 0.5);
+      setDragging(true);
+      setOffset(dist);
+      if (e.cancelable) e.preventDefault();
+    };
+    const up = async () => {
+      if (!start) return;
+      start = null;
+      setDragging(false);
+      if (dist < TRIGGER) {
+        setOffset(0);
+        return;
+      }
+      busy = true;
+      setRefreshing(true);
+      setOffset(48);
+      navigator.vibrate?.(8);
+      try {
+        await refreshRef.current();
+      } finally {
+        busy = false;
+        setRefreshing(false);
+        setOffset(0);
+      }
+    };
+    node.addEventListener('touchstart', down, { passive: true });
+    node.addEventListener('touchmove', move, { passive: false });
+    node.addEventListener('touchend', up);
+    node.addEventListener('touchcancel', up);
+    return () => {
+      node.removeEventListener('touchstart', down);
+      node.removeEventListener('touchmove', move);
+      node.removeEventListener('touchend', up);
+      node.removeEventListener('touchcancel', up);
+    };
+  }, [enabled, node]);
+
+  return { ref: setNode, offset, dragging, refreshing };
+}
+
+function PullIndicator({ offset, refreshing }: { offset: number; refreshing: boolean }) {
+  if (!offset && !refreshing) return null;
+  const ready = offset >= 64;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center" style={{ transform: `translateY(${Math.max(4, offset - 40)}px)` }} role="status" aria-live="polite">
+      <span className="flex size-9 items-center justify-center rounded-full bg-panel shadow-float">
+        <RefreshCw className={cx('size-[18px] text-accent-ink', refreshing && 'animate-spin')} style={refreshing ? undefined : { transform: `rotate(${offset * 3}deg)`, opacity: ready ? 1 : 0.6 }} aria-hidden />
+        <span className="sr-only">{refreshing ? 'Refreshing' : ready ? 'Release to refresh' : 'Pull to refresh'}</span>
+      </span>
     </div>
   );
 }

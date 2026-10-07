@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Users, X } from 'lucide-react';
 import type { Addr } from '../../shared/types';
 import { api } from '../lib/api';
 import { colorFor, initials } from '../lib/format';
@@ -8,6 +8,8 @@ import { cx } from './ui';
 interface Suggestion {
   email: string;
   name: string;
+  /** A contact group: picking it adds everyone in it. */
+  members?: Addr[];
 }
 
 const EMAIL_RE = /^[^\s@<>()",;:]+@[^\s@<>()",;:]+\.[^\s@<>()",;:]+$/;
@@ -54,10 +56,11 @@ export function RecipientInput({
     }
     const t = setTimeout(() => {
       api
-        .get<{ contacts: Suggestion[] }>(`/api/contacts?q=${encodeURIComponent(q)}`)
+        .get<{ contacts: Suggestion[]; groups?: { id: number; name: string; members: { address: string; name: string }[] }[] }>(`/api/contacts?q=${encodeURIComponent(q)}`)
         .then((r) => {
           const taken = new Set(value.map((v) => v.address));
-          setSuggestions(r.contacts.filter((c) => !taken.has(c.email)).slice(0, 8));
+          const groups: Suggestion[] = (r.groups ?? []).map((g) => ({ email: `group:${g.id}`, name: g.name, members: g.members }));
+          setSuggestions([...groups, ...r.contacts.filter((c) => !taken.has(c.email))].slice(0, 8));
           setActive(0);
         })
         .catch(() => setSuggestions([]));
@@ -80,7 +83,10 @@ export function RecipientInput({
   };
 
   const pick = (s: Suggestion) => {
-    onChange([...value, { address: s.email, name: s.name }]);
+    if (s.members) {
+      const seen = new Set(value.map((v) => v.address.toLowerCase()));
+      onChange([...value, ...s.members.filter((m) => !seen.has(m.address.toLowerCase()))]);
+    } else onChange([...value, { address: s.email, name: s.name }]);
     setText('');
     setSuggestions([]);
     input.current?.focus();
@@ -184,12 +190,24 @@ export function RecipientInput({
               onMouseEnter={() => setActive(i)}
               className={cx('flex w-full items-center gap-3 px-3 py-2 text-left', i === active && 'bg-hover')}
             >
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ background: colorFor(s.email) }}>
-                {initials(s.name || s.email)}
-              </span>
+              {s.members ? (
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-ink">
+                  <Users className="size-4" aria-hidden />
+                </span>
+              ) : (
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ background: colorFor(s.email) }}>
+                  {initials(s.name || s.email)}
+                </span>
+              )}
               <span className="min-w-0">
                 <span className="block truncate text-sm">{s.name || s.email}</span>
-                {s.name && <span className="block truncate text-xs text-muted">{s.email}</span>}
+                {s.members ? (
+                  <span className="block truncate text-xs text-muted">
+                    Group · {s.members.length === 1 ? '1 person' : `${s.members.length} people`}: {s.members.map((m) => m.name || m.address).join(', ')}
+                  </span>
+                ) : (
+                  s.name && <span className="block truncate text-xs text-muted">{s.email}</span>
+                )}
               </span>
             </button>
           ))}

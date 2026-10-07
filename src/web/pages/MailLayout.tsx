@@ -30,8 +30,10 @@ import {
   Trash2,
   Users,
   X,
+  CloudOff,
 } from 'lucide-react';
 import type { Label, View } from '../../shared/types';
+import { clearOutbox, flushOutbox, queuedSends } from '../lib/outbox';
 import { api } from '../lib/api';
 import { useHotkeys } from '../lib/hotkeys';
 import { MailboxProvider, useMailbox } from '../lib/mailbox';
@@ -148,6 +150,7 @@ function MailShell() {
   return (
     <div className="flex h-full flex-col bg-bg">
       <TopBar onMenu={() => (window.innerWidth < 768 ? setMobileOpen((o) => !o) : setCollapsed((c) => !c))} onHelp={() => setShortcutsOpen(true)} />
+      <OfflineBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
         <main className="min-w-0 flex-1 pr-4 pb-4 max-md:px-2 max-md:pb-2">
@@ -176,6 +179,57 @@ function MailShell() {
           <Pencil className="size-5" aria-hidden /> Compose
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Offline: say that what's shown is mail saved on this device, and send
+ * anything written meanwhile as soon as the connection is back.
+ */
+function OfflineBar() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const [waiting, setWaiting] = useState(() => queuedSends().filter((q) => q.userId === user.id).length);
+
+  useEffect(() => {
+    const count = () => setWaiting(queuedSends().filter((q) => q.userId === user.id).length);
+    const flush = () =>
+      void flushOutbox(user.id, (message, error) => toast(error ? { message, tone: 'error', duration: 9000 } : message)).then(() => {
+        count();
+        qc.invalidateQueries({ queryKey: ['threads'] });
+        qc.invalidateQueries({ queryKey: ['counters'] });
+      });
+    const up = () => {
+      setOnline(true);
+      flush();
+      qc.invalidateQueries();
+    };
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    window.addEventListener('wren:outbox', count);
+    flush();
+    // A connection that came back without an "online" event (flaky networks).
+    const timer = setInterval(() => queuedSends().some((q) => q.userId === user.id) && flush(), 30_000);
+    return () => {
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+      window.removeEventListener('wren:outbox', count);
+      clearInterval(timer);
+    };
+  }, [user.id, qc, toast]);
+
+  if (online && !waiting) return null;
+  return (
+    <div role="status" className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-panel2 px-3 py-2 text-[13px] max-md:mx-2">
+      <CloudOff className="size-4 shrink-0 text-muted" aria-hidden />
+      <span className="min-w-0 flex-1">
+        {online ? 'Back online.' : 'You’re offline. Showing mail saved on this device.'}
+        {waiting > 0 && ` ${waiting === 1 ? '1 message is' : `${waiting} messages are`} waiting to send.`}
+      </span>
     </div>
   );
 }
@@ -253,7 +307,10 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                   icon={<LogOut className="size-4" />}
                   onClick={async () => {
                     close();
+                    // Send anything still waiting from offline; what's left goes with the session.
+                    await flushOutbox(user.id, () => {}).catch(() => {});
                     await api.post('/api/auth/logout');
+                    clearOutbox();
                     try {
                       sessionStorage.removeItem('wren.mailbox');
                     } catch {

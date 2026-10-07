@@ -1,19 +1,23 @@
 /**
  * A conversation on a phone: avatar, sender and date, subject, snippet, like
  * Gmail's app. Swipe left or right for the actions chosen in Settings; tap the
- * avatar to select.
+ * avatar, or press and hold the row, to select.
  */
 import { useRef, useState } from 'react';
-import { Archive, Check, Mail, MailOpen, Paperclip, Star, Trash2 } from 'lucide-react';
+import { Archive, BellOff, Check, Mail, MailOpen, Paperclip, Star, Trash2 } from 'lucide-react';
 import type { Label, SwipeAction, ThreadSummary, View } from '../../../shared/types';
 import type { ThreadAction } from '../../lib/actions';
 import { shortDate, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
+import { CodeChip } from '../../components/CodeChip';
 import { cx } from '../../components/ui';
+import { NudgeChip } from './NudgeChip';
 import { ViaChip } from './Via';
 
 const THRESHOLD = 88;
+/** Press and hold this long to select. */
+const HOLD_MS = 450;
 
 function swipeAction(kind: SwipeAction, t: ThreadSummary, view?: View): ThreadAction | null {
   if (kind === 'archive') return view === 'inbox' || view === 'snoozed' || !view ? { type: 'archive' } : null;
@@ -55,6 +59,11 @@ export function PhoneRow({
   const [leaving, setLeaving] = useState(false);
   const touch = useRef<{ x: number; y: number; lock: 'h' | 'v' | null } | null>(null);
   const suppressClick = useRef(false);
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHold = () => {
+    if (hold.current) clearTimeout(hold.current);
+    hold.current = null;
+  };
 
   const recipientsView = view === 'sent' || view === 'drafts' || view === 'scheduled';
   const others = t.participants.filter((p) => !p.me);
@@ -76,6 +85,7 @@ export function PhoneRow({
   const style = action ? look(kind, t) : null;
 
   const end = () => {
+    cancelHold();
     const was = touch.current;
     touch.current = null;
     setDragging(false);
@@ -106,7 +116,7 @@ export function PhoneRow({
         role="link"
         tabIndex={0}
         aria-label={`${t.unread ? 'Unread, ' : ''}${names}, ${t.subject || 'no subject'}, ${shortDate(t.date)}`}
-        className={cx('relative flex gap-3 px-3 py-2.5 outline-none focus-visible:bg-hover', selected ? 'bg-sel' : t.unread ? 'bg-unread-row' : 'bg-read-row')}
+        className={cx('relative flex gap-3 px-3 py-2.5 outline-none select-none [-webkit-touch-callout:none] focus-visible:bg-hover', selected ? 'bg-sel' : t.unread ? 'bg-unread-row' : 'bg-read-row')}
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dragging ? 'none' : 'transform 0.2s ease-out' }}
         onClick={() => {
           if (suppressClick.current) return;
@@ -114,9 +124,20 @@ export function PhoneRow({
           else onOpen();
         }}
         onKeyDown={(e) => e.key === 'Enter' && onOpen()}
+        onContextMenu={(e) => e.preventDefault()}
         onTouchStart={(e) => {
           const p = e.touches[0];
           touch.current = { x: p.clientX, y: p.clientY, lock: null };
+          // Press and hold to select (like Gmail): the tap that follows doesn't open it.
+          cancelHold();
+          hold.current = setTimeout(() => {
+            hold.current = null;
+            if (touch.current?.lock) return;
+            suppressClick.current = true;
+            setTimeout(() => (suppressClick.current = false), 600);
+            navigator.vibrate?.(12);
+            onSelect(!selected);
+          }, HOLD_MS);
         }}
         onTouchMove={(e) => {
           const s = touch.current;
@@ -124,6 +145,7 @@ export function PhoneRow({
           const p = e.touches[0];
           const mx = p.clientX - s.x;
           const my = p.clientY - s.y;
+          if (Math.abs(mx) > 10 || Math.abs(my) > 10) cancelHold();
           if (!s.lock) {
             if (Math.abs(mx) > 12 && Math.abs(mx) > Math.abs(my) * 1.5) {
               const k = mx > 0 ? prefs.swipeRight : prefs.swipeLeft;
@@ -135,6 +157,7 @@ export function PhoneRow({
         }}
         onTouchEnd={end}
         onTouchCancel={() => {
+          cancelHold();
           touch.current = null;
           setDragging(false);
           setDx(0);
@@ -176,6 +199,9 @@ export function PhoneRow({
           </div>
           <div className="flex items-center gap-1.5">
             {t.status === 'failed' && <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium text-danger">Failed</span>}
+            {t.code && <CodeChip code={t.code} />}
+            {t.nudge && <NudgeChip sentAt={t.nudge.sentAt} />}
+            {t.muted && <BellOff className="size-3.5 shrink-0 text-muted" aria-label="Muted" />}
             {t.via && view !== 'sent' && view !== 'drafts' && view !== 'scheduled' && <ViaChip address={t.via} />}
             {rowLabels.slice(0, 2).map((l) => (
               <span key={l.id} className="max-w-24 shrink-0 truncate rounded px-1.5 text-[11px] leading-[18px] font-medium" style={{ background: `${l.color}22`, color: `color-mix(in srgb, ${l.color} 45%, var(--fg))` }}>

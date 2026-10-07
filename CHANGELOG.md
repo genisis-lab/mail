@@ -2,8 +2,42 @@
 
 ## Unreleased
 
+**Sign-in codes.** Emails carrying a one-time code ("980708 is your sign-in code") show
+the code as a one-tap Copy button on the inbox row and at the top of the message, and
+the notification leads with it. These emails go to Primary rather than Updates, unless
+you've moved that sender to another tab.
+
+**Remind me if no reply.** In a conversation you've sent in, ⋮ → "Remind me if no reply
+tomorrow / in 3 days / in a week / by…". If nobody but you has written by then, your
+message comes back to the top of the inbox, unread, marked "No reply · sent 3 days ago",
+with Follow up (reply to all) and Done. A reply cancels the reminder.
+
+**Mute and merge.** Mute a conversation (⋮ in the conversation or on a selection) and new
+replies are archived instead of reaching the inbox, with no notification; unmute any
+time. Select two or more conversations → ⋮ → Merge conversations to show them as one.
+
+**Contact groups.** Contacts → Groups: name a group and add people. Type its name in To,
+Cc or Bcc and it expands into everyone in it.
+
+**Phishing.** ⋮ on a message → Report phishing moves that sender's mail in the
+conversation to Spam and alerts admins. Mail that says it's from your own domain, didn't
+come through Wren, and failed SPF, DKIM and DMARC shows a red warning.
+
+**Phone.** Pull down on a mail list to refresh. Press and hold a row to select it.
+
+**Offline.** Your inbox and recently opened conversations (up to 150) stay readable with
+no connection, with a bar saying you're offline. Sending while offline queues the message
+on the device; it goes out when you're back online, or is saved to Drafts if the server
+refuses it. Signing out clears what was saved.
+
+**Fixes.**
 - Installed on an iPhone, the app's top row no longer sits flush under the status bar,
   where iOS blurred the logo and avatar into it.
+- An open conversation now clears "Sending…" by itself once the message has gone out,
+  instead of until you reload.
+
+**Upgrading.** Redeploy; the database update (migration 10, additive) runs by itself on
+the first request.
 
 ## v0.2.2
 

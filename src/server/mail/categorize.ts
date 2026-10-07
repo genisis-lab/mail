@@ -27,6 +27,8 @@ export interface CategoryContext {
   knownContact: boolean;
   /** Mail from the server itself, or from another local user. */
   internal: boolean;
+  /** It carries a one-time sign-in code, which is wanted right now. */
+  oneTimeCode?: boolean;
 }
 
 /** The tab a user has chosen for a sender (exact address, else the whole domain). */
@@ -47,6 +49,7 @@ export function categorize(p: Parsed, ctx: CategoryContext): Category {
   const sender = normalizeEmail(p.from?.address ?? '');
   const learned = sender ? learnedCategory(ctx.userId, sender) : null;
   if (learned) return learned;
+  if (ctx.oneTimeCode) return 'primary';
 
   // A reply to something the user sent is a conversation.
   const refs = [p.inReplyTo, ...p.references].filter((x): x is string => !!x);

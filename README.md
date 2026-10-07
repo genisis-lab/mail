@@ -96,6 +96,19 @@ nothing is attached. Saved replies, saved searches in the
 sidebar, a signature per address, and shared mailboxes (support@, sales@) that a team
 reads together, with "sent by" on each reply.
 
+**Conversation tools.** **Sign-in codes** ("980708 is your code") show as a one-tap
+Copy button on the inbox row, at the top of the message and in the notification, and
+those emails stay in Primary. **Remind me if no reply**: after you send, pick tomorrow,
+3 days, a week or a date; if nobody has answered by then, your message comes back to the
+top of the inbox marked "No reply", with Follow up and Done. **Mute** a noisy
+conversation so new replies skip the inbox. **Merge** conversations that should be one.
+**Contact groups** ("Roadmap crew") that you type in To like a person and that expand
+into everyone in them.
+
+**Phishing protection.** Report phishing from a message's menu: it moves the sender's
+mail to Spam and tells your admin. Mail claiming to be from your own domain that didn't
+come from Wren and failed SPF, DKIM and DMARC shows a red "Be careful" warning.
+
 **Inbox tabs.** Primary, Updates (receipts, alerts, notifications, discussion lists) and
 Promotions (newsletters, offers), with unread counts. Mail written by a person always
 stays in Primary; move a conversation to another tab and that sender's mail follows.
@@ -123,11 +136,16 @@ to the organizer.
 **Attachment previews.** Images, PDFs, text files, audio and video open in a viewer with
 previous / next, download and open in a new tab.
 
-**On your phone.** Installable as an app (PWA) with its own icon and an offline app
-shell. New-mail notifications through Web Push. Pushes carry no data: the app asks Wren
-what's new, so nothing about your mail passes through the push service. Gmail-style
-rows with swipe actions, a floating Compose button, and the unread count in the tab
-title and app badge.
+**On your phone.** Installable as an app (PWA) with its own icon. New-mail
+notifications through Web Push. Pushes carry no data: the app asks Wren what's new, so
+nothing about your mail passes through the push service. Gmail-style rows with swipe
+actions, pull down to refresh, press and hold to select, a floating Compose button, and
+the unread count in the tab title and app badge.
+
+**Offline.** Mail you've opened recently (your inbox and up to 150 conversations) stays
+readable with no connection. Mail you send while offline waits on the device and goes
+out when you're back online; if the server refuses it, it's saved to Drafts. Signing
+out clears what was saved on the device.
 
 **Moving in and out.** Import from Gmail (a Google Takeout `.mbox` keeps labels, stars
 and read state), from any IMAP account (Gmail, iCloud, Yahoo, Fastmail, Zoho…; copied in

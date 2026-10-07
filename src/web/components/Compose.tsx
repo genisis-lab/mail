@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../shared/types';
 import { apiFor, getApiMailbox } from '../lib/api';
 import { mentionsAttachment, ownText } from '../lib/attachment-check';
+import { isNetworkError, queueSend } from '../lib/outbox';
 import { fileSize } from '../lib/format';
 import { sanitizeEditorHtml } from '../lib/sanitize';
 import { useMailboxes } from '../lib/mailbox';
@@ -313,7 +314,8 @@ export function ComposeForm({
         return r.id;
       } catch (err) {
         setSaveState('idle');
-        toast({ message: (err as Error).message, tone: 'error' });
+        // Offline: keep quiet; the draft is saved once the connection is back, or queued on Send.
+        if (!isNetworkError(err)) toast({ message: (err as Error).message, tone: 'error' });
         return null;
       } finally {
         saving.current = null;
@@ -382,9 +384,17 @@ export function ComposeForm({
       toast('Wait for attachments to finish uploading');
       return;
     }
+    // Offline: keep it on this device and send it when the connection is back.
+    const queueIt = () => {
+      queueSend({ userId: user.id, mailbox: mailboxId, subject, payload: { ...payload(), draftId, sendAt } });
+      closed.current = true;
+      onClose();
+      toast('You’re offline. It’ll be sent as soon as you’re back online.');
+    };
+    if (!navigator.onLine) return queueIt();
     setSending(true);
     try {
-      if (saving.current) await saving.current;
+      if (saving.current) await saving.current.catch(() => {});
       const r = await api.post<{ id: number; sendAt: number; undoUntil: number | null }>('/api/compose/send', { ...payload(), draftId, sendAt });
       closed.current = true;
       onClose();
@@ -432,7 +442,8 @@ export function ComposeForm({
         }
       }
     } catch (err) {
-      toast({ message: (err as Error).message, tone: 'error' });
+      if (isNetworkError(err)) queueIt();
+      else toast({ message: (err as Error).message, tone: 'error' });
     } finally {
       setSending(false);
     }

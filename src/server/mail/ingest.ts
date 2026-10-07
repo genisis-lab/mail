@@ -210,11 +210,14 @@ async function deliverToUser(
     if (fwd.keep === 'read') isRead = true;
   }
 
+  // A one-time code ("980708 is your sign-in code"), offered as a one-tap copy.
+  const code = findOneTimeCode(p.subject, p.text ?? (p.html ? htmlToText(p.html) : null));
   const important = !!a.important || (!p.listId && !!contact && contact.times_contacted >= 3);
   const category = categorize(p, {
     userId,
     knownContact: !!contact && (!!contact.saved || contact.times_contacted > 0),
     internal: opts.source === 'system' || !!opts.localSenderId,
+    oneTimeCode: !!code,
   });
   const unsubscribe = getHeader(p, 'list-unsubscribe');
 
@@ -250,8 +253,6 @@ async function deliverToUser(
   });
   if (folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
 
-  // A one-time code ("980708 is your sign-in code"), offered as a one-tap copy.
-  const code = findOneTimeCode(p.subject, p.text ?? (p.html ? htmlToText(p.html) : null));
   if (code) run('UPDATE messages SET otp = ? WHERE id = ?', [code, id]);
   const thread = get<{ id: number; muted: number }>('SELECT t.id, t.muted FROM threads t JOIN messages m ON m.thread_id = t.id WHERE m.id = ?', [id]);
   if (thread && folder !== 'spam' && !userAddresses(userId).includes(sender)) {

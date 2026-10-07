@@ -36,6 +36,10 @@ import {
   Code2,
   AtSign,
   MailX,
+  BellOff,
+  BellRing,
+  AlarmClock,
+  Fish,
 } from 'lucide-react';
 import type { Label, MessageDetail, ThreadDetail } from '../../../shared/types';
 import { api, mailboxUrl } from '../../lib/api';
@@ -51,6 +55,7 @@ import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
 import { useToast } from '../../components/toast';
+import { CodeChip } from '../../components/CodeChip';
 import { Badge, Button, cx, Empty, IconButton, Menu, Spinner, type MenuItem } from '../../components/ui';
 import { LabelDialog } from '../MailLayout';
 import { getListContext, listBase } from './listContext';
@@ -74,6 +79,9 @@ export function ThreadView() {
     queryKey: ['thread', threadId],
     queryFn: () => api.get<ThreadDetail>(`/api/mail/threads/${threadId}`),
     enabled: Number.isFinite(threadId),
+    // While a message is going out (not scheduled for later), check back so "Sending…" clears.
+    refetchInterval: (q) =>
+      q.state.data?.messages.some((m) => m.direction === 'out' && (m.status === 'queued' || m.status === 'sending') && !(m.sendAt && m.sendAt > Date.now() + 30_000)) ? 3000 : false,
   });
 
   // Opening marks messages as read on the server; refresh counters/list.
@@ -89,6 +97,7 @@ export function ThreadView() {
   const [reply, setReply] = useState<(ComposeInit & { key: number; mode: string }) | null>(null);
   const [labelDialog, setLabelDialog] = useState(false);
   const [customSnooze, setCustomSnooze] = useState(false);
+  const [customFollowUp, setCustomFollowUp] = useState(false);
 
   const messages = useMemo(() => (thread.data?.messages ?? []).filter((m) => m.folder !== 'drafts'), [thread.data]);
   const drafts = useMemo(() => (thread.data?.messages ?? []).filter((m) => m.folder === 'drafts'), [thread.data]);
@@ -199,6 +208,8 @@ export function ThreadView() {
   const threadLabels = new Set(t.messages.flatMap((m) => m.labels));
   const starred = messages.some((m) => m.isStarred);
   const important = messages.some((m) => m.isImportant);
+  const sentByMe = messages.some((m) => m.direction === 'out' && m.folder === 'sent' && m.status !== 'queued');
+  const lastSent = [...messages].reverse().find((m) => m.direction === 'out');
 
   const labelItems: MenuItem[] = [
     ...(labels.data ?? []).map((l) => ({
@@ -312,6 +323,7 @@ export function ThreadView() {
           ]}
         />
         <Menu
+          width="w-72"
           trigger={({ onClick }) => (
             <IconButton label="More" onClick={onClick}>
               <MoreVertical className="size-[18px]" />
@@ -320,6 +332,23 @@ export function ThreadView() {
           items={[
             { label: important ? 'Mark as not important' : 'Mark as important', icon: <Flag className="size-4" />, onClick: () => void run([threadId], { type: important ? 'unimportant' : 'important' }) },
             { label: starred ? 'Remove star' : 'Add star', icon: <Star className="size-4" />, onClick: () => void run([threadId], { type: starred ? 'unstar' : 'star' }, { quiet: true }) },
+            { divider: true },
+            t.muted
+              ? { label: 'Unmute', icon: <BellRing className="size-4" />, onClick: () => void run([threadId], { type: 'unmute' }) }
+              : { label: 'Mute', icon: <BellOff className="size-4" />, onClick: () => void act({ type: 'mute' }) },
+            ...(sentByMe
+              ? t.followUpAt
+                ? [{ label: 'Cancel “remind me”', hint: shortDate(t.followUpAt), icon: <AlarmClock className="size-4" />, onClick: () => void run([threadId], { type: 'cancelFollowUp' }) }]
+                : [
+                    ...followUpOptions().map((o) => ({
+                      label: `Remind me if no reply ${o.label}`,
+                      icon: <AlarmClock className="size-4" />,
+                      onClick: () => void run([threadId], { type: 'followUp', at: o.at }),
+                    })),
+                    { label: 'Remind me if no reply by…', icon: <CalendarClock className="size-4" />, onClick: () => setCustomFollowUp(true) },
+                  ]
+              : []),
+            { divider: true },
             { label: 'Print all', icon: <Printer className="size-4" />, onClick: () => window.print() },
           ]}
         />
@@ -360,6 +389,43 @@ export function ThreadView() {
               <Printer className="size-[18px]" />
             </IconButton>
           </div>
+
+          {(t.muted || t.followUpAt || t.nudged) && (
+            <div className="no-print mb-3 space-y-2 pl-14 max-sm:pl-0">
+              {t.nudged && lastSent && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] px-4 py-2.5 text-[13px]">
+                  <AlarmClock className="size-4 shrink-0 text-warn" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <b>No reply yet.</b> You sent this {relativeTime(lastSent.date)}.
+                  </span>
+                  <Button size="sm" onClick={() => void startReply(lastSent, 'replyAll')}>
+                    Follow up
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => void act({ type: 'archive' })}>
+                    Done
+                  </Button>
+                </div>
+              )}
+              {t.followUpAt && !t.nudged && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl bg-accent-softer px-4 py-2.5 text-[13px]">
+                  <AlarmClock className="size-4 shrink-0 text-accent-ink" aria-hidden />
+                  <span className="min-w-0 flex-1">If nobody replies by {longDate(t.followUpAt)}, this comes back to your inbox.</span>
+                  <Button size="sm" variant="ghost" onClick={() => void run([threadId], { type: 'cancelFollowUp' })}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
+              {t.muted && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl bg-panel2 px-4 py-2.5 text-[13px]">
+                  <BellOff className="size-4 shrink-0 text-muted" aria-hidden />
+                  <span className="min-w-0 flex-1 text-muted">Muted: new replies skip your inbox.</span>
+                  <Button size="sm" variant="ghost" onClick={() => void run([threadId], { type: 'unmute' })}>
+                    Unmute
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="space-y-0">
             {visible.map((m, i) =>
@@ -474,6 +540,15 @@ export function ThreadView() {
         onPick={(ts) => {
           setCustomSnooze(false);
           void act({ type: 'snooze', until: ts });
+        }}
+      />
+      <ScheduleModal
+        open={customFollowUp}
+        title="Remind me if nobody replies by"
+        onClose={() => setCustomFollowUp(false)}
+        onPick={(ts) => {
+          setCustomFollowUp(false);
+          void run([threadId], { type: 'followUp', at: ts });
         }}
       />
     </div>
@@ -658,6 +733,16 @@ function MessageCard({
               ...(m.direction === 'in'
                 ? [
                     {
+                      label: 'Report phishing',
+                      icon: <Fish className="size-4" />,
+                      onClick: async () => {
+                        if (!window.confirm('Report this message as phishing? It moves to Spam and your administrator is told about it.')) return;
+                        await api.post(`/api/mail/messages/${m.id}/phishing`);
+                        invalidate();
+                        toast('Reported as phishing and moved to Spam. Thanks for flagging it.');
+                      },
+                    },
+                    {
                       label: `Block “${m.from.name || m.from.address}”`,
                       icon: <Ban className="size-4" />,
                       onClick: async () => {
@@ -737,6 +822,23 @@ function MessageCard({
       )}
 
       <div className="mt-3 ml-14 max-sm:ml-0">
+        {m.spoofWarning && (
+          <div role="alert" className="mb-3 flex items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--danger)_40%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-4 py-3 text-[13px]">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+            <div>
+              <p className="font-medium">Be careful with this message</p>
+              <p className="mt-0.5 text-muted">
+                It says it’s from <b>{m.from.address}</b>, an address on your own domain, but it didn’t come from this server and failed the checks that prove who sent it. Don’t click links, open attachments or reply with personal details.
+              </p>
+            </div>
+          </div>
+        )}
+        {m.code && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[13px] text-muted">
+            <span>Code in this message:</span>
+            <CodeChip code={m.code} size="md" />
+          </div>
+        )}
         {m.folder === 'spam' && (
           <div className="mb-3 flex items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] px-4 py-3 text-[13px]">
             <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warn" />
@@ -870,4 +972,19 @@ function AttachmentIcon({ type, name }: { type: string; name: string }) {
       </span>
     </div>
   );
+}
+
+/** "Remind me if no reply" choices, at 8am local time. */
+function followUpOptions(): { label: string; at: number }[] {
+  const at = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(8, 0, 0, 0);
+    return d.getTime();
+  };
+  return [
+    { label: 'tomorrow', at: at(1) },
+    { label: 'in 3 days', at: at(3) },
+    { label: 'in a week', at: at(7) },
+  ];
 }

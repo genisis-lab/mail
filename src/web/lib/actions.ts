@@ -19,13 +19,19 @@ export type ThreadActionType =
   | 'spam'
   | 'notspam'
   | 'delete'
-  | 'unsnooze';
+  | 'unsnooze'
+  | 'mute'
+  | 'unmute'
+  | 'cancelFollowUp'
+  | 'merge';
 
 export type ThreadAction =
   | { type: ThreadActionType }
   | { type: 'snooze'; until: number }
   | { type: 'label' | 'unlabel'; labelId: number }
-  | { type: 'category'; category: Category };
+  | { type: 'category'; category: Category }
+  /** "Remind me if no reply" by this time. */
+  | { type: 'followUp'; at: number };
 
 const INVERSE: Partial<Record<string, ThreadActionType | 'unlabel' | 'label'>> = {
   archive: 'inbox',
@@ -37,6 +43,8 @@ const INVERSE: Partial<Record<string, ThreadActionType | 'unlabel' | 'label'>> =
   snooze: 'unsnooze',
   read: 'unread',
   unread: 'read',
+  mute: 'unmute',
+  unmute: 'mute',
 };
 
 const MESSAGES: Partial<Record<string, (n: number) => string>> = {
@@ -51,6 +59,11 @@ const MESSAGES: Partial<Record<string, (n: number) => string>> = {
   unsnooze: (n) => `${plural(n, 'conversation')} unsnoozed`,
   read: (n) => `${plural(n, 'conversation')} marked as read`,
   unread: (n) => `${plural(n, 'conversation')} marked as unread`,
+  mute: (n) => (n === 1 ? 'Conversation muted: new replies skip your inbox' : `${plural(n, 'conversation')} muted`),
+  unmute: (n) => `${plural(n, 'conversation')} unmuted`,
+  merge: () => 'Conversations merged',
+  followUp: () => 'You’ll be reminded if nobody replies',
+  cancelFollowUp: () => 'Reminder cancelled',
 };
 
 /** Run a thread action with cache refresh and an Undo toast where it makes sense. */

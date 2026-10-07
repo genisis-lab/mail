@@ -44,6 +44,7 @@ describe('one-time codes', () => {
   it('offers the code in the list, the message and the notification', async () => {
     const id = await receive({ from: 'Whop <no-reply@whop.example>', subject: '980708 is your Whop sign-in code', body: 'Use this code to sign in to your Whop account.' });
     expect(msg(id).otp).toBe('980708');
+    expect(msg(id).category).toBe('primary'); // not tucked away in Updates
     expect((await inbox()).find((t) => t.subject.includes('Whop')).code).toBe('980708');
     expect((await h.call('GET', `/api/mail/messages/${msg(id).id}`)).body.code).toBe('980708');
     expect((await h.call('GET', '/api/me/notifications')).body.items.find((i: any) => i.subject.includes('Whop')).code).toBe('980708');

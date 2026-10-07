@@ -9,6 +9,14 @@ import { Avatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
 import { useToast } from '../components/toast';
 import { Button, Empty, Field, IconButton, Input, Menu, Modal, Spinner, Tabs, Textarea } from '../components/ui';
+import { RecipientInput } from '../components/RecipientInput';
+import type { Addr } from '../../shared/types';
+
+interface Group {
+  id: number;
+  name: string;
+  members: { address: string; name: string }[];
+}
 
 interface Contact {
   id: number;
@@ -27,7 +35,9 @@ export function ContactsPage() {
   const compose = useCompose();
   const qc = useQueryClient();
   const toast = useToast();
-  const [tab, setTab] = useState<'saved' | 'frequent'>('saved');
+  const [tab, setTab] = useState<'saved' | 'frequent' | 'groups'>('saved');
+  const [editingGroup, setEditingGroup] = useState<Partial<Group> | null>(null);
+  const groups = useQuery({ queryKey: ['contact-groups'], queryFn: () => api.get<{ groups: Group[] }>('/api/contacts/groups').then((r) => r.groups) });
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Partial<Contact> | null>(null);
   const [importing, setImporting] = useState(false);
@@ -53,9 +63,15 @@ export function ContactsPage() {
             <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" />
             <Input className="w-64 pl-9" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search contacts" />
           </div>
-          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing({ email: '', name: '', phone: '', company: '', notes: '' })}>
-            <span className="max-sm:sr-only">Create contact</span>
-          </Button>
+          {tab === 'groups' ? (
+            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditingGroup({ name: '', members: [] })}>
+              <span className="max-sm:sr-only">Create group</span>
+            </Button>
+          ) : (
+            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing({ email: '', name: '', phone: '', company: '', notes: '' })}>
+              <span className="max-sm:sr-only">Create contact</span>
+            </Button>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -113,11 +129,58 @@ export function ContactsPage() {
           tabs={[
             { value: 'saved', label: 'Contacts' },
             { value: 'frequent', label: 'Frequently contacted' },
+            { value: 'groups', label: 'Groups' },
           ]}
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {contacts.isLoading ? (
+        {tab === 'groups' ? (
+          groups.isLoading ? (
+            <div className="flex justify-center py-12">
+              <Spinner />
+            </div>
+          ) : !groups.data?.length ? (
+            <Empty icon={<Users className="size-7" />} title="No groups yet">
+              Make a group like “Design team” or “Family”, then type its name in To, Cc or Bcc to add everyone in it.
+            </Empty>
+          ) : (
+            <ul className="divide-y divide-line">
+              {groups.data.map((g) => (
+                <li key={g.id} className="group flex items-center gap-3 px-6 py-3 hover:bg-hover max-sm:px-4">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-ink">
+                    <Users className="size-4" aria-hidden />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{g.name}</p>
+                    <p className="truncate text-xs text-muted">
+                      {g.members.length === 1 ? '1 person' : `${g.members.length} people`} · {g.members.map((m) => m.name || m.address).join(', ')}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-0.5">
+                    <IconButton size="sm" label={`Email ${g.name}`} onClick={() => compose.open({ to: g.members.map((m) => ({ address: m.address, name: m.name })) })}>
+                      <Mail className="size-4" />
+                    </IconButton>
+                    <IconButton size="sm" label={`Edit ${g.name}`} onClick={() => setEditingGroup(g)}>
+                      <Pencil className="size-4" />
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      label={`Delete ${g.name}`}
+                      onClick={async () => {
+                        if (!window.confirm(`Delete the group “${g.name}”? The contacts in it stay.`)) return;
+                        await api.del(`/api/contacts/groups/${g.id}`);
+                        qc.invalidateQueries({ queryKey: ['contact-groups'] });
+                        toast('Group deleted');
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                    </IconButton>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : contacts.isLoading ? (
           <div className="flex justify-center py-12">
             <Spinner />
           </div>
@@ -176,7 +239,73 @@ export function ContactsPage() {
         )}
       </div>
       <ContactDialog contact={editing} onClose={() => setEditing(null)} />
+      <GroupDialog group={editingGroup} onClose={() => setEditingGroup(null)} />
     </div>
+  );
+}
+
+/** Create or edit a contact group: a name, and the people in it. */
+function GroupDialog({ group, onClose }: { group: Partial<Group> | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [members, setMembers] = useState<Addr[]>([]);
+  const [busy, setBusy] = useState(false);
+  const key = group ? group.id ?? 'new' : null;
+  const [lastKey, setLastKey] = useState<unknown>(null);
+  if (key !== lastKey) {
+    setLastKey(key);
+    setName(group?.name ?? '');
+    setMembers((group?.members ?? []).map((m) => ({ address: m.address, name: m.name })));
+  }
+  return (
+    <Modal
+      open={!!group}
+      onClose={onClose}
+      title={group?.id ? 'Edit group' : 'New group'}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={!name.trim() || !members.length}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const body = { name: name.trim(), members: members.map((m) => ({ address: m.address, name: m.name ?? '' })) };
+                if (group?.id) await api.put(`/api/contacts/groups/${group.id}`, body);
+                else await api.post('/api/contacts/groups', body);
+                qc.invalidateQueries({ queryKey: ['contact-groups'] });
+                toast(group?.id ? 'Group saved' : `Group “${body.name}” created. Type its name in To to add everyone.`);
+                onClose();
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <Field label="Group name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Design team" autoFocus maxLength={80} />
+        </Field>
+        <div>
+          <p className="mb-1.5 text-[13px] font-medium">People</p>
+          <div className="rounded-xl border border-line px-2">
+            <RecipientInput label="" value={members} onChange={setMembers} placeholder="Type names or addresses" />
+          </div>
+          <p className="mt-1.5 text-xs text-muted">Separate addresses with commas, or pick from your contacts as you type.</p>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
