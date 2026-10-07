@@ -32,7 +32,27 @@ export function sanitizeEditorHtml(html: string): string {
 }
 
 /**
+ * A whole email document (<html><head>…<body>) keeps what sanitizing just the
+ * body would lose: its <style> blocks, which carry the phone layout (@media
+ * rules), and the body's own background and text colour. The body becomes a div.
+ */
+function keepDocumentStyles(html: string): string {
+  if (!/<(head|body)[\s>]/i.test(html)) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html'); // inert: nothing runs or loads
+  const styles = [...doc.querySelectorAll('style')].filter((s) => !doc.body.contains(s));
+  const body = doc.body;
+  const css = [body.getAttribute('bgcolor') && `background-color:${body.getAttribute('bgcolor')}`, body.getAttribute('text') && `color:${body.getAttribute('text')}`, body.getAttribute('style')]
+    .filter(Boolean)
+    .join(';');
+  const wrap = doc.createElement('div');
+  if (css) wrap.setAttribute('style', css);
+  wrap.innerHTML = body.innerHTML;
+  return styles.map((st) => st.outerHTML).join('') + wrap.outerHTML;
+}
+
+/**
  * Sanitize message HTML for display:
+ *  - keeps a full document's <style> blocks and body colours
  *  - strips scripts, forms, event handlers (DOMPurify)
  *  - rewrites cid: references to attachment URLs
  *  - blocks remote images/backgrounds unless allowed (tracking protection)
@@ -93,8 +113,10 @@ export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo
   });
 
   try {
-    let clean = DOMPurify.sanitize(html, {
+    let clean = DOMPurify.sanitize(keepDocumentStyles(html), {
       WHOLE_DOCUMENT: false,
+      // Otherwise leading <style> blocks are parsed into <head> and dropped.
+      FORCE_BODY: true,
       FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base'],
       FORBID_ATTR: ['onerror', 'onload', 'onclick'],
       ALLOW_UNKNOWN_PROTOCOLS: false,

@@ -46,13 +46,21 @@ export function MessageBody({
   const [paperChoice, setPaperChoice] = useState<boolean | null>(null);
   const paper = isHtml && (!dark || (paperChoice ?? designed));
   const darkText = dark && !paper;
+  // The email sits in <wren-fit><wren-mail>: its own CSS can't target those
+  // tags, and they are what gets measured and, when too wide, scaled to fit.
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">
 <style>
   html,body{margin:0;padding:0;}
   /* Without this the browser paints an opaque white backdrop behind the frame in dark mode. */
-  :root{color-scheme:${darkText ? 'dark' : 'light'};}
+  :root{color-scheme:${darkText ? 'dark' : 'light'};-webkit-text-size-adjust:100%;text-size-adjust:100%;}
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;word-wrap:break-word;overflow-wrap:anywhere;
     ${paper ? 'color:#222;background:#fff;' : darkText ? `color:${DARK.text};background:transparent;` : 'color:#1d2129;background:transparent;'}}
+  /* The frame grows to fit the email, so the email's own full-height or scrolling page setup must not apply. */
+  html,body{height:auto !important;min-height:0 !important;max-height:none !important;}
+  html{overflow-x:hidden !important;overflow-y:auto !important;}
+  body{overflow:visible !important;}
+  wren-fit{display:block;overflow-x:auto;overflow-y:hidden;}
+  wren-mail{display:flow-root;}
   img{max-width:100%;height:auto;}
   table{max-width:100%;}
   pre{white-space:pre-wrap;}
@@ -60,30 +68,85 @@ export function MessageBody({
   blockquote{margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex;}
   .wren-hidden-quote{display:none !important;}
   ${darkText ? `blockquote{border-color:#444;color:${DARK.muted}}` : ''}
-</style></head><body>${rendered.html}</body></html>`;
+</style></head><body><wren-fit><wren-mail>${rendered.html}</wren-mail></wren-fit></body></html>`;
 
   useEffect(() => {
     const f = frame.current;
     if (!f) return;
-    let ro: ResizeObserver | null = null;
+    const cleanups: (() => void)[] = [];
     const onLoad = () => {
       const doc = f.contentDocument;
-      if (!doc) return;
+      const win = f.contentWindow;
+      const fit = doc?.querySelector<HTMLElement>('wren-fit');
+      const mail = doc?.querySelector<HTMLElement>('wren-mail');
+      // Before the email loads the frame holds a blank page: nothing to measure yet.
+      if (!doc || !win || !fit || !mail) return;
+      cleanups.splice(0).forEach((c) => c());
       const quotes = QUOTE_SELECTORS.flatMap((s) => [...doc.querySelectorAll(s)]).filter((el) => !el.parentElement?.closest(QUOTE_SELECTORS.join(',')));
       setHasQuote(quotes.length > 0);
       if (darkText && isHtml) adaptForDark(doc, DARK);
       quotes.forEach((q) => q.classList.toggle('wren-hidden-quote', !showQuote));
-      const measure = () => setHeight(Math.max(40, doc.documentElement.scrollHeight));
+
+      let last = 0;
+      let step = 0;
+      let repeats = 0;
+      const measure = () => {
+        // Lay the email out at the frame's width, then see whether it fits.
+        mail.style.width = '';
+        mail.style.transform = '';
+        fit.style.height = '';
+        fit.style.overflowX = '';
+        const room = doc.documentElement.clientWidth;
+        const wide = naturalWidth(mail);
+        let scale = 1;
+        // A fixed-width layout (a 600–700px newsletter on a phone) is shrunk to fit, like Gmail does.
+        if (room > 0 && wide > room + 1) {
+          mail.style.width = `${wide}px`;
+          // Overflow that grows with the width (width:100% plus padding) isn't cured by
+          // shrinking; that's left to scroll sideways instead.
+          if (naturalWidth(mail) <= wide + 1) {
+            scale = room / wide;
+            mail.style.transformOrigin = '0 0';
+            mail.style.transform = `scale(${scale})`;
+          } else mail.style.width = '';
+        }
+        if (scale < 1) {
+          // Shrunk to fit: nothing is left to the side (the unshrunk box would still scroll).
+          fit.style.overflowX = 'hidden';
+          fit.style.height = `${Math.ceil(mail.getBoundingClientRect().height)}px`;
+        }
+        const h = Math.ceil(fit.getBoundingClientRect().height);
+        if (h <= 0 || h === last) return;
+        // Content sized by the frame itself (100vh) grows the frame by the same step every
+        // round, forever. Images and fonts loading grow it by varying amounts.
+        const grew = h - last;
+        repeats = last > 0 && grew > 0 && Math.abs(grew - step) <= 2 ? repeats + 1 : 0;
+        step = grew;
+        if (repeats >= 3) return;
+        last = h;
+        setHeight(h);
+      };
       measure();
-      ro = new ResizeObserver(measure);
-      ro.observe(doc.body);
+      // The frame's own ResizeObserver: Safari doesn't report elements of another document to the page's.
+      const RO = (win as typeof window).ResizeObserver ?? ResizeObserver;
+      const ro = new RO(() => measure());
+      ro.observe(mail);
+      win.addEventListener('resize', measure);
       doc.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
+      void doc.fonts?.ready.then(measure);
+      // A last look once late layout (fonts, slow images) has settled.
+      const timers = [150, 600, 2000].map((ms) => win.setTimeout(measure, ms));
+      cleanups.push(() => {
+        ro.disconnect();
+        win.removeEventListener('resize', measure);
+        timers.forEach((t) => win.clearTimeout(t));
+      });
     };
     f.addEventListener('load', onLoad);
     if (f.contentDocument?.readyState === 'complete') onLoad();
     return () => {
       f.removeEventListener('load', onLoad);
-      ro?.disconnect();
+      cleanups.splice(0).forEach((c) => c());
     };
   }, [srcDoc, showQuote, darkText, isHtml]);
 
@@ -125,6 +188,22 @@ export function MessageBody({
       )}
     </div>
   );
+}
+
+/**
+ * How wide the email really is. scrollWidth misses some overflow (a table cell
+ * made display:block with width:100% plus padding, say), so the right-most
+ * element edge counts too.
+ */
+function naturalWidth(mail: HTMLElement): number {
+  const left = mail.getBoundingClientRect().left;
+  let right = mail.scrollWidth;
+  const all = mail.getElementsByTagName('*');
+  for (let i = 0; i < all.length && i < 4000; i++) {
+    const r = all[i].getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) right = Math.max(right, r.right - left);
+  }
+  return Math.ceil(right);
 }
 
 export function BlockedImagesBanner({ count, onShow, onAlways }: { count: number; onShow: () => void; onAlways: () => void }) {

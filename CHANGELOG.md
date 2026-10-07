@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.2.3 — sign-in codes, remind me, offline, and emails that fit your phone
+
+**Emails that fit your phone.** Some designed emails (newsletters, receipts, company
+mail) showed only their top strip on an iPhone, inside a small box that scrolled both
+ways. Now:
+- The message area grows to the whole email, whatever the email's own page setup.
+- An email's mobile layout (the styles in its `<head>`) is used.
+- A fixed-width email (600–700px) is shrunk to fit the screen, like Gmail does.
+- The area shrinks again when you hide the trimmed quoted text.
+- An email sized to the screen height no longer makes it grow without end.
 
 **Sign-in codes.** Emails carrying a one-time code ("980708 is your sign-in code") show
 the code as a one-tap Copy button on the inbox row and at the top of the message, and
