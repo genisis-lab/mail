@@ -106,6 +106,17 @@ body,
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/*
+ * As a home-screen app, iOS also smears whatever sits just below the status bar
+ * up into it (the blue logo and the avatar showed as a blur there). A little
+ * room above the first row keeps that strip a clean, plain colour.
+ */
+@media (display-mode: standalone) {
+  #root {
+    padding-top: calc(env(safe-area-inset-top) + 0.625rem);
+  }
+}
+
 body {
   margin: 0;
   background: var(--bg);

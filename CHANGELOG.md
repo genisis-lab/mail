@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Installed on an iPhone, the app's top row no longer sits flush under the status bar,
+  where iOS blurred the logo and avatar into it.
+
 ## v0.2.2
 
 **Fix: replies to a new email now land in its conversation.** When you started a new
