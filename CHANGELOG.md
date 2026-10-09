@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.1 — profile and sender pictures; iPhone fixes
 
 **Profile pictures.** Settings → General → Profile picture: upload one (it's cropped to a
 square on your device first) or remove it. Everyone on your Wren server sees it next to
