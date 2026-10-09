@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { get } from '../src/server/db/index';
+import { get, getMeta, run } from '../src/server/db/index';
 import { config } from '../src/server/config';
 import { ingest } from '../src/server/mail/ingest';
+import { continueParcelBackfill } from '../src/server/mail/parcel';
+import { nextWakeAt } from '../src/server/jobs';
 import { imageKey, remoteImages, serveImage, signImage, signedImages } from '../src/server/services/image-proxy';
 import { harness } from './harness';
 
@@ -167,5 +169,33 @@ describe('push notifications', () => {
   it('keeps ordinary mail as it was', async () => {
     const n = await push({ total: 1, items: [{ ...item, parcel: null }] });
     expect(n.title).toBe('Amazon.com');
+  });
+});
+
+describe('looking at older mail after the upgrade', () => {
+  it('finds the packages in the last 60 days of mail, once', async () => {
+    const D = 86_400_000;
+    const before = (await h.call('GET', '/api/mail/packages')).body.packages.length;
+    // Mail that arrived before package cards existed: never looked at (parcel NULL).
+    const fedex = await receive({ from: 'Best Buy <BestBuyInfo@emailinfo.bestbuy.com>', subject: 'Your order has shipped', text: 'Order #BBY01-806123456789\nFedEx tracking number: 771234567891', date: Date.now() - 10 * D });
+    const plain = await receive({ from: 'Kim <kim@friend.example>', subject: 'Photos from Saturday', text: 'Here they are!', date: Date.now() - 9 * D });
+    const old = await receive({ from: 'Best Buy <BestBuyInfo@emailinfo.bestbuy.com>', subject: 'Your order has shipped', text: 'Order #BBY01-806000000001\nFedEx tracking number: 771234567892', date: Date.now() - 90 * D });
+    run('UPDATE messages SET parcel = NULL WHERE id IN (?, ?, ?)', [fedex.id, plain.id, old.id]);
+    run(`DELETE FROM _meta WHERE key = 'parcel_backfill'`);
+    expect(nextWakeAt()).toBeLessThanOrEqual(Date.now() + 1000); // the background work comes back for it right away
+
+    let batches = 0;
+    while (await continueParcelBackfill(1)) batches++;
+    expect(batches).toBeGreaterThanOrEqual(2);
+    expect(JSON.parse(get<any>('SELECT parcel FROM messages WHERE id = ?', [fedex.id]).parcel)).toMatchObject({ tracking: '771234567891', carrier: 'fedex' });
+    expect(get<any>('SELECT parcel FROM messages WHERE id = ?', [plain.id]).parcel).toBe('');
+    // Older than 60 days: left for when it's opened.
+    expect(get<any>('SELECT parcel FROM messages WHERE id = ?', [old.id]).parcel).toBeNull();
+    expect(getMeta('parcel_backfill')).toBe('done');
+    expect(await continueParcelBackfill()).toBe(false);
+
+    const packages = (await h.call('GET', '/api/mail/packages')).body.packages;
+    expect(packages).toHaveLength(before + 1);
+    expect(packages.find((p: any) => p.tracking === '771234567891')).toMatchObject({ merchant: 'Best Buy', threadId: fedex.thread_id });
   });
 });
