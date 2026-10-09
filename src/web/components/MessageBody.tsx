@@ -76,15 +76,21 @@ export function MessageBody({
   useEffect(() => {
     const f = frame.current;
     if (!f) return;
-    const cleanups: (() => void)[] = [];
-    const onLoad = () => {
+    // The document being sized, and how to let go of it.
+    let bound: Document | null = null;
+    let unbind = () => {};
+    let measure = () => {};
+
+    /** Take on the frame's current document once the email is in it (not the blank page before). */
+    const bind = (): boolean => {
       const doc = f.contentDocument;
       const win = f.contentWindow;
       const fit = doc?.querySelector<HTMLElement>('wren-fit');
       const mail = doc?.querySelector<HTMLElement>('wren-mail');
-      // Before the email loads the frame holds a blank page: nothing to measure yet.
-      if (!doc || !win || !fit || !mail) return;
-      cleanups.splice(0).forEach((c) => c());
+      if (!doc || !win || !fit || !mail) return false;
+      if (doc === bound) return true;
+      unbind();
+      bound = doc;
       const quotes = QUOTE_SELECTORS.flatMap((s) => [...doc.querySelectorAll(s)]).filter((el) => !el.parentElement?.closest(QUOTE_SELECTORS.join(',')));
       setHasQuote(quotes.length > 0);
       if (darkText && isHtml) adaptForDark(doc, DARK);
@@ -93,7 +99,11 @@ export function MessageBody({
       let last = 0;
       let step = 0;
       let repeats = 0;
-      const measure = () => {
+      let seen = '';
+      measure = () => {
+        // Nothing moved since the last look: skip the (full relayout) measurement.
+        const now = `${doc.documentElement.clientWidth}:${mail.offsetHeight}:${mail.scrollHeight}:${mail.scrollWidth}`;
+        if (now === seen) return;
         // Lay the email out at the frame's width, then see whether it fits.
         mail.style.width = '';
         mail.style.transform = '';
@@ -113,15 +123,23 @@ export function MessageBody({
             mail.style.transform = `scale(${scale})`;
           } else mail.style.width = '';
         }
+        // Content can spill out of a box sized to the frame (height:100vh): count it too.
+        const content = Math.ceil(Math.max(mail.getBoundingClientRect().height, mail.scrollHeight * scale));
         if (scale < 1) {
           // Shrunk to fit: nothing is left to the side (the unshrunk box would still scroll).
           fit.style.overflowX = 'hidden';
-          fit.style.height = `${Math.ceil(mail.getBoundingClientRect().height)}px`;
+          fit.style.height = `${content}px`;
         }
-        const h = Math.ceil(fit.getBoundingClientRect().height);
-        if (h <= 0 || h === last) return;
-        // Content sized by the frame itself (100vh) grows the frame by the same step every
-        // round, forever. Images and fonts loading grow it by varying amounts.
+        seen = `${doc.documentElement.clientWidth}:${mail.offsetHeight}:${mail.scrollHeight}:${mail.scrollWidth}`;
+        const h = Math.max(content, Math.ceil(fit.getBoundingClientRect().height));
+        // Not laid out yet (Safari, right after the frame appears): look again shortly.
+        if (h <= 0) {
+          seen = '';
+          return;
+        }
+        if (h === last) return;
+        // Content sized by the frame itself (min-height:100vh) grows the frame by the same
+        // step every round, forever. Images and fonts loading grow it by varying amounts.
         const grew = h - last;
         repeats = last > 0 && grew > 0 && Math.abs(grew - step) <= 2 ? repeats + 1 : 0;
         step = grew;
@@ -129,27 +147,66 @@ export function MessageBody({
         last = h;
         setHeight(h);
       };
-      measure();
+
+      const again = () => measure();
       // The frame's own ResizeObserver: Safari doesn't report elements of another document to the page's.
       const RO = (win as typeof window).ResizeObserver ?? ResizeObserver;
-      const ro = new RO(() => measure());
+      const ro = new RO(again);
       ro.observe(mail);
-      win.addEventListener('resize', measure);
-      doc.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
-      void doc.fonts?.ready.then(measure);
-      // A last look once late layout (fonts, slow images) has settled.
-      const timers = [150, 600, 2000].map((ms) => win.setTimeout(measure, ms));
-      cleanups.push(() => {
-        ro.disconnect();
-        win.removeEventListener('resize', measure);
-        timers.forEach((t) => win.clearTimeout(t));
+      win.addEventListener('resize', again);
+      const imgs = [...doc.querySelectorAll('img')];
+      imgs.forEach((img) => {
+        img.addEventListener('load', again);
+        img.addEventListener('error', again);
       });
+      void doc.fonts?.ready.then(again);
+      unbind = () => {
+        ro.disconnect();
+        win.removeEventListener('resize', again);
+        imgs.forEach((img) => {
+          img.removeEventListener('load', again);
+          img.removeEventListener('error', again);
+        });
+        measure = () => {};
+      };
+      return true;
     };
-    f.addEventListener('load', onLoad);
-    if (f.contentDocument?.readyState === 'complete') onLoad();
+
+    const tick = () => {
+      if (bind()) measure();
+    };
+    f.addEventListener('load', tick);
+    // Safari doesn't always lay a new frame out, or say so, by the time it has
+    // loaded; until it has, the email showed cut off at the starting height.
+    // So keep looking: every frame for a few seconds, then every second for a
+    // while, and whenever the page or the frame changes size or comes back.
+    const started = performance.now();
+    let raf = requestAnimationFrame(function loop() {
+      tick();
+      if (performance.now() - started < 4000) raf = requestAnimationFrame(loop);
+    });
+    const slow = window.setInterval(() => {
+      tick();
+      if (performance.now() - started > 30_000) window.clearInterval(slow);
+    }, 1000);
+    const pageRo = new ResizeObserver(tick);
+    pageRo.observe(f);
+    const onShow = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    window.addEventListener('resize', tick);
+    window.addEventListener('pageshow', tick);
+    document.addEventListener('visibilitychange', onShow);
+    tick();
     return () => {
-      f.removeEventListener('load', onLoad);
-      cleanups.splice(0).forEach((c) => c());
+      f.removeEventListener('load', tick);
+      cancelAnimationFrame(raf);
+      window.clearInterval(slow);
+      pageRo.disconnect();
+      window.removeEventListener('resize', tick);
+      window.removeEventListener('pageshow', tick);
+      document.removeEventListener('visibilitychange', onShow);
+      unbind();
     };
   }, [srcDoc, showQuote, darkText, isHtml]);
 

@@ -98,6 +98,27 @@ body,
 }
 
 /*
+ * Phone layouts must never be wider than the screen. Fieldsets refuse to shrink
+ * below their content by default, and iOS draws date and time fields at their
+ * natural width however narrow the column (two side by side made Settings
+ * scroll sideways).
+ */
+fieldset {
+  min-width: 0;
+}
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'] {
+  min-width: 0;
+  max-width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+/*
  * Installed on iOS (viewport-fit=cover) the page is drawn under the status
  * bar, where iOS blurs whatever is there. Keep the app inside the safe area;
  * the strips around it show the plain background.

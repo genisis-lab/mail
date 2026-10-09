@@ -26,6 +26,9 @@ export interface UserRow {
   recovery_email: string | null;
   recovery_verified_at: number | null;
   password_change_required_at: number | null;
+  avatar_blob: string | null;
+  avatar_type: string | null;
+  avatar_at: number | null;
 }
 
 export function getUser(id: number): UserRow | undefined {
@@ -114,6 +117,8 @@ export function sessionUser(user: UserRow): SessionUser {
     identities: identities(user.id),
     mustSetup2fa: mustSetup2fa(user),
     mustChangePassword: mustChangePassword(user),
+    hasAvatar: !!user.avatar_blob,
+    avatarAt: user.avatar_at,
   };
 }
 

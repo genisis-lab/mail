@@ -124,6 +124,12 @@ arrived lately, notifications lead with "Out for delivery · Amazon", and `has:p
 finds every shipping email. Links only go to the sender's, the shop's or the carrier's
 own site.
 
+**Pictures.** Upload a profile picture; people on your server see it next to your mail.
+Senders show their picture too: theirs if they're on your server, else their Gravatar,
+else their company's verified BIMI logo (only for domains whose DMARC rejects
+forgeries). The server does the lookups and caches them, and failed-authentication mail
+never wears a picture. It can be turned off.
+
 **Phishing protection.** Report phishing from a message's menu: it moves the sender's
 mail to Spam and tells your admin. Mail claiming to be from your own domain that didn't
 come from Wren and failed SPF, DKIM and DMARC shows a red "Be careful" warning.
@@ -181,7 +187,7 @@ Contacts import from Google/Outlook CSV or vCard and export to both.
 "exact phrases" and `-negation`. Includes an advanced search form and "create filter
 from search".
 
-**Settings.** Theme, density, page size, default From, signatures, vacation responder
+**Settings.** Profile picture, theme, density, page size, default From, signatures, vacation responder
 (dates, contacts only, one reply per sender per 4 days), forwarding, filters (label,
 archive, star, forward, delete, never/always spam), blocked senders, labels, swipe
 actions, notifications, inbox tabs, self-service aliases and sign-up addresses (if the

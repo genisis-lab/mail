@@ -361,7 +361,7 @@ function ContactDialog({ contact, onClose }: { contact: Partial<Contact> | null;
         <Field label="Email">
           <Input type="email" value={form.email ?? ''} onChange={(e) => set('email', e.target.value)} />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
           <Field label="Phone">
             <Input value={form.phone ?? ''} onChange={(e) => set('phone', e.target.value)} />
           </Field>

@@ -482,7 +482,7 @@ function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose:
               <Input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} type="text" autoComplete="off" />
             </Field>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
             <Field label="Role">
               <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="user">User</option>
@@ -760,7 +760,7 @@ export function EditUserModal({ user, onClose, onSaved }: { user: AdminUser | nu
               {me.role === 'owner' && <option value="owner">Owner</option>}
             </Select>
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
             <Field label="Mailbox quota (MB)" help={`Blank = default. Using ${fileSize(user.usedBytes)}.`}>
               <Input type="number" min={1} value={form.quotaMb} onChange={(e) => setForm({ ...form, quotaMb: e.target.value })} />
             </Field>

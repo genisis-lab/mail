@@ -15,6 +15,8 @@ import { currentPushSubscription, disablePush, enablePush, isIos, isStandalone, 
 import { ImportExportTab } from './ImportExport';
 import { addPasskey, deviceName, passkeysSupported } from '../../lib/passkeys';
 import { SavedRepliesTab } from './SavedReplies';
+import { Avatar, refreshAvatar, resetAvatars } from '../../components/Avatar';
+import { squarePicture } from '../../lib/picture';
 
 type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'replies' | 'import' | 'security';
 
@@ -56,6 +58,65 @@ export function SettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Upload, change or remove your own picture. */
+function ProfilePicture() {
+  const { user, instance, refresh } = useSession();
+  const toast = useToast();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const mine = () => [user.email, ...user.identities.map((i) => i.address)];
+  const change = async (fn: () => Promise<unknown>, done: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      await refresh();
+      refreshAvatar(mine());
+      toast(done);
+    } catch (err) {
+      toast({ message: (err as Error).message, tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const upload = (file: File) =>
+    change(async () => {
+      const form = new FormData();
+      form.append('file', await squarePicture(file), 'picture.jpg');
+      await api.post('/api/account/avatar', form);
+    }, 'Profile picture updated');
+  return (
+    <Row
+      title="Profile picture"
+      help={`Shown next to your mail for everyone on ${instance.name}. Other mail apps don't show pictures sent with an email; to appear there too, use the same picture on Gravatar.com.`}
+    >
+      <div className="flex items-center gap-4">
+        <Avatar name={user.name} address={user.email} size={64} />
+        <div className="flex flex-wrap gap-2">
+          <Button loading={busy} onClick={() => input.current?.click()}>
+            {user.hasAvatar ? 'Change picture' : 'Upload a picture'}
+          </Button>
+          {user.hasAvatar && (
+            <Button variant="ghost" disabled={busy} onClick={() => void change(() => api.del('/api/account/avatar'), 'Profile picture removed')}>
+              Remove
+            </Button>
+          )}
+        </div>
+        <input
+          ref={input}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void upload(file);
+          }}
+        />
+      </div>
+    </Row>
   );
 }
 
@@ -120,6 +181,7 @@ function GeneralTab() {
 
   return (
     <div>
+      <ProfilePicture />
       <Row title="Name" help="Shown to people you email.">
         <div className="flex gap-2">
           <Input value={name} onChange={(e) => setName(e.target.value)} aria-label="Name" />
@@ -166,6 +228,19 @@ function GeneralTab() {
       </Row>
       <Row title="Inbox tabs" help="Receipts, alerts and newsletters wait in their own tabs. Mail from people stays in Primary.">
         <Switch checked={draft.inboxTabs} onChange={(v) => set('inboxTabs', v)} label="Split the inbox into Primary, Updates and Promotions" />
+      </Row>
+      <Row
+        title="Sender pictures"
+        help="Wren looks up the Gravatar people set up, and the verified logo companies publish for their mail (what Gmail and Yahoo show). The server asks, not your device. People here always show their own picture."
+      >
+        <Switch
+          checked={draft.senderPictures}
+          onChange={(v) => {
+            set('senderPictures', v);
+            void save({ senderPictures: v }).then(resetAvatars);
+          }}
+          label="Show pictures and logos for people who email me"
+        />
       </Row>
       {user.identities.length > 1 && (
         <Row title="Default “From” address">
@@ -238,7 +313,7 @@ function GeneralTab() {
         <div className="space-y-4">
           <Switch checked={vac.enabled} onChange={(v) => set('vacation', { ...vac, enabled: v })} label={vac.enabled ? 'Vacation responder on' : 'Vacation responder off'} />
           <fieldset disabled={!vac.enabled} className={cx('space-y-4', !vac.enabled && 'opacity-60')}>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
               <Field label="First day">
                 <Input type="date" value={toDate(vac.startAt)} onChange={(e) => set('vacation', { ...vac, startAt: e.target.value ? new Date(`${e.target.value}T00:00`).getTime() : null })} />
               </Field>

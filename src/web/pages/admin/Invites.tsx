@@ -175,7 +175,7 @@ export function InvitesPage() {
                 ))}
               </Select>
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
               <Field label="Role">
                 <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   <option value="user">User</option>

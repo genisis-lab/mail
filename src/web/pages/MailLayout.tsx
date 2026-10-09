@@ -42,7 +42,7 @@ import { MailboxProvider, useMailbox } from '../lib/mailbox';
 import { useNewMailNotifications, useUnreadTitle } from '../lib/notify';
 import { useInstallPrompt } from '../lib/pwa';
 import { inboxCount, useCounters, useLabels, useSession } from '../lib/session';
-import { Avatar } from '../components/Avatar';
+import { Avatar, refreshAvatar } from '../components/Avatar';
 import { useCompose } from '../components/Compose';
 import { LogoMark } from '../components/Logo';
 import { useToast } from '../components/toast';
@@ -259,6 +259,9 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
   const installPrompt = useInstallPrompt();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  // Your own picture under every address you send from, as of its last change.
+  const ownAddresses = [user.email, ...user.identities.map((i) => i.address)].join(',');
+  useEffect(() => refreshAvatar(ownAddresses.split(','), user.avatarAt ?? 0), [ownAddresses, user.avatarAt]);
   return (
     <header className="flex h-16 shrink-0 items-center gap-2 px-3 max-md:h-14">
       <IconButton label="Main menu" onClick={onMenu} size="lg">

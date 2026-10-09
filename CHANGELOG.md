@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+**Profile pictures.** Settings → General → Profile picture: upload one (it's cropped to a
+square on your device first) or remove it. Everyone on your Wren server sees it next to
+your mail, in the inbox and in conversations.
+
+**Sender pictures.** People who write to you show a picture instead of initials when
+there is one:
+- their profile picture, if they're on your server;
+- otherwise their Gravatar;
+- otherwise, for a company, the verified logo it publishes for its mail (BIMI). That's
+  what Gmail and Yahoo show, and it's only used when the company's DMARC turns away
+  forgeries.
+
+Gmail and Yahoo don't share their users' own photos, so those can't be fetched. The
+server makes the lookups, not your device, and remembers the answers for a week. Mail
+that fails the sender checks never shows a picture or logo. Turn it off in Settings →
+General → Sender pictures.
+
+**Fixes.**
+- With "Ask before displaying external images" on, some emails stayed cut off at the
+  top on an iPhone until you left the app and came back. iOS hadn't laid the email out
+  yet when Wren first measured it. The message area now keeps checking until it has the
+  email's real size.
+- Settings could be swiped sideways on a phone. The vacation responder's two date
+  fields, side by side, were wider than the screen, because iOS draws date fields at
+  their full natural width. Date and time fields, and forms, now always fit the screen.
+
+**Upgrading.** Redeploy; the database update (migration 12, additive) runs by itself.
+
 ## v0.3.0 — packages, private pictures, manage subscriptions
 
 **Packages.** Shipping mail ("Your order has shipped", "Delivered: …", a forwarder's

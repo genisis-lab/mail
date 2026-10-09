@@ -598,4 +598,20 @@ export const migrations: string[] = [
   ALTER TABLE messages ADD COLUMN parcel TEXT;
   CREATE INDEX idx_messages_parcel ON messages(user_id, date) WHERE parcel <> '';
   `,
+
+  // 12: profile pictures, and the pictures found (or not) for people who write in.
+  `
+  ALTER TABLE users ADD COLUMN avatar_blob TEXT;
+  ALTER TABLE users ADD COLUMN avatar_type TEXT;
+  ALTER TABLE users ADD COLUMN avatar_at INTEGER;
+
+  -- key: an address (Gravatar) or '@domain' (a brand logo published with BIMI).
+  CREATE TABLE avatar_cache (
+    key          TEXT PRIMARY KEY COLLATE NOCASE,
+    source       TEXT NOT NULL,
+    blob         TEXT,
+    content_type TEXT,
+    checked_at   INTEGER NOT NULL
+  );
+  `,
 ];

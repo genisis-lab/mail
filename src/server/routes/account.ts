@@ -12,6 +12,7 @@ import { sendRecoveryVerification } from '../services/account-links.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
 import { WebAuthnError } from '../lib/webauthn.js';
+import { clearUserAvatar, setUserAvatar } from '../services/avatars.js';
 
 export const accountRoutes = new Hono<AppEnv>();
 
@@ -20,6 +21,22 @@ accountRoutes.put('/profile', async (c) => {
   const { name } = await body(c, z.object({ name: z.string().min(1).max(100) }));
   run('UPDATE users SET name = ? WHERE id = ?', [name.trim(), user.id]);
   run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [name.trim(), user.id]);
+  return c.json({ user: sessionUser(getUser(user.id)!) });
+});
+
+/** A profile picture (the app sends a small square JPEG). */
+accountRoutes.post('/avatar', async (c) => {
+  const user = c.get('user');
+  const form = await c.req.formData().catch(() => null);
+  const file = form?.get('file');
+  if (!file || typeof file === 'string') throw badRequest('Choose a picture');
+  await setUserAvatar(user.id, new Uint8Array(await file.arrayBuffer()));
+  return c.json({ user: sessionUser(getUser(user.id)!) });
+});
+
+accountRoutes.delete('/avatar', (c) => {
+  const user = c.get('user');
+  clearUserAvatar(user.id);
   return c.json({ user: sessionUser(getUser(user.id)!) });
 });
 
@@ -41,6 +58,7 @@ const prefsSchema = z
     readingPane: z.boolean(),
     inboxTabs: z.boolean(),
     signInAlerts: z.boolean(),
+    senderPictures: z.boolean(),
     vacation: z.object({
       enabled: z.boolean(),
       subject: z.string().max(200),

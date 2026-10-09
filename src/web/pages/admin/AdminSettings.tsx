@@ -100,7 +100,7 @@ export function AdminSettingsPage() {
                 <option value="all">Everyone</option>
               </Select>
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
               <Field label="Minimum password length">
                 <Input type="number" min={8} value={draft['security.passwordMinLength']} onChange={num('security.passwordMinLength')} />
               </Field>

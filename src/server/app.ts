@@ -11,6 +11,7 @@ import { adminRoutes, runtimeInfo } from './routes/admin.js';
 import { adminOpsRoutes } from './routes/admin-ops.js';
 import { meRoutes } from './routes/me.js';
 import { inboundRoutes } from './routes/inbound.js';
+import { avatarRoutes } from './routes/avatars.js';
 
 const log = logger('http');
 
@@ -101,7 +102,7 @@ export function createApp() {
   app.use('/api/account/*', requireUser);
   app.route('/api/account', accountRoutes);
 
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
@@ -119,6 +120,7 @@ export function createApp() {
   app.route('/api/filters', filterRoutes);
   app.route('/api/blocked', blockedRoutes);
   app.route('/api/me', meRoutes);
+  app.route('/api/avatars', avatarRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', adminOpsRoutes);
 

@@ -60,6 +60,8 @@ export interface UserPrefs {
   inboxTabs: boolean;
   /** Email me when my account is signed in to from a new device. */
   signInAlerts: boolean;
+  /** Show senders' Gravatars and verified brand logos (people on this server always show theirs). */
+  senderPictures: boolean;
   vacation: VacationPrefs;
   forwarding: ForwardingPrefs;
 }
@@ -81,6 +83,7 @@ export const DEFAULT_PREFS: UserPrefs = {
   readingPane: false,
   inboxTabs: true,
   signInAlerts: true,
+  senderPictures: true,
   vacation: { enabled: false, subject: '', message: '', startAt: null, endAt: null, contactsOnly: false },
   forwarding: { enabled: false, to: '', keep: 'inbox' },
 };
@@ -96,6 +99,9 @@ export interface SessionUser {
   mustSetup2fa: boolean;
   /** An administrator asked for a new password before anything else. */
   mustChangePassword: boolean;
+  hasAvatar: boolean;
+  /** When the profile picture last changed (for fetching the new one). */
+  avatarAt: number | null;
 }
 
 export interface Identity {

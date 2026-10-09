@@ -629,11 +629,13 @@ function MessageCard({
   const [preview, setPreview] = useState<number | null>(null);
   const visibleAttachments = m.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`));
   const scheduled = m.status === 'queued' && m.sendAt && m.sendAt > Date.now() + 30_000;
+  // Mail that failed the checks proving who sent it doesn't get the sender's picture or logo.
+  const trustedSender = !m.spoofWarning && m.authResults?.dmarc !== 'fail';
 
   if (!expanded) {
     return (
       <div onClick={onToggle} className="flex cursor-pointer items-center gap-4 border-t border-line px-2 py-3 hover:bg-hover">
-        <Avatar name={m.from.name} address={m.from.address} size={40} />
+        <Avatar name={m.from.name} address={m.from.address} size={40} picture={trustedSender} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className={cx('truncate text-sm', !m.isRead ? 'font-bold' : 'font-semibold')}>{fromName}</span>
@@ -649,7 +651,7 @@ function MessageCard({
   return (
     <article className={cx('border-t border-line px-2 pt-4', isLast ? 'pb-2' : 'pb-5')}>
       <header className="flex items-start gap-4">
-        <Avatar name={m.from.name} address={m.from.address} size={40} className="cursor-pointer" />
+        <Avatar name={m.from.name} address={m.from.address} size={40} className="cursor-pointer" picture={trustedSender} />
         <div className="min-w-0 flex-1 cursor-pointer" onClick={onToggle}>
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-sm font-bold">{fromName}</span>
