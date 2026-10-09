@@ -12,6 +12,9 @@
  * Every email about the same package (same tracking number, or the same order
  * from the same shop) is put together into one card: the shop's order
  * confirmation, its shipping email, a forwarder's update, the delivery notice.
+ * An order number belongs to the shop (or the sender's site); on domains many
+ * senders share (Gmail, Shopify's t.shopifyemail.com) it belongs to the one
+ * sender address, since every Shopify store's orders start at #1001.
  *
  * View order goes to the shop's own order page (Amazon, Walmart, Macy's,
  * Target…). Phones open those pages in the shop's app when it's installed,
@@ -27,8 +30,12 @@ import { htmlToText } from './parse.js';
 
 /** What one email says about a package (stored as JSON in messages.parcel; '' when there's none). */
 export interface ParcelFacts {
-  /** The sender's site (amazon.co.uk), which says whose order number it is. */
+  /** The sender's site (amazon.co.uk). */
   site: string;
+  /** Whose order number it is: the shop, the sender's site, or (on a shared domain) the sender's address. */
+  scope: string;
+  /** An order confirmation from a shop we don't know: no card by itself, but it joins the package's card once it ships. */
+  weak?: true;
   status?: ParcelStatus;
   /** Expected delivery day (UTC midnight). */
   eta?: number;
@@ -236,6 +243,25 @@ function merchantName(name: string | undefined, site: string): string | undefine
 }
 
 const isCarrierSite = (site: string) => Object.values(CARRIERS).some((c) => c.sites.includes(site));
+const carrierOfSite = (site: string) => Object.entries(CARRIERS).find(([, c]) => c.sites.includes(site))?.[0];
+
+/** Domains many senders share (free mail, store platforms): there, an order number belongs to one sender address. */
+const SHARED = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'zoho.com', 'shopifyemail.com', 'returnscentermail.com']);
+/** A platform's sites its senders' links may point to (a Shopify store's order page). */
+const PLATFORM_LINKS: Record<string, string[]> = { 'shopifyemail.com': ['shopify.com', 'myshopify.com'] };
+
+/** The carrier named closest to the tracking number. */
+function nearestCarrier(text: string, at: number): string | undefined {
+  let best: { id: string; d: number } | undefined;
+  for (const [id, c] of Object.entries(CARRIERS)) {
+    if (!c.word) continue;
+    for (const m of text.matchAll(new RegExp(c.word.source, `${c.word.flags}g`))) {
+      const d = Math.abs((m.index ?? 0) - at);
+      if (!best || d < best.d) best = { id, d };
+    }
+  }
+  return best?.id;
+}
 
 // ── Status, dates, order numbers ────────────────────────────────────────────
 
@@ -426,7 +452,7 @@ function fromMarkup(html: string): Partial<ParcelFacts> & { merchantName?: strin
     trackUrl: str(parcel?.trackingUrl),
     carrierName: nameOf(parcel?.carrier) ?? nameOf(parcel?.provider),
     eta: dayOf(parcel?.expectedArrivalUntil) ?? dayOf(parcel?.expectedArrivalFrom),
-    order: str(order?.orderNumber),
+    order: str(order?.orderNumber)?.replace(/^#/, '').toUpperCase(),
     orderUrl: str(order?.url),
     merchantName: nameOf(order?.merchant) ?? nameOf(order?.seller),
     status: orderStatus(order?.orderStatus) ?? orderStatus(parcel?.deliveryStatus),
@@ -497,33 +523,40 @@ export function findParcel(input: ParcelInput): ParcelFacts | null {
     }
   }
   if (tracking && !carrier) {
-    // A labelled number: which carrier, by its shape or the carrier named in the email.
+    // A labelled number: which carrier, by its shape, the carrier sending the email, or the carrier named nearest to it.
     carrier =
       (/^1Z[0-9A-Z]{16}$/.test(tracking) && 'ups') ||
       (/^TBA\d{12}$/.test(tracking) && 'amazon') ||
       (/^9[1-5]\d{20}$/.test(tracking) && 'usps') ||
       (/^[A-Z]{2}\d{9}[A-Z]{2}$/.test(tracking) && S10_COUNTRY[tracking.slice(-2)]) ||
-      Object.entries(CARRIERS).find(([, c]) => c.word?.test(full))?.[0] ||
+      carrierOfSite(site) ||
+      nearestCarrier(full, Math.max(0, full.toUpperCase().indexOf(tracking))) ||
       undefined;
   }
 
+  const head = text.slice(0, 600);
+  const status = md.status ?? statusIn(subject) ?? statusIn(head);
   const order = md.order ?? findOrder(subject, text);
-  if (!tracking && !md.order && !(shop && order && (shipping || statusIn(subject)))) return null;
+  const strong = !!tracking || !!md.order || (!!shop && !!order && (shipping || !!statusIn(subject)));
+  // A shop we don't know: its order confirmation waits (without a card) for the shipping email with the same order number.
+  const weak = !strong && !!order && status === 'ordered' && shipping;
+  if (!strong && !weak) return null;
 
   // Links from the email, only on the sender's, the shop's or the carrier's own site.
-  const own = new Set([site].filter(Boolean));
+  const own = new Set([site, ...(PLATFORM_LINKS[site] ?? [])].filter(Boolean));
   const carrierSites = new Set([...own, ...(carrier && CARRIERS[carrier] ? CARRIERS[carrier].sites : [])]);
   const orderUrl = safeUrl(md.orderUrl, own) ?? links.map((l) => (ORDER_LINK.test(l.text) ? safeUrl(l.href, own) : undefined)).find(Boolean);
   const trackUrl =
     safeUrl(md.trackUrl, carrierSites) ??
     links.map((l) => (TRACK_LINK.test(l.text) || (tracking && l.text.replace(/\s/g, '').toUpperCase() === tracking) ? safeUrl(l.href, carrierSites) : undefined)).find(Boolean);
 
-  const head = text.slice(0, 600);
   const quoted = subject.match(/["“]([^"”]{3,140})["”]/)?.[1] ?? subject.match(/\border of\s+(.{3,140}?)\s+(?:has|have)\s+(?:shipped|been)/i)?.[1];
   const more = subject.match(/\band (\d{1,3}) more items?\b/i);
   const facts: ParcelFacts = {
     site,
-    status: md.status ?? statusIn(subject) ?? statusIn(head),
+    scope: shop ? `shop:${shop.name}` : SHARED.has(site) ? `from:${sender.toLowerCase()}` : `site:${site}`,
+    weak: weak ? true : undefined,
+    status,
     eta: md.eta ?? findEta(`${subject}\n${text.slice(0, 4000)}`, input.date),
     merchant: shop || isCarrierSite(site) ? undefined : merchantName(md.merchantName ?? input.from?.name, site),
     carrier,
@@ -568,11 +601,11 @@ export function parcelRows(userId: number): ParcelRow[] {
 }
 
 const WINDOW = 120 * DAY;
-const orderKey = (f: ParcelFacts) => (f.order && f.site ? `${f.site}|${f.order}` : null);
+const orderKey = (f: ParcelFacts) => (f.order ? `${f.scope ?? `site:${f.site}`}|${f.order}` : null);
 
 /**
  * The emails about the same package as `seed`: the same tracking number, or
- * the same order from the same site. Two steps, so a shop's order confirmation
+ * the same order from the same shop or sender. Two steps, so a shop's order confirmation
  * (order number only) joins a forwarder's update (tracking number only)
  * through the shop's shipping email (both).
  */
@@ -642,7 +675,8 @@ export function buildParcel(group: ParcelRow[], seed: ParcelRow): Parcel {
   };
 }
 
-/** The package card for a message's facts, joined with the user's other emails about it. */
-export function parcelFor(rows: ParcelRow[], seed: ParcelRow): Parcel {
-  return buildParcel(relatedRows(rows, seed), seed);
+/** The package card for a message's facts, joined with the user's other emails about it (none from order confirmations alone). */
+export function parcelFor(rows: ParcelRow[], seed: ParcelRow): Parcel | null {
+  const group = relatedRows(rows, seed);
+  return group.some((r) => !r.facts.weak) ? buildParcel(group, seed) : null;
 }

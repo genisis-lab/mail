@@ -213,6 +213,70 @@ describe('the order card', () => {
     expect(get<any>('SELECT parcel FROM messages WHERE id = ?', [m.id]).parcel).toContain('200012345678901');
   });
 
+  it('follows a Lowe’s order from confirmation to FedEx’s delivery email', async () => {
+    const t0 = Date.now() - 6 * 86_400_000;
+    const confirmed = await receive({
+      from: "Lowe's <LowesOrders@e.lowes.com>",
+      subject: 'We’ve received your order #200345678',
+      html: '<p>Thanks for your order! Order #200345678. We’ll email you when it ships.</p><a href="https://www.lowes.com/mylowes/orders/200345678">View Order Details</a>',
+      date: t0,
+    });
+    // Before it ships, the confirmation already has its card (Lowe’s is a shop we know).
+    expect((await thread(confirmed.thread_id)).parcel).toMatchObject({ status: 'ordered', merchant: 'Lowe’s', order: '200345678', emails: 1 });
+    await receive({
+      from: "Lowe's <LowesOrders@e.lowes.com>",
+      subject: 'Your order has shipped!',
+      html: '<p>Order #200345678 is on its way.</p><p>Tracking Number: <a href="https://www.fedex.com/fedextrack/?trknbr=771234567890">771234567890</a></p>',
+      date: t0 + 86_400_000,
+    });
+    // FedEx's own email never says "FedEx" in its text, nor which order it is.
+    const delivered = await receive({ from: 'FedEx <TrackingUpdates@fedex.com>', subject: 'Your package has been delivered', text: 'Tracking number 771234567890. Left at front door.', date: t0 + 3 * 86_400_000 });
+    expect(JSON.parse(delivered.parcel)).toMatchObject({ carrier: 'fedex', tracking: '771234567890' });
+    for (const id of [confirmed.thread_id, delivered.thread_id]) {
+      expect((await thread(id)).parcel).toMatchObject({
+        status: 'delivered',
+        merchant: 'Lowe’s',
+        order: '200345678',
+        carrier: 'FedEx',
+        tracking: '771234567890',
+        orderUrl: 'https://www.lowes.com/mylowes/orders/200345678',
+        trackUrl: 'https://www.fedex.com/fedextrack/?trknbr=771234567890',
+        emails: 3,
+      });
+    }
+  });
+
+  it('joins a small shop’s confirmation once it ships, without mixing up shops on a shared domain', async () => {
+    const t0 = Date.now() - 4 * 86_400_000;
+    const shopA = 'Fern & Clay <store+111@t.shopifyemail.com>';
+    const shopB = 'Kettle Co <store+222@t.shopifyemail.com>';
+    const confirmA = await receive({ from: shopA, subject: 'Order #1001 confirmed', text: 'Thank you for your purchase! Order #1001. We’ll let you know when it ships. Shipping: Standard', date: t0 });
+    // An order confirmation from a shop we don't know: no card yet.
+    expect((await thread(confirmA.thread_id)).parcel).toBeNull();
+    const confirmB = await receive({ from: shopB, subject: 'Order #1001 confirmed', text: 'Thank you for your purchase! Order #1001. Shipping: Express', date: t0 + 60_000 });
+    await receive({
+      from: shopA,
+      subject: 'A shipment from order #1001 is on the way',
+      html: `<p>Order #1001</p><a href="https://shopify.com/123/account/orders/456">View your order</a> <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223456789017">Track shipment</a>`,
+      date: t0 + 86_400_000,
+    });
+    expect((await thread(confirmA.thread_id)).parcel).toMatchObject({
+      merchant: 'Fern & Clay',
+      status: 'in_transit',
+      tracking: '9400111899223456789017',
+      orderUrl: 'https://shopify.com/123/account/orders/456',
+      emails: 2,
+    });
+    // The other shop's order #1001 has no card until it ships, then its own.
+    expect((await thread(confirmB.thread_id)).parcel).toBeNull();
+    await receive({ from: shopB, subject: 'Your order #1001 has shipped', text: 'Order #1001. UPS tracking number: 1Z999AA10123456784', date: t0 + 2 * 86_400_000 });
+    expect((await thread(confirmB.thread_id)).parcel).toMatchObject({ merchant: 'Kettle Co', tracking: '1Z999AA10123456784', emails: 2 });
+    expect((await thread(confirmA.thread_id)).parcel).toMatchObject({ merchant: 'Fern & Clay', tracking: '9400111899223456789017', emails: 2 });
+    // A take-out receipt is not a package.
+    const food = await receive({ from: 'Taco Spot <orders@tacospot.example>', subject: 'Thanks for your order', text: 'Order #4821 confirmed. Delivery in 30 minutes.' });
+    expect((await thread(food.thread_id)).parcel).toBeNull();
+  });
+
   it('shows no card for mail that isn’t about a package, or that failed DMARC', async () => {
     const plain = await receive({ from: 'Kim <kim@friend.example>', subject: 'Lunch plans', text: 'Thursday at noon?' });
     expect((await thread(plain.thread_id)).parcel).toBeNull();

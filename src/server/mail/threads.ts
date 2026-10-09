@@ -198,7 +198,7 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
         const facts = readFacts(seed?.parcel);
         if (!seed || !facts) return null;
         const p = parcelFor((parcels ??= parcelRows(userId)), { id: seed.id, date: seed.date, facts });
-        return { status: p.status, statusAt: p.statusAt, eta: p.eta };
+        return p && { status: p.status, statusAt: p.statusAt, eta: p.eta };
       })(),
     });
   }
