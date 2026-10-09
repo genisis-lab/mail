@@ -76,7 +76,7 @@ export function SystemPage() {
       ) : s.secretFromEnv ? (
         <Badge tone="ok">from WREN_SECRET</Badge>
       ) : (
-        <Badge>generated automatically, stored with the database</Badge>
+        <span className="text-muted">Generated automatically, stored with the database</span>
       ),
     ],
     ['Database size', fileSize(s.storage.database)],

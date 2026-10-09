@@ -453,8 +453,23 @@ export function Menu({
 // ── Tabs ────────────────────────────────────────────────────────────────────
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { value: T; label: ReactNode }[]; value: T; onChange: (v: T) => void }) {
+  const strip = useRef<HTMLDivElement>(null);
+  // On a phone the strip scrolls sideways: keep the chosen tab in view.
+  useEffect(() => {
+    const el = strip.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    const box = strip.current;
+    if (el && box && (el.offsetLeft < box.scrollLeft || el.offsetLeft + el.offsetWidth > box.scrollLeft + box.clientWidth)) {
+      box.scrollTo({ left: el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2 });
+    }
+  }, [value]);
   return (
-    <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-line">
+    // Sideways only: the baseline is drawn inside the strip (not a border the tabs overlap),
+    // so nothing pokes out below and the strip can't be dragged up and down.
+    <div
+      ref={strip}
+      role="tablist"
+      className="flex gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain shadow-[inset_0_-1px_0_var(--line)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
       {tabs.map((t) => (
         <button
           key={t.value}
@@ -462,7 +477,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { valu
           aria-selected={value === t.value}
           onClick={() => onChange(t.value)}
           className={cx(
-            '-mb-px border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors',
+            'shrink-0 border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors',
             value === t.value ? 'border-accent text-accent-ink' : 'border-transparent text-muted hover:text-fg',
           )}
         >

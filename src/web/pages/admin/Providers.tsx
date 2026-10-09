@@ -87,7 +87,7 @@ export function ProvidersPage() {
           </Empty>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {providers.data.map((p) => {
             const t = types.data?.find((x) => x.type === p.type);
             const recentError = p.lastErrorAt && (!p.lastUsedAt || p.lastErrorAt > p.lastUsedAt);
@@ -100,7 +100,7 @@ export function ProvidersPage() {
                 <div className="flex items-start gap-3">
                   <ProviderBadge name={p.typeName} />
                   <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-2 font-semibold">
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold break-words">
                       {p.name}
                       {p.isDefault && <Badge tone="accent">default</Badge>}
                       {!p.enabled && <Badge>disabled</Badge>}

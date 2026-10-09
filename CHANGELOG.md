@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — packages, private pictures, manage subscriptions
+## v0.3.0 — packages, private pictures, manage subscriptions
 
 **Packages.** Shipping mail ("Your order has shipped", "Delivered: …", a forwarder's
 "Package status update") shows a card at the top of the conversation, like Gmail's: the
@@ -43,6 +43,17 @@ cards load the same way. Self-hosted Wren loads pictures directly, as before.
 **Manage subscriptions.** Subscriptions in the sidebar lists the newsletters and other list
 mail you got in the last six months, the busiest senders first, with Unsubscribe and View
 emails.
+
+**Fixes.**
+- On a phone, tab strips (Settings, Contacts, admin settings, logs) only slide sideways;
+  they could be dragged up and down by a pixel. The chosen tab is scrolled into view.
+- On a phone, admin page buttons (Users: Import CSV, Export CSV, Add user) and the accent
+  colour picker (Admin → Settings) wrap onto a new line instead of running off the edge
+  and letting the page slide sideways. On the smallest phones (320px) the provider cards
+  and the System page fit too. Every mail, settings and admin page was checked at 390,
+  360 and 320px wide.
+- Tests: the automatic-backup retry test no longer fails between midnight and 03:00 UTC,
+  and the catch-all list has a stable order (ties sorted by address).
 
 **Upgrading.** Redeploy; the database update (migration 11, additive) runs by itself on the
 first request. In the background, Wren then looks at the last 60 days of mail that arrived

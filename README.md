@@ -42,6 +42,8 @@ Send with Cloudflare Email Service (no API key) or Resend, and receive with Emai
 | ![Admin](docs/screenshots/admin.png) | ![Providers](docs/screenshots/providers.png) |
 | **Managing people** | **Dark mode** |
 | ![A user's page in the admin panel](docs/screenshots/admin-user.png) | ![A conversation in dark mode](docs/screenshots/conversation-dark.png) |
+| **Package tracking** | **Packages** |
+| ![A shipping email with its package card: Delivered, order and tracking numbers, View order and Track package](docs/screenshots/package.png) | ![The Packages page: on the way and delivered](docs/screenshots/packages.png) |
 | **Meeting invitations** | **On your phone** |
 | ![Invitation](docs/screenshots/invitation.png) | <img src="docs/screenshots/phone.png" alt="Wren on a phone" width="300"> |
 
@@ -92,7 +94,8 @@ Drafts, All Mail, Spam and Trash. Coloured labels, bulk actions ("select all 2,3
 archive, snooze, undo send (0–30 s), scheduled send, draft autosave,
 attachments and inline images, rich-text editing, signatures, reply/reply-all/forward
 inline or popped out, contact autocomplete, a sandboxed HTML renderer with remote-image
-blocking, and view original / download `.eml`. Before sending, Wren asks "Did you mean
+blocking (pictures you choose to show load through Wren's image proxy, so the sender never
+sees your IP address or device), and view original / download `.eml`. Before sending, Wren asks "Did you mean
 to attach files?" if what you wrote says "see attached" (or "enclosed", "PFA"…) and
 nothing is attached. Saved replies, saved searches in the
 sidebar, a signature per address, and shared mailboxes (support@, sales@) that a team
@@ -107,6 +110,20 @@ conversation so new replies skip the inbox. **Merge** conversations that should 
 **Contact groups** ("Roadmap crew") that you type in To like a person and that expand
 into everyone in them.
 
+**Packages.** Shipping mail shows a card at the top of the conversation, like Gmail's:
+the item and the shop, where the package is ("Delivered · Tue, Oct 6", "Arriving
+tomorrow"), the order and tracking numbers, **View order** (the shop's own order page,
+which opens in the shop's app on a phone that has it: Amazon, Walmart, Macy's, Target,
+Best Buy and more) and **Track package** (UPS, USPS, FedEx, DHL, Amazon and other
+carriers). Every email about the same package (the order confirmation, the shipping
+email, a forwarder's or the carrier's delivery notice) makes one card, matched by
+tracking or order number. Wren reads the order markup shops add for Gmail, carrier
+tracking links, and tracking numbers it can check by their check digit. Inbox rows show
+where each package is, the **Packages** page lists everything on its way and what
+arrived lately, notifications lead with "Out for delivery · Amazon", and `has:package`
+finds every shipping email. Links only go to the sender's, the shop's or the carrier's
+own site.
+
 **Phishing protection.** Report phishing from a message's menu: it moves the sender's
 mail to Spam and tells your admin. Mail claiming to be from your own domain that didn't
 come from Wren and failed SPF, DKIM and DMARC shows a red "Be careful" warning.
@@ -116,7 +133,9 @@ Promotions (newsletters, offers), with unread counts. Mail written by a person a
 stays in Primary; move a conversation to another tab and that sender's mail follows.
 Can be turned off. **Unsubscribe** sits next to the sender of mailing-list mail: Wren
 uses the list's one-click unsubscribe (RFC 8058), or emails the list's unsubscribe
-address from the address it mails, or opens the list's page.
+address from the address it mails, or opens the list's page. **Manage subscriptions**
+lists every newsletter and mailing list you got mail from in the last six months, the
+busiest first, with Unsubscribe and View emails.
 
 **Which address it came to.** Mail that reached you through an alias, a group, a
 sign-up address or the catch-all shows a small "@hello" chip; click it to see
@@ -156,7 +175,7 @@ there are skipped. Export everything as one `.mbox` that imports back as it was.
 Contacts import from Google/Outlook CSV or vCard and export to both.
 
 **Search.** Full text (SQLite FTS5) plus `from:` `to:` `cc:` `subject:` `label:`
-`has:attachment` `filename:` `is:unread|starred|important|snoozed`
+`has:attachment` `has:package` `filename:` `is:unread|starred|important|snoozed`
 `in:inbox|sent|spam|trash|anywhere` `before:` `after:` `older_than:` `newer_than:`
 `larger:` `smaller:` `deliveredto:` `category:primary|updates|promotions`,
 "exact phrases" and `-negation`. Includes an advanced search form and "create filter
@@ -221,6 +240,8 @@ with recovery codes, sign-in alerts, active sessions, and API keys.
 - HttpOnly SameSite cookies plus a CSRF header.
 - Login rate limiting and an audit trail.
 - CSP, and sandboxed message rendering with no scripts.
+- Pictures in mail load through an image proxy: only links Wren signed, only images,
+  never private addresses.
 
 **Developer API.** `POST /api/v1/send` with `Authorization: Bearer wren_…`.
 
@@ -239,7 +260,8 @@ src/
   server/     Hono API, mail engine and provider adapters
     platform.ts   storage, DNS, sockets and scheduling interfaces
   worker/     Worker entry: Durable Object (SQLite), R2, Email Routing, Email Service,
-              alarms, cron, TCP sockets
+              alarms, cron, TCP sockets, and the image proxy (/api/img/, served by the
+              Worker itself, without the Durable Object)
 scripts/      setup.mjs (terminal setup), serve.mjs (optional self-hosting on workerd)
 ```
 
