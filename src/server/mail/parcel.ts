@@ -578,6 +578,7 @@ export interface ParcelRow {
   id: number;
   date: number;
   facts: ParcelFacts;
+  threadId?: number;
 }
 
 export function readFacts(json: string | null | undefined): ParcelFacts | null {
@@ -591,12 +592,12 @@ export function readFacts(json: string | null | undefined): ParcelFacts | null {
 
 /** The user's recent package emails (outside Spam and Trash), newest first. */
 export function parcelRows(userId: number): ParcelRow[] {
-  return all<{ id: number; date: number; parcel: string }>(
-    `SELECT id, date, parcel FROM messages WHERE user_id = ? AND parcel <> '' AND folder NOT IN ('spam','trash','drafts') ORDER BY date DESC LIMIT 1000`,
+  return all<{ id: number; date: number; parcel: string; thread_id: number }>(
+    `SELECT id, date, parcel, thread_id FROM messages WHERE user_id = ? AND parcel <> '' AND folder NOT IN ('spam','trash','drafts') ORDER BY date DESC LIMIT 1000`,
     [userId],
   ).flatMap((r) => {
     const facts = readFacts(r.parcel);
-    return facts ? [{ id: r.id, date: r.date, facts }] : [];
+    return facts ? [{ id: r.id, date: r.date, facts, threadId: r.thread_id }] : [];
   });
 }
 
@@ -679,4 +680,46 @@ export function buildParcel(group: ParcelRow[], seed: ParcelRow): Parcel {
 export function parcelFor(rows: ParcelRow[], seed: ParcelRow): Parcel | null {
   const group = relatedRows(rows, seed);
   return group.some((r) => !r.facts.weak) ? buildParcel(group, seed) : null;
+}
+
+/**
+ * Every package in `rows` (newest first), each once: its card from all its
+ * emails, opened from its newest email's conversation. Order confirmations
+ * still waiting for their shipping email aren't packages yet.
+ */
+export function listPackages(rows: ParcelRow[]): (Parcel & { threadId: number })[] {
+  const seen = new Set<number>();
+  const out: (Parcel & { threadId: number })[] = [];
+  for (const r of rows) {
+    if (seen.has(r.id)) continue;
+    const group = relatedRows(rows, r);
+    for (const g of group) seen.add(g.id);
+    if (!group.some((g) => !g.facts.weak)) continue;
+    const seed = group[group.length - 1];
+    out.push({ ...buildParcel(group, seed), threadId: seed.threadId ?? 0 });
+  }
+  return out;
+}
+
+export type ParcelNote = Pick<Parcel, 'status' | 'merchant' | 'item'>;
+
+/**
+ * For a notification about new mail: where its package is now, told by all
+ * its emails ("Out for delivery · Macy's"). `rows` loads a mailbox's package
+ * emails once per request.
+ */
+export function parcelNote(rows: (userId: number) => ParcelRow[], userId: number, m: { id: number; date: number; parcel: string | null }): ParcelNote | null {
+  const facts = readFacts(m.parcel);
+  if (!facts || facts.weak) return null;
+  const p = parcelFor(rows(userId), { id: m.id, date: m.date, facts });
+  return p?.status ? { status: p.status, merchant: p.merchant, item: p.item } : null;
+}
+
+/** parcelRows, loaded once per mailbox within one request. */
+export function parcelRowsOnce(): (userId: number) => ParcelRow[] {
+  const loaded = new Map<number, ParcelRow[]>();
+  return (userId) => {
+    if (!loaded.has(userId)) loaded.set(userId, parcelRows(userId));
+    return loaded.get(userId)!;
+  };
 }

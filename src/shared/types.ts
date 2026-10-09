@@ -138,6 +138,8 @@ export interface Parcel {
   items: number | null;
   /** The item's picture (https), from the shop's order markup. */
   image: string | null;
+  /** The same picture through Wren's image proxy (no tracking), when the server proxies pictures. */
+  imageUrl?: string | null;
   /** The shop's page for the order (opens the shop's app on a phone that has it). */
   orderUrl: string | null;
   /** The carrier's tracking page. */
@@ -233,6 +235,25 @@ export interface MessageDetail {
   code?: string | null;
   /** Claims to be from one of this server's domains but failed every authentication check. */
   spoofWarning?: boolean;
+  /** Remote pictures in the HTML and their image-proxy signatures ({url: sig}); loaded through /api/img/. */
+  images?: Record<string, string>;
+}
+
+/** A package on the Packages page: the card, and the conversation it's from. */
+export type PackageItem = Parcel & { threadId: number };
+
+/** A sender of newsletters or other list mail, for Manage subscriptions. */
+export interface Subscription {
+  sender: string;
+  name: string;
+  /** Emails in the last 30 days, and in the last 6 months. */
+  recent: number;
+  total: number;
+  lastAt: number;
+  /** The newest of its emails (the one Unsubscribe uses). */
+  messageId: number;
+  /** When the user unsubscribed, if they did. */
+  unsubscribedAt: number | null;
 }
 
 export interface ThreadDetail {

@@ -56,14 +56,23 @@ function keepDocumentStyles(html: string): string {
  *  - strips scripts, forms, event handlers (DOMPurify)
  *  - rewrites cid: references to attachment URLs
  *  - blocks remote images/backgrounds unless allowed (tracking protection)
+ *  - loads allowed ones through Wren's image proxy when the server signed them
+ *    (`proxy`: {url: sig}), so the sender never sees the reader's address
  *  - opens links in a new tab without a referrer
  */
-export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo[]; allowRemote: boolean }): RenderResult {
+export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo[]; allowRemote: boolean; proxy?: Record<string, string> }): RenderResult {
   const cidMap = new Map<string, number>();
   for (const a of opts.attachments) if (a.contentId) cidMap.set(a.contentId.toLowerCase(), a.id);
   let blocked = 0;
 
   const isRemote = (url: string) => /^(https?:)?\/\//i.test(url.trim());
+  /** The same address the server signed (see normalizeImageUrl in image-proxy.ts). */
+  const proxied = (url: string): string => {
+    const t = url.trim();
+    const abs = t.startsWith('//') ? `https:${t}` : t;
+    const sig = opts.proxy?.[abs];
+    return sig ? `/api/img/${sig}?u=${encodeURIComponent(abs)}` : t;
+  };
   const fixUrl = (url: string): string | null => {
     const u = url.trim();
     if (/^cid:/i.test(u)) {
@@ -74,7 +83,7 @@ export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo
       blocked++;
       return null;
     }
-    return u;
+    return isRemote(u) ? proxied(u) : u;
   };
 
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -127,6 +136,11 @@ export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo
       clean = clean.replace(/@import[^;]+;/gi, '').replace(/url\(\s*(['"]?)(https?:)?\/\/[^)]*\)/gi, () => {
         blocked++;
         return 'none';
+      });
+    } else if (opts.proxy) {
+      clean = clean.replace(/url\(\s*(['"]?)((?:https?:)?\/\/[^'")]+)\1\s*\)/gi, (m, _q, url: string) => {
+        const p = proxied(url);
+        return p === url.trim() ? m : `url("${p}")`;
       });
     }
     return { html: clean, blockedImages: blocked };

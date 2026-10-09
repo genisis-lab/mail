@@ -19,12 +19,15 @@ export function MessageBody({
   text,
   attachments,
   allowRemote,
+  images,
   onBlockedImages,
 }: {
   html: string | null;
   text: string | null;
   attachments: AttachmentInfo[];
   allowRemote: boolean;
+  /** Pictures the server signed for its image proxy ({url: sig}). */
+  images?: Record<string, string>;
   onBlockedImages?: (n: number) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -34,9 +37,9 @@ export function MessageBody({
   const isHtml = !!html;
 
   const rendered = useMemo(() => {
-    if (html) return renderMailHtml(html, { attachments, allowRemote });
+    if (html) return renderMailHtml(html, { attachments, allowRemote, proxy: images });
     return { html: textToSafeHtml(text ?? ''), blockedImages: 0 };
-  }, [html, text, attachments, allowRemote]);
+  }, [html, text, attachments, allowRemote, images]);
 
   useEffect(() => onBlockedImages?.(rendered.blockedImages), [rendered.blockedImages, onBlockedImages]);
 

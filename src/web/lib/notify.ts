@@ -30,8 +30,27 @@ async function hasPush(): Promise<boolean> {
 
 interface Recent {
   latestId: number;
-  messages: { id: number; threadId: number; from: { address: string; name: string }; subject: string; snippet: string }[];
+  messages: {
+    id: number;
+    threadId: number;
+    from: { address: string; name: string };
+    subject: string;
+    snippet: string;
+    /** Shipping mail: where its package is now. */
+    parcel?: { status: string; merchant: string | null; item: string | null } | null;
+  }[];
 }
+
+const PACKAGE_TITLES: Record<string, string> = {
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered',
+  delayed: 'Package delayed',
+  ready_for_pickup: 'Ready for pickup',
+  shipped: 'Shipped',
+  in_transit: 'On the way',
+  cancelled: 'Order cancelled',
+  returned: 'Returned',
+};
 
 /** Poll for new inbox mail and notify while the tab is in the background. */
 export function useNewMailNotifications(enabled: boolean, mailbox: number | null) {
@@ -50,7 +69,11 @@ export function useNewMailNotifications(enabled: boolean, mailbox: number | null
         if (await hasPush()) return; // the service worker shows it
         const m = r.messages[0];
         const more = r.messages.length > 1 ? ` (+${r.messages.length - 1} more)` : '';
-        const n = new Notification(m.from.name || m.from.address, { body: `${m.subject || '(no subject)'}${more}\n${m.snippet ?? ''}`.trim(), tag: `wren-${mailbox ?? 'me'}`, icon: '/icons/icon-192.png' });
+        // Shipping mail leads with where the package is ("Out for delivery · Amazon").
+        const pkg = m.parcel ? PACKAGE_TITLES[m.parcel.status] : undefined;
+        const title = pkg ? `${pkg}${m.parcel!.merchant ? ` · ${m.parcel!.merchant}` : ''}` : m.from.name || m.from.address;
+        const body = pkg ? `${m.parcel!.item || m.subject || m.from.name || m.from.address}${more}` : `${m.subject || '(no subject)'}${more}\n${m.snippet ?? ''}`.trim();
+        const n = new Notification(title, { body, tag: `wren-${mailbox ?? 'me'}`, icon: '/icons/icon-192.png' });
         n.onclick = () => {
           window.focus();
           navigate(`/inbox/${m.threadId}`);

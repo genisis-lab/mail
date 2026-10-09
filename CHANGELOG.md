@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — package tracking
+## Unreleased — packages, private pictures, manage subscriptions
 
 **Packages.** Shipping mail ("Your order has shipped", "Delivered: …", a forwarder's
 "Package status update") shows a card at the top of the conversation, like Gmail's: the
@@ -24,6 +24,25 @@ order and tracking numbers (tap to copy), and **View order** and **Track package
 - Links in the card only go to the sender's, the shop's or the carrier's own site. A sender
   that uses a shop's name from another domain is shown by its domain, and mail that failed
   DMARC gets no card.
+
+**Packages page.** Packages in the sidebar lists everything on its way (soonest first) and
+what was delivered in the last 60 days, each with View order, Track package and its emails.
+Search `has:package` finds every shipping email.
+
+**Package notifications.** A notification for shipping mail leads with where the package
+is: "Out for delivery · Amazon", "Delivered · Macy's", with the item underneath (on the
+phone and in the browser).
+
+**Pictures without tracking.** When you show the pictures in an email, they now load
+through Wren (like Gmail's image proxy): the sender sees Cloudflare fetch them, never your
+IP address, device or browser. The Worker answers these itself, without the database: one
+Worker request per picture, which your browser then keeps for a day. Only pictures from mail
+Wren showed you are fetched, and only pictures are passed on. Product photos on package
+cards load the same way. Self-hosted Wren loads pictures directly, as before.
+
+**Manage subscriptions.** Subscriptions in the sidebar lists the newsletters and other list
+mail you got in the last six months, the busiest senders first, with Unsubscribe and View
+emails.
 
 **Upgrading.** Redeploy; the database update (migration 11, additive) runs by itself on the
 first request. Mail that arrived before the upgrade gets its card the first time it's opened.

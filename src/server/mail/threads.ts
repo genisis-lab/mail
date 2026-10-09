@@ -3,6 +3,7 @@ import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
 import { loadBody } from './body.js';
 import { findParcel, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
+import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
 import { purgeMessages } from './store.js';
 
@@ -260,6 +261,7 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     rsvp: r.rsvp ?? null,
     code: r.direction === 'in' ? r.otp ?? null : null,
     spoofWarning: spoofed(r),
+    images: signedImages(r.html_body),
   };
 }
 
@@ -322,7 +324,10 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
     muted: !!t.muted,
     followUpAt: t.follow_up_at,
     nudged: rows.some((r) => r.nudged_at),
-    parcel: parcelSeed && parcelFacts ? parcelFor(parcelRows(userId), { id: parcelSeed.id, date: parcelSeed.date, facts: parcelFacts }) : null,
+    parcel: (() => {
+      const p = parcelSeed && parcelFacts ? parcelFor(parcelRows(userId), { id: parcelSeed.id, date: parcelSeed.date, facts: parcelFacts }) : null;
+      return p && { ...p, imageUrl: proxiedImage(p.image) };
+    })(),
   };
 }
 

@@ -12,6 +12,7 @@ import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, importMboxBatch, startExport, startImapImport } from '../services/mail-import.js';
 import { ImapError } from '../mail/imap-client.js';
 import { HttpError } from '../lib/http.js';
+import { parcelNote, parcelRowsOnce } from '../mail/parcel.js';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -257,7 +258,7 @@ meRoutes.get('/notifications', (c) => {
   const since = Number(c.req.query('since') ?? 0) || now() - 24 * 3600_000;
   const boxes = [user.id, ...all<{ mailbox_id: number }>('SELECT mailbox_id FROM mailbox_members WHERE user_id = ?', [user.id]).map((r) => r.mailbox_id)];
   const rows = all<any>(
-    `SELECT m.id, m.user_id, m.thread_id, m.from_addr, m.from_name, m.subject, m.date, m.created_at, m.otp, u.name AS box_name, u.email AS box_email
+    `SELECT m.id, m.user_id, m.thread_id, m.from_addr, m.from_name, m.subject, m.date, m.created_at, m.otp, m.parcel, u.name AS box_name, u.email AS box_email
        FROM messages m JOIN users u ON u.id = m.user_id
       WHERE m.user_id IN (SELECT value FROM json_each(?)) AND m.direction = 'in' AND m.folder = 'inbox' AND m.is_read = 0 AND m.created_at > ? AND COALESCE(m.source, '') <> 'import'
       ORDER BY m.created_at DESC LIMIT 5`,
@@ -268,6 +269,7 @@ meRoutes.get('/notifications', (c) => {
       `SELECT COUNT(*) AS c FROM messages WHERE user_id IN (SELECT value FROM json_each(?)) AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND created_at > ? AND COALESCE(source, '') <> 'import'`,
       [JSON.stringify(boxes), since],
     )?.c ?? 0;
+  const parcels = parcelRowsOnce();
   return c.json({
     total,
     items: rows.map((r) => ({
@@ -278,6 +280,8 @@ meRoutes.get('/notifications', (c) => {
       subject: r.subject,
       arrivedAt: r.created_at,
       code: r.otp ?? null,
+      // Shipping mail: lead with where the package is ("Out for delivery").
+      parcel: parcelNote(parcels, r.user_id, r),
     })),
   });
 });

@@ -22,17 +22,22 @@ const dayText = (ts: number) =>
 /** "today" and "tomorrow" in the middle of a sentence. */
 const inSentence = (s: string) => (s === 'Today' || s === 'Tomorrow' ? s.toLowerCase() : s);
 
-type Tone = 'ok' | 'warn' | 'danger' | 'accent';
+export type Tone = 'ok' | 'warn' | 'danger' | 'accent';
 
-function toneOf(status: ParcelStatus | null): Tone {
+export function toneOf(status: ParcelStatus | null): Tone {
   if (status === 'delivered' || status === 'ready_for_pickup') return 'ok';
   if (status === 'delayed') return 'warn';
   if (status === 'cancelled') return 'danger';
   return 'accent';
 }
 
+/** The item's name, or what the package is ("Your Macy’s order"). */
+export function parcelTitle(p: Pick<Parcel, 'item' | 'merchant' | 'carrier'>): string {
+  return p.item ?? (p.merchant ? `Your ${p.merchant} order` : p.carrier ? `${p.carrier} package` : 'Your package');
+}
+
 /** The big two lines: "Delivered / Tue, Oct 6", "Arriving / Tomorrow". */
-function headline(p: Parcel): { title: string; when: string | null } {
+export function headline(p: Parcel): { title: string; when: string | null } {
   const arriving = p.eta !== null ? etaText(p.eta) : null;
   switch (p.status) {
     case 'delivered':
@@ -91,7 +96,7 @@ const STEPS: { label: string; of: ParcelStatus[] }[] = [
   { label: 'Delivered', of: ['delivered', 'ready_for_pickup'] },
 ];
 
-const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', danger: 'text-danger', accent: 'text-accent-ink' };
+export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', danger: 'text-danger', accent: 'text-accent-ink' };
 const TONE_FILL: Record<Tone, string> = { ok: 'bg-ok', warn: 'bg-warn', danger: 'bg-danger', accent: 'bg-accent' };
 const TONE_CHIP: Record<Tone, string> = {
   ok: 'bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-ok',
@@ -150,11 +155,12 @@ export function ParcelCard({ parcel: p, showImage }: { parcel: Parcel; showImage
   const head = headline(p);
   const tone = toneOf(p.status);
   const step = p.status ? STEPS.findIndex((s) => s.of.includes(p.status!)) : -1;
-  const title = p.item ?? (p.merchant ? `Your ${p.merchant} order` : p.carrier ? `${p.carrier} package` : 'Your package');
+  const title = parcelTitle(p);
   const count = p.items && p.items > 1 ? `${p.items} items` : null;
   // "6 items from Macy’s", "From Macy’s" (under the item's name), or just the count.
   const sub = p.item ? (count && p.merchant ? `${count} from ${p.merchant}` : (count ?? (p.merchant ? `From ${p.merchant}` : null))) : count;
-  const image = showImage && p.image && !imageFailed ? p.image : null;
+  // Through Wren's image proxy the shop never learns who looked; otherwise only with "always show images".
+  const image = imageFailed ? null : (p.imageUrl ?? (showImage ? p.image : null));
   const orderHost = p.orderUrl ? p.orderUrl.replace(/^https:\/\/(?:www\.)?([^/?#]+).*$/, '$1') : null;
 
   return (

@@ -920,7 +920,7 @@ function MessageCard({
 
         {m.hasInvite && <InviteCard messageId={m.id} canAnswer={canAnswer} />}
         {!alwaysShowImages && !showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
-        <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} onBlockedImages={setBlocked} />
+        <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} images={m.images} onBlockedImages={setBlocked} />
 
         {visibleAttachments.length > 0 && (
           <div className="mt-5 border-t border-line pt-4">
