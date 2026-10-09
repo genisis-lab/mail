@@ -69,7 +69,7 @@ export function AdminSettingsPage() {
               <Input value={draft['instance.name']} onChange={(e) => set('instance.name', e.target.value)} />
             </Field>
             <Field label="Accent colour">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <input type="color" value={draft['instance.accent']} onChange={(e) => set('instance.accent', e.target.value)} className="h-10 w-14 cursor-pointer rounded-lg border border-line-strong bg-panel p-1" />
                 <Input value={draft['instance.accent']} onChange={(e) => set('instance.accent', e.target.value)} className="w-32 font-mono" />
                 <div className="flex gap-1.5">

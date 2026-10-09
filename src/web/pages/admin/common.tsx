@@ -8,7 +8,8 @@ export function PageHeader({ title, description, actions }: { title: string; des
         <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
         {description && <p className="mt-1 max-w-2xl text-sm text-muted">{description}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {/* Can shrink to the page width, so on a phone the buttons wrap instead of running off the edge. */}
+      {actions && <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
