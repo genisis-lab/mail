@@ -27,6 +27,10 @@ send queue ─► send_email binding (Email Service) · Resend / other provider 
 
 **One click:** use the *Deploy to Cloudflare* button in the README. Cloudflare copies the
 repository to your GitHub account, creates the R2 bucket and Durable Object, and deploys.
+It also connects the copy with Workers Builds, so a push to your main branch redeploys.
+If you work in other branches, turn off **Builds for Preview branches** (Workers & Pages →
+wren → Settings → Builds → Previews Base): Worker Previews need a `[previews]` setup with
+their own storage, which Wren doesn't include, so those builds would fail.
 
 **From a terminal:**
 
