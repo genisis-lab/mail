@@ -45,6 +45,7 @@ import { PhoneRow } from './PhoneRow';
 import { ViaChip } from './Via';
 import { NudgeChip } from './NudgeChip';
 import { CodeChip } from '../../components/CodeChip';
+import { ParcelChip } from './ParcelCard';
 
 export const TABS: { id: Category; label: string; icon: React.ReactNode; empty: string }[] = [
   { id: 'primary', label: 'Primary', icon: <Inbox className="size-[18px]" />, empty: 'You’re all caught up' },
@@ -683,6 +684,7 @@ function ThreadRow({
         {t.nudge && <NudgeChip sentAt={t.nudge.sentAt} />}
         {t.muted && <BellOff className="size-3.5 shrink-0 text-muted" aria-label="Muted" />}
         {t.code && <CodeChip code={t.code} />}
+        {t.parcel && <ParcelChip parcel={t.parcel} />}
         <span className="min-w-0 truncate">
           <span className={t.unread ? 'font-bold' : ''}>{t.subject || '(no subject)'}</span>
           {t.snippet && <span className="text-muted"> – {t.snippet}</span>}

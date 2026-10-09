@@ -11,6 +11,7 @@ import { applyFilters, toMatchable } from './filters.js';
 import { enqueue, setLocalDeliver } from './outbound.js';
 import { getHeader, htmlToText, parseMail, type Parsed } from './parse.js';
 import { findOneTimeCode } from './otp.js';
+import { findParcel } from './parcel.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
@@ -212,6 +213,8 @@ async function deliverToUser(
 
   // A one-time code ("980708 is your sign-in code"), offered as a one-tap copy.
   const code = findOneTimeCode(p.subject, p.text ?? (p.html ? htmlToText(p.html) : null));
+  // A package (tracking number, order, status) for the order card; not from mail that failed DMARC.
+  const parcel = spam?.auth.dmarc === 'fail' ? null : findParcel({ subject: p.subject, text: p.text, html: p.html, from: p.from, date: p.date });
   const important = !!a.important || (!p.listId && !!contact && contact.times_contacted >= 3);
   const category = categorize(p, {
     userId,
@@ -254,6 +257,7 @@ async function deliverToUser(
   if (folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
 
   if (code) run('UPDATE messages SET otp = ? WHERE id = ?', [code, id]);
+  run('UPDATE messages SET parcel = ? WHERE id = ?', [parcel ? JSON.stringify(parcel) : '', id]);
   const thread = get<{ id: number; muted: number }>('SELECT t.id, t.muted FROM threads t JOIN messages m ON m.thread_id = t.id WHERE m.id = ?', [id]);
   if (thread && folder !== 'spam' && !userAddresses(userId).includes(sender)) {
     // Someone replied: no "remind me if no reply" needed, and any "no reply yet" nudge is done.

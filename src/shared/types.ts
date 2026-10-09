@@ -115,6 +115,37 @@ export interface Label {
 /** Inbox tab. */
 export type Category = 'primary' | 'updates' | 'promotions';
 
+/** Where a package is, as its shipping mail tells it. */
+export type ParcelStatus = 'ordered' | 'shipped' | 'in_transit' | 'out_for_delivery' | 'delivered' | 'delayed' | 'ready_for_pickup' | 'cancelled' | 'returned';
+
+/** A package from shipping mail, put together from every email about it (Gmail's order card). */
+export interface Parcel {
+  /** The message the card was found in. */
+  messageId: number;
+  status: ParcelStatus | null;
+  /** When the status was reported: the date of that email. */
+  statusAt: number;
+  /** Expected delivery day (UTC midnight), while it's on its way. */
+  eta: number | null;
+  /** The shop ("Macy’s"), or the sender's name. */
+  merchant: string | null;
+  carrier: string | null;
+  tracking: string | null;
+  order: string | null;
+  /** The first item's name ("Warner's Women's No Pinching…"). */
+  item: string | null;
+  /** How many items, when an email says. */
+  items: number | null;
+  /** The item's picture (https), from the shop's order markup. */
+  image: string | null;
+  /** The shop's page for the order (opens the shop's app on a phone that has it). */
+  orderUrl: string | null;
+  /** The carrier's tracking page. */
+  trackUrl: string | null;
+  /** How many emails this was put together from. */
+  emails: number;
+}
+
 export interface ThreadSummary {
   id: number;
   subject: string;
@@ -142,6 +173,8 @@ export interface ThreadSummary {
   muted?: boolean;
   /** Back in the inbox because nobody replied: when the message waiting for an answer was sent. */
   nudge?: { sentAt: number } | null;
+  /** A package the conversation is about: where it is. */
+  parcel?: Pick<Parcel, 'status' | 'statusAt' | 'eta'> | null;
 }
 
 export interface AttachmentInfo {
@@ -212,6 +245,8 @@ export interface ThreadDetail {
   followUpAt?: number | null;
   /** Nobody replied in time; the conversation is back in the inbox. */
   nudged?: boolean;
+  /** A package the conversation is about (shipping mail), for the order card. */
+  parcel?: Parcel | null;
 }
 
 export interface FilterCriteria {

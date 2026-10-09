@@ -50,6 +50,7 @@ import { useLabels, useSession } from '../../lib/session';
 import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
 import { InviteCard } from './InviteCard';
+import { ParcelCard } from './ParcelCard';
 import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
@@ -424,6 +425,12 @@ export function ThreadView() {
                   </Button>
                 </div>
               )}
+            </div>
+          )}
+
+          {t.parcel && !inSpam && (
+            <div className="mb-4 pl-14 max-sm:pl-0">
+              <ParcelCard parcel={t.parcel} showImage={prefs.showImages === 'always'} />
             </div>
           )}
 

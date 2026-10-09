@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — package tracking
+
+**Packages.** Shipping mail ("Your order has shipped", "Delivered: …", a forwarder's
+"Package status update") shows a card at the top of the conversation, like Gmail's: the
+item, the shop, where the package is ("Delivered · Tue, Oct 6", "Arriving tomorrow"), the
+order and tracking numbers (tap to copy), and **View order** and **Track package**.
+- Every email about the same package is put together: the shop's order confirmation, its
+  shipping email and the courier's or forwarder's delivery notice make one card ("Based on
+  3 emails"), matched by tracking number or by the shop's order number.
+- **View order** opens the shop's own order page (Amazon, Walmart, Macy's, Target, Best Buy,
+  eBay, Etsy, Temu, SHEIN, AliExpress, Nike, Costco, Home Depot, Chewy, Sephora, Nordstrom,
+  Apple), or the order link in the shop's email. On a phone with the shop's app, that page
+  opens in the app. **Track package** opens the carrier's page (UPS, USPS, FedEx, DHL,
+  Amazon, OnTrac, Canada Post, Royal Mail; others through 17TRACK).
+- Wren reads the order markup shops add for Gmail (schema.org), carrier tracking links, and
+  tracking numbers it can check by their check digit (UPS 1Z…, USPS, international post),
+  or ones labelled "Tracking number".
+- The inbox row shows where the package is ("Arriving Thu", "Delivered").
+- Links in the card only go to the sender's, the shop's or the carrier's own site. A sender
+  that uses a shop's name from another domain is shown by its domain, and mail that failed
+  DMARC gets no card.
+
+**Upgrading.** Redeploy; the database update (migration 11, additive) runs by itself on the
+first request. Mail that arrived before the upgrade gets its card the first time it's opened.
+
 ## v0.2.3 — sign-in codes, remind me, offline, and emails that fit your phone
 
 **Emails that fit your phone.** Some designed emails (newsletters, receipts, company

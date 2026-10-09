@@ -24,7 +24,8 @@ Send with Cloudflare Email Service (no API key) or Resend, and receive with Emai
   domain. See [docs/providers.md](docs/providers.md).
 - **Feels like Gmail.** Conversations, labels, stars, snooze, undo send, scheduled send,
   Primary / Updates / Promotions tabs, one-click unsubscribe, meeting invitations you can
-  answer, attachment previews, search operators, keyboard shortcuts, a floating compose
+  answer, package tracking cards with View order (into the shop's app on your phone),
+  attachment previews, search operators, keyboard shortcuts, a floating compose
   window, inline replies, a "did you mean to attach files?" check, and a dark mode that
   turns ordinary emails dark while newsletters keep their own colours.
 - **A real admin panel.** Users, quotas, domains with DNS health checks, providers with
