@@ -308,7 +308,7 @@ adminOpsRoutes.get('/domains/:id/catchall', (c) => {
   const hits = all<any>(
     `SELECT h.address, h.count, h.first_at, h.last_at, h.last_from, h.last_subject, (SELECT 1 FROM blocked_recipients b WHERE b.address = h.address) AS blocked
        FROM catchall_hits h WHERE h.domain_id = ? AND NOT EXISTS (SELECT 1 FROM addresses a WHERE a.address = h.address)
-      ORDER BY h.last_at DESC LIMIT 500`,
+      ORDER BY h.last_at DESC, h.address LIMIT 500`,
     [id],
   );
   const blocked = all<any>(`SELECT address, created_at FROM blocked_recipients WHERE address LIKE ? ESCAPE '\\' ORDER BY address`, [`%@${d.name.replace(/[\\%_]/g, (x) => `\\${x}`)}`]);

@@ -87,9 +87,18 @@ describe('catch-all control', () => {
   it('lists what the catch-all takes, blocks an address, and turns one into an alias', async () => {
     const d = get<{ id: number }>(`SELECT id FROM domains WHERE name = 'wren.test'`)!;
     run('UPDATE domains SET catch_all_user_id = ? WHERE id = ?', [admin, d.id]);
-    await receive({ from: 'a@example.org', to: 'random1@wren.test', subject: 'One' });
-    await receive({ from: 'b@example.org', to: 'random1@wren.test', subject: 'Two' });
-    await receive({ from: 'c@example.org', to: 'leaked@wren.test', subject: 'Spam' });
+    // A second apart, so "most recent first" doesn't depend on mail landing in different milliseconds.
+    const start = Date.now();
+    vi.useFakeTimers({ now: start, toFake: ['Date'] });
+    try {
+      await receive({ from: 'a@example.org', to: 'random1@wren.test', subject: 'One' });
+      vi.setSystemTime(start + 1000);
+      await receive({ from: 'b@example.org', to: 'random1@wren.test', subject: 'Two' });
+      vi.setSystemTime(start + 2000);
+      await receive({ from: 'c@example.org', to: 'leaked@wren.test', subject: 'Spam' });
+    } finally {
+      vi.useRealTimers();
+    }
     let info = (await h.call('GET', `/api/admin/domains/${d.id}/catchall`)).body;
     expect(info.hits.map((x: any) => [x.address, x.count])).toEqual([
       ['leaked@wren.test', 1],

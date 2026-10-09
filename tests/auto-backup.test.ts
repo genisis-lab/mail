@@ -108,6 +108,9 @@ describe('automatic backups', () => {
   });
 
   it('raises an alert when an automatic backup fails, and clears it when one works', async () => {
+    // After the day's backup hour (03:00 UTC): before it, the retry would wait for that day's slot instead.
+    const now = new Date();
+    vi.useFakeTimers({ now: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 12), toFake: ['Date'] });
     const original = platform();
     setPlatform({ ...original, blobs: { ...original.blobs, put: async () => Promise.reject(new Error('R2 is unavailable')) } });
     try {
