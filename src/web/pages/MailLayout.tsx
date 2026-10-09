@@ -31,6 +31,8 @@ import {
   Users,
   X,
   CloudOff,
+  MailMinus,
+  Package,
 } from 'lucide-react';
 import type { Label, View } from '../../shared/types';
 import { clearOutbox, flushOutbox, queuedSends } from '../lib/outbox';
@@ -49,6 +51,8 @@ import { ThreadList } from './mail/ThreadList';
 import { ThreadView } from './mail/ThreadView';
 import { SettingsPage } from './settings/SettingsPage';
 import { ContactsPage } from './ContactsPage';
+import { PackagesPage } from './PackagesPage';
+import { SubscriptionsPage } from './SubscriptionsPage';
 
 const NAV: { view: View; label: string; icon: ReactNode; count?: 'inbox' | 'drafts' | 'spam' | 'scheduled' | 'snoozed' | 'starred'; countStyle?: 'bold' | 'muted' }[] = [
   { view: 'inbox', label: 'Inbox', icon: <Inbox className="size-[18px]" />, count: 'inbox', countStyle: 'bold' },
@@ -61,6 +65,12 @@ const NAV: { view: View; label: string; icon: ReactNode; count?: 'inbox' | 'draf
   { view: 'all', label: 'All Mail', icon: <Mails className="size-[18px]" /> },
   { view: 'spam', label: 'Spam', icon: <OctagonAlert className="size-[18px]" />, count: 'spam', countStyle: 'muted' },
   { view: 'trash', label: 'Trash', icon: <Trash2 className="size-[18px]" /> },
+];
+
+/** Pages under the folders: packages from shipping mail, and the senders of list mail. */
+const PAGES: { to: string; label: string; title: string; icon: ReactNode }[] = [
+  { to: '/packages', label: 'Packages', title: 'Packages', icon: <Package className="size-[18px]" /> },
+  { to: '/subscriptions', label: 'Subscriptions', title: 'Manage subscriptions', icon: <MailMinus className="size-[18px]" /> },
 ];
 
 export const LABEL_COLORS = ['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#6366f1', '#a855f7', '#ec4899'];
@@ -159,6 +169,8 @@ function MailShell() {
               <Route index element={<Navigate to="/inbox" replace />} />
               <Route path="settings/:tab?" element={<SettingsPage />} />
               <Route path="contacts" element={<ContactsPage />} />
+              <Route path="packages" element={<PackagesPage />} />
+              <Route path="subscriptions" element={<SubscriptionsPage />} />
               <Route path="label/:labelId" element={<ThreadList />} />
               <Route path="label/:labelId/:threadId" element={<ThreadView />} />
               <Route path="search/:q" element={<ThreadList />} />
@@ -632,6 +644,17 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
           </NavLink>
         );
       })}
+      {PAGES.map((n) => (
+        <NavLink
+          key={n.to}
+          to={n.to}
+          title={n.title}
+          className={({ isActive }) => cx('group flex shrink-0 items-center gap-4 text-sm transition-colors', item, isActive ? 'bg-sel font-semibold text-fg' : 'text-fg hover:bg-hover')}
+        >
+          {n.icon}
+          {wide && <span className="flex-1 truncate">{n.label}</span>}
+        </NavLink>
+      ))}
 
       <div className={cx('mt-5 flex items-center', wide ? `justify-between ${heading}` : 'justify-center')}>
         {wide && <span className="text-[15px] font-medium">Labels</span>}

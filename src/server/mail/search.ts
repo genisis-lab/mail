@@ -2,7 +2,7 @@
  * Gmail-style search query → SQL conditions over `messages m`.
  *
  * Supported: free text, "exact phrases", from: to: cc: bcc: subject: label:
- * has:attachment is:unread|read|starred|important|snoozed in:<folder>|anywhere
+ * has:attachment|package is:unread|read|starred|important|snoozed in:<folder>|anywhere
  * before: after: older_than: newer_than: larger: smaller: filename:
  * deliveredto: category:primary|updates|promotions and negation with a
  * leading "-".
@@ -116,6 +116,8 @@ export function buildSearch(q: string, userId: number, now = Date.now()): SqlFra
       case 'has':
         if (/^attachments?$/i.test(v)) cond('m.has_attachments = 1', t.negate);
         else if (/^(user)?labels?$/i.test(v)) cond('EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id)', t.negate);
+        // Shipping mail (not an order confirmation still waiting for its shipping email).
+        else if (/^(packages?|tracking)$/i.test(v)) cond(`(COALESCE(m.parcel, '') <> '' AND m.parcel NOT LIKE '%"weak":true%')`, t.negate);
         break;
       case 'filename':
         cond(`EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id AND a.filename LIKE ? ESCAPE '\\')`, t.negate, like(v));

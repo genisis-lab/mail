@@ -11,6 +11,7 @@ import { shortDate, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
 import { CodeChip } from '../../components/CodeChip';
+import { ParcelChip } from './ParcelCard';
 import { cx } from '../../components/ui';
 import { NudgeChip } from './NudgeChip';
 import { ViaChip } from './Via';
@@ -200,6 +201,7 @@ export function PhoneRow({
           <div className="flex items-center gap-1.5">
             {t.status === 'failed' && <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium text-danger">Failed</span>}
             {t.code && <CodeChip code={t.code} />}
+            {t.parcel && <ParcelChip parcel={t.parcel} />}
             {t.nudge && <NudgeChip sentAt={t.nudge.sentAt} />}
             {t.muted && <BellOff className="size-3.5 shrink-0 text-muted" aria-label="Muted" />}
             {t.via && view !== 'sent' && view !== 'drafts' && view !== 'scheduled' && <ViaChip address={t.via} />}

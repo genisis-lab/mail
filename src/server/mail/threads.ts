@@ -2,6 +2,8 @@ import type { Addr, AttachmentInfo, Category, Folder, MessageDetail, ThreadDetai
 import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
 import { loadBody } from './body.js';
+import { findParcel, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
+import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
 import { purgeMessages } from './store.js';
 
@@ -67,6 +69,7 @@ interface SummaryRow {
   category: Category;
   otp: string | null;
   nudged_at: number | null;
+  parcel: string | null;
 }
 
 export function listThreads(userId: number, opts: ListOptions): { threads: ThreadSummary[]; total: number; page: number; pageSize: number } {
@@ -115,7 +118,7 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
   const hideFolders = opts.view === 'trash' || opts.view === 'spam' ? [] : ['spam', 'trash'];
   const rows = all<SummaryRow>(
     `SELECT m.id, m.thread_id, m.folder, m.direction, m.from_addr, m.from_name, m.to_json, m.subject, m.snippet, m.date,
-            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until, m.delivered_to, m.category, m.otp, m.nudged_at,
+            m.is_read, m.is_starred, m.is_important, m.has_attachments, m.status, m.send_at, m.snoozed_until, m.delivered_to, m.category, m.otp, m.nudged_at, m.parcel,
             (SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS labels
        FROM messages m
       WHERE m.thread_id IN ${IN_LIST}
@@ -133,6 +136,8 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
     all<{ id: number }>(`SELECT id FROM threads WHERE muted = 1 AND id IN ${IN_LIST}`, [listParam(threadIds)]).map((r) => r.id),
   );
   const codeSince = ts - 24 * 3600_000;
+  // Loaded once, and only when a conversation on this page is about a package.
+  let parcels: ParcelRow[] | null = null;
   const threads: ThreadSummary[] = [];
   for (const { thread_id } of pageRows) {
     const msgs = byThread.get(thread_id) ?? [];
@@ -188,6 +193,13 @@ export function listThreads(userId: number, opts: ListOptions): { threads: Threa
       nudge: (() => {
         const n = msgs.find((m) => m.nudged_at);
         return n ? { sentAt: n.date } : null;
+      })(),
+      parcel: (() => {
+        const seed = [...visible].reverse().find((m) => m.direction === 'in' && m.parcel && m.folder !== 'spam' && m.folder !== 'trash');
+        const facts = readFacts(seed?.parcel);
+        if (!seed || !facts) return null;
+        const p = parcelFor((parcels ??= parcelRows(userId)), { id: seed.id, date: seed.date, facts });
+        return p && { status: p.status, statusAt: p.statusAt, eta: p.eta };
       })(),
     });
   }
@@ -249,6 +261,7 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     rsvp: r.rsvp ?? null,
     code: r.direction === 'in' ? r.otp ?? null : null,
     spoofWarning: spoofed(r),
+    images: signedImages(r.html_body),
   };
 }
 
@@ -286,6 +299,16 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
   let rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? AND m.folder NOT IN ('spam','trash') ORDER BY m.date ASC, m.id ASC`, [threadId]);
   if (!rows.length) rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? ORDER BY m.date ASC, m.id ASC`, [threadId]);
   for (const r of rows) await loadBody(r);
+  // Mail from before package cards is looked at the first time it's opened.
+  for (const r of rows) {
+    if (r.parcel !== null || r.direction !== 'in' || r.folder === 'drafts') continue;
+    const auth = r.auth_results ? (JSON.parse(r.auth_results) as Record<string, string>) : null;
+    const facts = auth?.dmarc === 'fail' ? null : findParcel({ subject: r.subject, text: r.text_body, html: r.html_body, from: { address: r.from_addr, name: r.from_name }, date: r.date });
+    r.parcel = facts ? JSON.stringify(facts) : '';
+    run('UPDATE messages SET parcel = ? WHERE id = ?', [r.parcel, r.id]);
+  }
+  const parcelSeed = [...rows].reverse().find((r) => r.direction === 'in' && r.parcel && r.folder !== 'spam' && r.folder !== 'drafts');
+  const parcelFacts = readFacts(parcelSeed?.parcel);
   const ids = rows.map((r) => r.id);
   const atts = attachmentsFor(ids);
   const labelRows = ids.length
@@ -301,6 +324,10 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
     muted: !!t.muted,
     followUpAt: t.follow_up_at,
     nudged: rows.some((r) => r.nudged_at),
+    parcel: (() => {
+      const p = parcelSeed && parcelFacts ? parcelFor(parcelRows(userId), { id: parcelSeed.id, date: parcelSeed.date, facts: parcelFacts }) : null;
+      return p && { ...p, imageUrl: proxiedImage(p.image) };
+    })(),
   };
 }
 

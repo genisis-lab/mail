@@ -591,4 +591,11 @@ export const migrations: string[] = [
     PRIMARY KEY (group_id, address)
   );
   `,
+
+  // 11: packages in shipping mail (tracking number, order, status) for the order card.
+  //     NULL: not looked at yet (older mail is looked at when opened); '': none.
+  `
+  ALTER TABLE messages ADD COLUMN parcel TEXT;
+  CREATE INDEX idx_messages_parcel ON messages(user_id, date) WHERE parcel <> '';
+  `,
 ];

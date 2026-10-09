@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — packages, private pictures, manage subscriptions
+
+**Packages.** Shipping mail ("Your order has shipped", "Delivered: …", a forwarder's
+"Package status update") shows a card at the top of the conversation, like Gmail's: the
+item, the shop, where the package is ("Delivered · Tue, Oct 6", "Arriving tomorrow"), the
+order and tracking numbers (tap to copy), and **View order** and **Track package**.
+- Every email about the same package is put together: the shop's order confirmation, its
+  shipping email and the courier's or forwarder's delivery notice make one card ("Based on
+  3 emails"), matched by tracking number or by the shop's order number. On addresses many
+  shops share (Gmail, Shopify's t.shopifyemail.com, where every store starts at #1001), an
+  order number only matches mail from the same sender. A small shop's order confirmation
+  joins the card once its shipping email arrives.
+- **View order** opens the shop's own order page (Amazon, Walmart, Macy's, Target, Best Buy,
+  eBay, Etsy, Temu, SHEIN, AliExpress, Nike, Costco, Home Depot, Chewy, Sephora, Nordstrom,
+  Apple), or the order link in the shop's email. On a phone with the shop's app, that page
+  opens in the app. **Track package** opens the carrier's page (UPS, USPS, FedEx, DHL,
+  Amazon, OnTrac, Canada Post, Royal Mail; others through 17TRACK).
+- Wren reads the order markup shops add for Gmail (schema.org), carrier tracking links, and
+  tracking numbers it can check by their check digit (UPS 1Z…, USPS, international post),
+  or ones labelled "Tracking number".
+- The inbox row shows where the package is ("Arriving Thu", "Delivered").
+- Links in the card only go to the sender's, the shop's or the carrier's own site. A sender
+  that uses a shop's name from another domain is shown by its domain, and mail that failed
+  DMARC gets no card.
+
+**Packages page.** Packages in the sidebar lists everything on its way (soonest first) and
+what was delivered in the last 60 days, each with View order, Track package and its emails.
+Search `has:package` finds every shipping email.
+
+**Package notifications.** A notification for shipping mail leads with where the package
+is: "Out for delivery · Amazon", "Delivered · Macy's", with the item underneath (on the
+phone and in the browser).
+
+**Pictures without tracking.** When you show the pictures in an email, they now load
+through Wren (like Gmail's image proxy): the sender sees Cloudflare fetch them, never your
+IP address, device or browser. The Worker answers these itself, without the database: one
+Worker request per picture, which your browser then keeps for a day. Only pictures from mail
+Wren showed you are fetched, and only pictures are passed on. Product photos on package
+cards load the same way. Self-hosted Wren loads pictures directly, as before.
+
+**Manage subscriptions.** Subscriptions in the sidebar lists the newsletters and other list
+mail you got in the last six months, the busiest senders first, with Unsubscribe and View
+emails.
+
+**Upgrading.** Redeploy; the database update (migration 11, additive) runs by itself on the
+first request. Mail that arrived before the upgrade gets its card the first time it's opened.
+
 ## v0.2.3 — sign-in codes, remind me, offline, and emails that fit your phone
 
 **Emails that fit your phone.** Some designed emails (newsletters, receipts, company

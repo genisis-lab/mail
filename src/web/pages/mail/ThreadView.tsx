@@ -50,6 +50,7 @@ import { useLabels, useSession } from '../../lib/session';
 import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
 import { InviteCard } from './InviteCard';
+import { ParcelCard } from './ParcelCard';
 import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
@@ -424,6 +425,12 @@ export function ThreadView() {
                   </Button>
                 </div>
               )}
+            </div>
+          )}
+
+          {t.parcel && !inSpam && (
+            <div className="mb-4 pl-14 max-sm:pl-0">
+              <ParcelCard parcel={t.parcel} showImage={prefs.showImages === 'always'} />
             </div>
           )}
 
@@ -913,7 +920,7 @@ function MessageCard({
 
         {m.hasInvite && <InviteCard messageId={m.id} canAnswer={canAnswer} />}
         {!alwaysShowImages && !showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
-        <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} onBlockedImages={setBlocked} />
+        <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} images={m.images} onBlockedImages={setBlocked} />
 
         {visibleAttachments.length > 0 && (
           <div className="mt-5 border-t border-line pt-4">

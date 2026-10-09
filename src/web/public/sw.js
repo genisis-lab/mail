@@ -147,6 +147,18 @@ async function keepMail(key, url, res) {
   }
 }
 
+/** Shipping mail leads with where the package is ("Out for delivery · Amazon"). */
+const PACKAGE_TITLES = {
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered',
+  delayed: 'Package delayed',
+  ready_for_pickup: 'Ready for pickup',
+  shipped: 'Shipped',
+  in_transit: 'On the way',
+  cancelled: 'Order cancelled',
+  returned: 'Returned',
+};
+
 async function describeNewMail() {
   try {
     const res = await fetch('/api/me/notifications', { credentials: 'same-origin', headers: { 'X-Wren': '1' } });
@@ -172,6 +184,18 @@ self.addEventListener('push', (event) => {
       if (top.code) {
         return self.registration.showNotification(`${top.code} · ${who(top)}`, {
           body: `${top.subject || 'Sign-in code'}\nTap to open; the code can be copied from the message.`,
+          tag: 'wren-mail',
+          renotify: true,
+          icon: ICON,
+          badge: BADGE,
+          data: { url: top.mailbox ? '/inbox' : `/inbox/${top.threadId}` },
+        });
+      }
+      const pkg = top.parcel && PACKAGE_TITLES[top.parcel.status];
+      if (pkg) {
+        const more = data.total > 1 ? `\n+${data.total - 1} more new message${data.total > 2 ? 's' : ''}` : '';
+        return self.registration.showNotification(`${pkg}${top.parcel.merchant ? ` · ${top.parcel.merchant}` : ''}`, {
+          body: `${top.parcel.item || top.subject || who(top)}${more}`,
           tag: 'wren-mail',
           renotify: true,
           icon: ICON,

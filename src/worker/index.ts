@@ -25,6 +25,7 @@ import { recoverQueue } from '../server/mail/outbound.js';
 import { ingest } from '../server/mail/ingest.js';
 import type { AppEnv } from '../server/http/context.js';
 import { verifyEncryptionKey } from '../server/services/backup.js';
+import { IMAGE_PATH, imageKey, serveImage } from '../server/services/image-proxy.js';
 import { doSqlDriver, r2BlobStore, sqlBlobStore } from './storage.js';
 import { workersTcp } from './tcp.js';
 
@@ -170,15 +171,38 @@ export class WrenDurableObject extends DurableObject<Env> {
   async tick() {
     await this.alarm();
   }
+
+  /** The image proxy's key (derived from the secret), for the Worker's /api/img/. */
+  async imageProxyKey(): Promise<string> {
+    if (!this.app) throw new Error(this.setupError ?? 'not configured');
+    return imageKey(config.secret);
+  }
 }
 
 function stub(env: Env): DurableObjectStub {
   return env.WREN.get(env.WREN.idFromName('wren'));
 }
 
+// Asked of the Durable Object once per Worker instance (unless WREN_SECRET is set here).
+let imageKeyPromise: Promise<string> | null = null;
+function imageProxyKey(env: Env): Promise<string> {
+  imageKeyPromise ??= (env.WREN_SECRET ? Promise.resolve(imageKey(env.WREN_SECRET)) : (stub(env) as unknown as { imageProxyKey(): Promise<string> }).imageProxyKey()).catch(
+    (err: unknown) => {
+      imageKeyPromise = null;
+      throw err;
+    },
+  );
+  return imageKeyPromise;
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
+    // Pictures in mail: answered here, without the Durable Object.
+    if (pathname.startsWith(IMAGE_PATH)) {
+      if (isSelfHosted(env)) return new Response('Not found', { status: 404 });
+      return serveImage(request, await imageProxyKey(env), { cache: (caches as unknown as { default: Cache }).default, waitUntil: (p) => ctx.waitUntil(p) });
+    }
     if (pathname.startsWith('/api/')) return stub(env).fetch(request);
     return env.ASSETS.fetch(request);
   },

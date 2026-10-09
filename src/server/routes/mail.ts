@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { Category, View } from '../../shared/types.js';
+import type { Category, PackageItem, Subscription, View } from '../../shared/types.js';
 import { CATEGORIES } from '../mail/categorize.js';
-import { all, get, insert, now, run, tx } from '../db/index.js';
+import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
 import { badRequest, forbidden, HttpError, notFound } from '../lib/http.js';
 import { isEmail, normalizeEmail } from '../lib/addr.js';
 import { getBlob } from '../mail/blobs.js';
@@ -15,6 +15,8 @@ import type { Rsvp } from '../../shared/ics.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
 import { audit } from '../services/audit.js';
 import { raiseAlert } from '../services/alerts.js';
+import { listPackages, parcelNote, parcelRows, parcelRowsOnce } from '../mail/parcel.js';
+import { proxiedImage } from '../services/image-proxy.js';
 
 export const mailRoutes = new Hono<AppEnv>();
 
@@ -146,14 +148,66 @@ mailRoutes.get('/recent', (c) => {
   const latest = get<{ id: number | null }>(`SELECT MAX(id) AS id FROM messages WHERE user_id = ? AND direction = 'in' AND folder = 'inbox'`, [user.id])?.id ?? 0;
   if (!after) return c.json({ latestId: latest, messages: [] });
   const rows = all<any>(
-    `SELECT id, thread_id, from_addr, from_name, subject, snippet, date FROM messages
+    `SELECT id, thread_id, from_addr, from_name, subject, snippet, date, parcel FROM messages
       WHERE user_id = ? AND direction = 'in' AND folder = 'inbox' AND is_read = 0 AND id > ? AND COALESCE(source, '') <> 'import' ORDER BY id DESC LIMIT 10`,
     [user.id, after],
   );
+  const parcels = parcelRowsOnce();
   return c.json({
     latestId: latest,
-    messages: rows.map((r) => ({ id: r.id, threadId: r.thread_id, from: { address: r.from_addr, name: r.from_name }, subject: r.subject, snippet: r.snippet, date: r.date })),
+    messages: rows.map((r) => ({
+      id: r.id,
+      threadId: r.thread_id,
+      from: { address: r.from_addr, name: r.from_name },
+      subject: r.subject,
+      snippet: r.snippet,
+      date: r.date,
+      parcel: parcelNote(parcels, user.id, r),
+    })),
   });
+});
+
+/** Packages from shipping mail: on their way, and delivered in the last 60 days. */
+mailRoutes.get('/packages', (c) => {
+  const since = now() - 60 * 86_400_000;
+  const packages: PackageItem[] = listPackages(parcelRows(c.get('user').id))
+    .filter((p) => p.statusAt > since || (p.eta !== null && p.eta > since))
+    .map((p) => ({ ...p, imageUrl: proxiedImage(p.image) }));
+  return c.json({ packages });
+});
+
+/**
+ * Manage subscriptions (like Gmail's): senders of list mail with an unsubscribe
+ * link in the last six months, busiest first.
+ */
+mailRoutes.get('/subscriptions', (c) => {
+  const user = c.get('user');
+  const t = now();
+  const rows = all<{ sender: string; recent: number; total: number; last_at: number; message_id: number; unsubscribed_at: number | null }>(
+    `SELECT lower(m.from_addr) AS sender, SUM(m.date > ?) AS recent, COUNT(*) AS total, MAX(m.date) AS last_at, MAX(m.id) AS message_id,
+            (SELECT us.created_at FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = lower(m.from_addr)) AS unsubscribed_at
+       FROM messages m
+      WHERE m.user_id = ? AND m.direction = 'in' AND COALESCE(m.list_unsubscribe, '') <> '' AND m.date > ? AND m.folder NOT IN ('spam','trash','drafts')
+      GROUP BY lower(m.from_addr)
+      ORDER BY recent DESC, total DESC, last_at DESC
+      LIMIT 300`,
+    [t - 30 * 86_400_000, user.id, t - 182 * 86_400_000],
+  );
+  const names = new Map(
+    rows.length
+      ? all<{ id: number; from_name: string }>(`SELECT id, from_name FROM messages WHERE id IN ${IN_LIST}`, [listParam(rows.map((r) => r.message_id))]).map((r) => [r.id, r.from_name])
+      : [],
+  );
+  const subscriptions: Subscription[] = rows.map((r) => ({
+    sender: r.sender,
+    name: names.get(r.message_id) || r.sender,
+    recent: r.recent,
+    total: r.total,
+    lastAt: r.last_at,
+    messageId: r.message_id,
+    unsubscribedAt: r.unsubscribed_at,
+  }));
+  return c.json({ subscriptions });
 });
 
 mailRoutes.get('/messages/:id', async (c) => {
