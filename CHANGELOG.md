@@ -8,7 +8,10 @@ item, the shop, where the package is ("Delivered · Tue, Oct 6", "Arriving tomor
 order and tracking numbers (tap to copy), and **View order** and **Track package**.
 - Every email about the same package is put together: the shop's order confirmation, its
   shipping email and the courier's or forwarder's delivery notice make one card ("Based on
-  3 emails"), matched by tracking number or by the shop's order number.
+  3 emails"), matched by tracking number or by the shop's order number. On addresses many
+  shops share (Gmail, Shopify's t.shopifyemail.com, where every store starts at #1001), an
+  order number only matches mail from the same sender. A small shop's order confirmation
+  joins the card once its shipping email arrives.
 - **View order** opens the shop's own order page (Amazon, Walmart, Macy's, Target, Best Buy,
   eBay, Etsy, Temu, SHEIN, AliExpress, Nike, Costco, Home Depot, Chewy, Sephora, Nordstrom,
   Apple), or the order link in the shop's email. On a phone with the shop's app, that page
