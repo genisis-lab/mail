@@ -24,9 +24,13 @@
  * name from another domain isn't shown as that shop.
  */
 import type { Parcel, ParcelStatus } from '../../shared/types.js';
-import { all } from '../db/index.js';
+import { all, getMeta, now, run, setMeta } from '../db/index.js';
 import { domainOf } from '../lib/addr.js';
+import { logger } from '../lib/log.js';
+import { loadBody } from './body.js';
 import { htmlToText } from './parse.js';
+
+const log = logger('parcel');
 
 /** What one email says about a package (stored as JSON in messages.parcel; '' when there's none). */
 export interface ParcelFacts {
@@ -722,4 +726,49 @@ export function parcelRowsOnce(): (userId: number) => ParcelRow[] {
     if (!loaded.has(userId)) loaded.set(userId, parcelRows(userId));
     return loaded.get(userId)!;
   };
+}
+
+/** A stored message (body loaded): what goes in messages.parcel, '' when it isn't about a package or failed DMARC. */
+export function parcelColumn(r: { subject: string; text_body: string | null; html_body: string | null; from_addr: string; from_name: string; date: number; auth_results: string | null }): string {
+  let dmarc: string | undefined;
+  try {
+    dmarc = r.auth_results ? (JSON.parse(r.auth_results) as Record<string, string>).dmarc : undefined;
+  } catch {
+    dmarc = undefined;
+  }
+  const facts = dmarc === 'fail' ? null : findParcel({ subject: r.subject, text: r.text_body, html: r.html_body, from: { address: r.from_addr, name: r.from_name }, date: r.date });
+  return facts ? JSON.stringify(facts) : '';
+}
+
+const BACKFILL_DAYS = 60;
+
+export const parcelBackfillPending = () => getMeta('parcel_backfill') !== 'done';
+
+/**
+ * Once, after the upgrade that added package cards: look at the last 60 days
+ * of incoming mail that arrived before it, so the Packages page and the inbox
+ * chips show those packages without opening each email. A batch per run of
+ * the background work; true while more remains. Older mail is still looked at
+ * when it's opened.
+ */
+export async function continueParcelBackfill(limit = 100, budgetMs = 2000): Promise<boolean> {
+  if (!parcelBackfillPending()) return false;
+  const started = Date.now();
+  const rows = all<{ id: number; subject: string; text_body: string | null; html_body: string | null; body_blob: string | null; from_addr: string; from_name: string; date: number; auth_results: string | null }>(
+    `SELECT id, subject, text_body, html_body, body_blob, from_addr, from_name, date, auth_results FROM messages
+      WHERE parcel IS NULL AND direction = 'in' AND folder != 'drafts' AND date > ? ORDER BY date DESC LIMIT ?`,
+    [now() - BACKFILL_DAYS * 86_400_000, limit],
+  );
+  if (!rows.length) {
+    setMeta('parcel_backfill', 'done');
+    const found = all<{ c: number }>(`SELECT COUNT(*) AS c FROM messages WHERE parcel <> '' AND date > ?`, [now() - BACKFILL_DAYS * 86_400_000])[0]?.c ?? 0;
+    log.info(`Package cards: looked at the last ${BACKFILL_DAYS} days of mail (${found} shipping emails)`);
+    return false;
+  }
+  for (const r of rows) {
+    await loadBody(r);
+    run('UPDATE messages SET parcel = ? WHERE id = ?', [parcelColumn(r), r.id]);
+    if (Date.now() - started > budgetMs) break;
+  }
+  return true;
 }

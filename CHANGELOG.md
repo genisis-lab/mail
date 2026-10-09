@@ -45,7 +45,9 @@ mail you got in the last six months, the busiest senders first, with Unsubscribe
 emails.
 
 **Upgrading.** Redeploy; the database update (migration 11, additive) runs by itself on the
-first request. Mail that arrived before the upgrade gets its card the first time it's opened.
+first request. In the background, Wren then looks at the last 60 days of mail that arrived
+before the upgrade, so its packages show on the Packages page and in the inbox; older mail
+gets its card the first time it's opened.
 
 ## v0.2.3 — sign-in codes, remind me, offline, and emails that fit your phone
 

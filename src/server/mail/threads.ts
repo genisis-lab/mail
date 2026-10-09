@@ -2,7 +2,7 @@ import type { Addr, AttachmentInfo, Category, Folder, MessageDetail, ThreadDetai
 import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
 import { loadBody } from './body.js';
-import { findParcel, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
+import { parcelColumn, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
 import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
 import { purgeMessages } from './store.js';
@@ -302,9 +302,7 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
   // Mail from before package cards is looked at the first time it's opened.
   for (const r of rows) {
     if (r.parcel !== null || r.direction !== 'in' || r.folder === 'drafts') continue;
-    const auth = r.auth_results ? (JSON.parse(r.auth_results) as Record<string, string>) : null;
-    const facts = auth?.dmarc === 'fail' ? null : findParcel({ subject: r.subject, text: r.text_body, html: r.html_body, from: { address: r.from_addr, name: r.from_name }, date: r.date });
-    r.parcel = facts ? JSON.stringify(facts) : '';
+    r.parcel = parcelColumn(r);
     run('UPDATE messages SET parcel = ? WHERE id = ?', [r.parcel, r.id]);
   }
   const parcelSeed = [...rows].reverse().find((r) => r.direction === 'in' && r.parcel && r.folder !== 'spam' && r.folder !== 'drafts');
