@@ -5,6 +5,7 @@ import { all, get, insert, now, run } from '../db/index.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, randomToken, sha256, totpUri, verifyPassword, verifyTotp } from '../lib/crypto.js';
 import { badRequest, notFound, unauthorized } from '../lib/http.js';
 import { isEmail } from '../lib/addr.js';
+import { config } from '../config.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
@@ -298,21 +299,37 @@ accountRoutes.delete('/passkeys/:id', (c) => {
   return c.json({ ok: true });
 });
 
-// ── API keys (also usable as SMTP submission passwords) ─────────────────────
+// ── API keys (scope "send") and app passwords for mail apps (scope "mail") ──
+
+/** What a mail app needs to sign in, when an admin has turned mail apps on. */
+accountRoutes.get('/mail-apps', (c) => {
+  const user = c.get('user');
+  return c.json({ enabled: !!getSettings()['jmap.enabled'], serverUrl: config.publicUrl, sessionUrl: `${config.publicUrl}/jmap/session`, username: user.email });
+});
 
 accountRoutes.get('/api-keys', (c) => {
-  const rows = all<any>('SELECT id, name, prefix, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC', [c.get('user').id]);
-  return c.json({ keys: rows.map((r) => ({ id: r.id, name: r.name, prefix: r.prefix, lastUsedAt: r.last_used_at, createdAt: r.created_at })) });
+  const rows = all<any>('SELECT id, name, prefix, scopes, last_used_at, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC', [c.get('user').id]);
+  return c.json({
+    keys: rows.map((r) => ({ id: r.id, name: r.name, prefix: r.prefix, scope: r.scopes, lastUsedAt: r.last_used_at, createdAt: r.created_at })),
+  });
 });
 
 accountRoutes.post('/api-keys', async (c) => {
   const user = c.get('user');
-  const { name } = await body(c, z.object({ name: z.string().min(1).max(60) }));
-  if ((get<{ c: number }>('SELECT COUNT(*) AS c FROM api_keys WHERE user_id = ?', [user.id])?.c ?? 0) >= 20) throw badRequest('You can have at most 20 API keys');
+  const { name, scope } = await body(c, z.object({ name: z.string().min(1).max(60), scope: z.enum(['send', 'mail']).default('send') }));
+  if (scope === 'mail' && !getSettings()['jmap.enabled']) throw badRequest('Mail apps are turned off on this server. Ask your administrator to turn them on.');
+  if ((get<{ c: number }>('SELECT COUNT(*) AS c FROM api_keys WHERE user_id = ?', [user.id])?.c ?? 0) >= 20) throw badRequest('You can have at most 20 keys and app passwords');
   const key = `wren_${randomToken(24)}`;
-  const id = insert('INSERT INTO api_keys (user_id, name, prefix, key_hash, created_at) VALUES (?, ?, ?, ?, ?)', [user.id, name, key.slice(0, 10), sha256(key), now()]);
-  audit(user.id, 'account.api_key_created', name, undefined, clientIp(c));
-  return c.json({ id, key });
+  const id = insert('INSERT INTO api_keys (user_id, name, prefix, key_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+    user.id,
+    name,
+    key.slice(0, 10),
+    sha256(key),
+    scope,
+    now(),
+  ]);
+  audit(user.id, scope === 'mail' ? 'account.app_password_created' : 'account.api_key_created', name, undefined, clientIp(c));
+  return c.json({ id, key, scope });
 });
 
 accountRoutes.delete('/api-keys/:id', (c) => {

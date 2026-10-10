@@ -86,7 +86,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
       if (d.folder !== 'drafts') throw badRequest('This message is no longer a draft');
       run(
         `UPDATE messages SET from_addr = ?, from_name = ?, identity = ?, to_json = ?, cc_json = ?, bcc_json = ?, subject = ?,
-           html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ? WHERE id = ?`,
+           html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ?, jmap_rev = jmap_rev + 1 WHERE id = ?`,
         [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, html.length, draftId],
       );
       // A new conversation takes its subject from the draft as it's finished, not as first autosaved.
@@ -177,6 +177,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
 
   const refs: string[] = (d.refs || '').split(/\s+/).filter(Boolean);
   const { raw, messageId } = await buildMime({
+    // Drafts made by a mail app (JMAP) already have their Message-ID.
+    messageId: d.message_id || undefined,
     from,
     to,
     cc,
@@ -213,6 +215,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     run('UPDATE threads SET last_date = MAX(last_date, ?) WHERE id = ?', [ts, d.thread_id]);
     // Following up yourself answers a "no reply yet" nudge.
     run('UPDATE messages SET nudged_at = NULL WHERE thread_id = ? AND nudged_at IS NOT NULL', [d.thread_id]);
+    // The message this answers is marked answered (the $answered keyword mail apps show).
+    if (d.in_reply_to) addKeyword(userId, d.in_reply_to, '$answered');
     run('UPDATE users SET used_bytes = used_bytes + ? WHERE id = ?', [raw.length, userId]);
     enqueue({
       kind: opts.kind ?? 'user',
@@ -227,6 +231,15 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   });
   touchContacts(userId, all_);
   return { id: draftId, sendAt, undoUntil: scheduled ? null : sendAt };
+}
+
+/** Add a JMAP keyword (see src/server/jmap) to the user's messages with this Message-ID. */
+function addKeyword(userId: number, messageId: string, keyword: string) {
+  run(
+    `UPDATE messages SET keywords = json_insert(COALESCE(keywords, '[]'), '$[#]', ?)
+      WHERE user_id = ? AND message_id = ? AND NOT EXISTS (SELECT 1 FROM json_each(COALESCE(messages.keywords, '[]')) WHERE value = ?)`,
+    [keyword, userId, messageId, keyword],
+  );
 }
 
 /** Undo send / cancel a scheduled message: turns it back into a draft. */

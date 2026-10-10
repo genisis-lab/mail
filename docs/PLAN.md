@@ -197,6 +197,12 @@ sessions, appearance, and personal API keys.
   text/calendar part, times converted with `Intl` (IANA and Windows zone names); replies
   are iTIP REPLY parts sent through the normal send path.
 
+- **Mail apps over JMAP** (`src/server/jmap/`, [jmap.md](jmap.md)): RFC 8620/8621 on
+  app passwords (API keys with the `mail` scope), off until an admin turns it on.
+  Triggers write every visible change to `jmap_changes`; state strings carry a random
+  tag so a restore invalidates them. Push goes to verified PushSubscriptions (RFC 8291)
+  or EventSource streams.
+
 ## Later
-JMAP over HTTP for desktop and mobile clients (Workers can't accept IMAP connections),
-calendar and contacts sync over HTTP (CalDAV/CardDAV), and multi-tenant billing.
+Shared mailboxes over JMAP, calendar and contacts sync over HTTP (JMAP or
+CalDAV/CardDAV), and multi-tenant billing.

@@ -117,6 +117,12 @@ export function AdminSettingsPage() {
               label="Allow users to auto-forward mail outside this server"
               description="Turn off to prevent data leaving via forwarding rules."
             />
+            <Switch
+              checked={draft['jmap.enabled']}
+              onChange={(v) => set('jmap.enabled', v)}
+              label="Let people use mail apps (JMAP)"
+              description="People create an app password in Settings → Security and sign in to a JMAP mail app with it. Their account password never works in apps. Turning this off stops every app at once."
+            />
           </div>
         </Card>
       )}

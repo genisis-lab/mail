@@ -2,7 +2,7 @@
  * Cloudflare Workers entry point.
  *
  *   Browser ──► Worker ──► static assets (the web app)
- *                  └─────► /api/*  ──► WrenDurableObject (Hono app + SQLite)
+ *                  └─────► /api/*, /jmap/*  ──► WrenDurableObject (Hono app + SQLite)
  *   Email Routing ──► email() ──► WrenDurableObject.receiveEmail()
  *   Cron trigger  ──► scheduled() ──► WrenDurableObject.tick()
  *
@@ -23,6 +23,7 @@ import { logger } from '../server/lib/log.js';
 import { nextWakeAt, runDueWork } from '../server/jobs.js';
 import { recoverQueue } from '../server/mail/outbound.js';
 import { ingest } from '../server/mail/ingest.js';
+import { pushChanges } from '../server/jmap/push.js';
 import type { AppEnv } from '../server/http/context.js';
 import { verifyEncryptionKey } from '../server/services/backup.js';
 import { IMAGE_PATH, imageKey, serveImage } from '../server/services/image-proxy.js';
@@ -156,6 +157,7 @@ export class WrenDurableObject extends DurableObject<Env> {
     } catch (err) {
       log.error('Background work failed', err);
     }
+    pushChanges();
     await this.schedule();
   }
 
@@ -163,6 +165,7 @@ export class WrenDurableObject extends DurableObject<Env> {
   async receiveEmail(raw: ArrayBuffer, from: string, to: string) {
     if (!this.app) throw new Error(this.setupError ?? 'not configured');
     const result = await ingest(Buffer.from(raw), { rcptTo: [to], mailFrom: from, source: 'cloudflare-routing' });
+    pushChanges();
     await this.schedule();
     return { accepted: result.accepted, rejected: result.rejected };
   }
@@ -203,7 +206,7 @@ export default {
       if (isSelfHosted(env)) return new Response('Not found', { status: 404 });
       return serveImage(request, await imageProxyKey(env), { cache: (caches as unknown as { default: Cache }).default, waitUntil: (p) => ctx.waitUntil(p) });
     }
-    if (pathname.startsWith('/api/')) return stub(env).fetch(request);
+    if (pathname.startsWith('/api/') || pathname.startsWith('/jmap/') || pathname === '/.well-known/jmap') return stub(env).fetch(request);
     return env.ASSETS.fetch(request);
   },
 

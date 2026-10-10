@@ -22,15 +22,35 @@ function drv(): SqlDriver {
   return driver;
 }
 
-/** Split a migration script into individual statements (no semicolons inside our DDL strings). */
+/**
+ * Split a migration script into individual statements (no semicolons inside our
+ * DDL strings). A CREATE TRIGGER keeps its BEGIN … END body as one statement.
+ */
 export function splitStatements(script: string): string[] {
-  return script
+  const parts = script
     .split('\n')
     .map((l) => l.replace(/--.*$/, ''))
     .join('\n')
     .split(';')
     .map((s) => s.trim())
     .filter(Boolean);
+  const out: string[] = [];
+  let trigger: string[] | null = null;
+  for (const p of parts) {
+    if (trigger) {
+      trigger.push(p);
+      if (/^END$/i.test(p)) {
+        out.push(trigger.join(';\n'));
+        trigger = null;
+      }
+    } else if (/^CREATE\s+TRIGGER\b/i.test(p)) {
+      trigger = [p];
+    } else {
+      out.push(p);
+    }
+  }
+  if (trigger) throw new Error('Unterminated CREATE TRIGGER in migration');
+  return out;
 }
 
 /** Schema version lives in a regular table so it works on every SQLite host. */
