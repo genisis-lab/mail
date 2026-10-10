@@ -1072,7 +1072,7 @@ function MailAppsCard() {
           </form>
         </>
       )}
-      {created && (
+      {created && !info.data.blocked && (
         <div className="mb-4 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-4">
           <p className="mb-2 text-sm font-medium">Enter this password in the app now. You won’t see it again.</p>
           <div className="flex gap-2">

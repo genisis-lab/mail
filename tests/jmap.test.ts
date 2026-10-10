@@ -621,9 +621,12 @@ describe('turning it off for one person', () => {
     expect((await h.call('PUT', `/api/admin/users/${bob}`, { mailApps: false })).status).toBe(200);
     // Their open stream ends, their app password stops working, and nothing is pushed to them.
     expect((await stream.read()).done).toBe(true);
+    run(`UPDATE api_keys SET last_used_at = 1000 WHERE user_id = ? AND name = 'Bob phone'`, [bob]);
     const refused = await h.app.request('/jmap/session', { headers: bobAuth });
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as any).detail).toMatch(/administrator turned off mail apps/);
+    // A refused app isn't "using" its password, so the admin's page doesn't say it was just used.
+    expect(get<{ t: number }>(`SELECT last_used_at AS t FROM api_keys WHERE user_id = ? AND name = 'Bob phone'`, [bob])!.t).toBe(1000);
     seen.length = 0;
     await toBob('While off');
     expect(seen).toEqual([]);
@@ -654,6 +657,35 @@ describe('turning it off for one person', () => {
     h.as('bob');
     expect((await h.call('GET', '/api/account/mail-apps')).body.blocked).toBe(false);
     h.as('admin');
+  });
+
+  it('ends their open streams however they lose access', async () => {
+    const bob = get<{ id: number }>(`SELECT id FROM users WHERE email = 'bob@wren.test'`)!.id;
+    const open = async () => {
+      const reader = (await h.app.request('/jmap/eventsource?types=*&closeafter=no&ping=0', { headers: basic('bob@wren.test', 'wren_bobkey') })).body!.getReader();
+      await reader.read();
+      return reader;
+    };
+    /** Whether the stream has ended (rather than still waiting for events). */
+    const ended = (r: ReadableStreamDefaultReader<Uint8Array>) => Promise.race([r.read().then((x) => x.done), new Promise((done) => setTimeout(() => done('still open'), 200))]);
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 201 }));
+    h.as('admin');
+
+    // Suspended from the Users list (bulk), then reactivated.
+    let stream = await open();
+    await flushPush();
+    expect((await h.call('POST', '/api/admin/users/bulk', { ids: [bob], action: 'suspend' })).body.results[0].ok).toBe(true);
+    expect(await ended(stream)).toBe(true);
+    await h.call('POST', '/api/admin/users/bulk', { ids: [bob], action: 'activate' });
+
+    // Blocked some other way (a restored backup, say): the next push closes the stream instead of sending to it.
+    stream = await open();
+    run('UPDATE users SET mail_apps_blocked = 1 WHERE id = ?', [bob]);
+    const { raw } = await buildMime({ from: { address: 'grace@example.com', name: 'Grace' }, to: [{ address: 'bob@wren.test' }], subject: 'Quiet', text: 'x' });
+    await ingest(raw, { rcptTo: ['bob@wren.test'], source: 'test' });
+    await flushPush();
+    expect(await ended(stream)).toBe(true);
+    run('UPDATE users SET mail_apps_blocked = 0 WHERE id = ?', [bob]);
   });
 });
 

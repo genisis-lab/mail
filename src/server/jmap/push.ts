@@ -149,6 +149,11 @@ export function flushPush(): Promise<void> {
     for (const { user_id, modseq } of due) {
       run('UPDATE jmap_modseq SET pushed = ? WHERE user_id = ?', [modseq, user_id]);
       const delivery = delivered.delete(user_id);
+      // Nothing for people an admin turned mail apps off for, or suspended (their subscriptions wait, unused).
+      if (!get(`SELECT 1 FROM users WHERE id = ? AND status = 'active' AND mail_apps_blocked = 0`, [user_id])) {
+        closeUserStreams(user_id);
+        continue;
+      }
       for (const s of streams.get(user_id) ?? []) {
         const change = stateChange(user_id, s.types, delivery);
         if (Object.keys(change.changed[accountId(user_id)]).length) {
@@ -156,12 +161,7 @@ export function flushPush(): Promise<void> {
           if (s.closeAfterState) s.close();
         }
       }
-      // Not to people an admin turned mail apps off for, or suspended (their subscriptions wait, unused).
-      const subs = all<PushRow>(
-        `SELECT p.* FROM jmap_push p JOIN users u ON u.id = p.user_id
-          WHERE p.user_id = ? AND p.verified = 1 AND p.expires_at > ? AND u.mail_apps_blocked = 0 AND u.status = 'active'`,
-        [user_id, now()],
-      );
+      const subs = all<PushRow>('SELECT * FROM jmap_push WHERE user_id = ? AND verified = 1 AND expires_at > ?', [user_id, now()]);
       for (const sub of subs) {
         const types = sub.types ? new Set<string>(JSON.parse(sub.types)) : null;
         const change = stateChange(user_id, types, delivery);

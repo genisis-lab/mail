@@ -25,6 +25,7 @@ import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
+import { closeUserStreams } from '../jmap/push.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -594,6 +595,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
       case 'suspend':
         run(`UPDATE users SET status = 'suspended' WHERE id = ?`, [id]);
         run('DELETE FROM sessions WHERE user_id = ?', [id]);
+        closeUserStreams(id);
         break;
       case 'activate':
         run(`UPDATE users SET status = 'active' WHERE id = ?`, [id]);
@@ -613,6 +615,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
       case 'delete':
         purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
         run('DELETE FROM users WHERE id = ?', [id]);
+        closeUserStreams(id);
         break;
     }
     results.push({ id, email: u.email, ok: true });
