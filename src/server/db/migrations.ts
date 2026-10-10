@@ -614,4 +614,125 @@ export const migrations: string[] = [
     checked_at   INTEGER NOT NULL
   );
   `,
+
+  // 13: JMAP (RFC 8620/8621) for mail apps. Keys get scopes ("send" for the HTTP API,
+  //     "mail" for app passwords); messages get the JMAP keywords Wren has no column
+  //     for ($answered, $forwarded, $junk…) and a revision that changes a draft's JMAP
+  //     id when its content changes. Triggers record every change a JMAP client can see,
+  //     whichever code path made it (see src/server/jmap/changes.ts).
+  `
+  ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT 'send';
+  ALTER TABLE messages ADD COLUMN keywords TEXT;
+  ALTER TABLE messages ADD COLUMN jmap_rev INTEGER NOT NULL DEFAULT 0;
+
+  -- One counter per mailbox. base: the state before any change was recorded.
+  -- floor: changes up to here were pruned. pushed: the counter push last reported.
+  CREATE TABLE jmap_modseq (
+    user_id INTEGER PRIMARY KEY,
+    modseq  INTEGER NOT NULL DEFAULT 0,
+    floor   INTEGER NOT NULL DEFAULT 0,
+    pushed  INTEGER NOT NULL DEFAULT 0,
+    base    TEXT NOT NULL
+  );
+  -- kind: c(reated) u(pdated) d(estroyed). tag: random, so a state string can't match after a rollback.
+  CREATE TABLE jmap_changes (
+    user_id INTEGER NOT NULL,
+    modseq  INTEGER NOT NULL,
+    type    TEXT NOT NULL,
+    obj     TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    thread  TEXT,
+    tag     TEXT NOT NULL,
+    at      INTEGER NOT NULL,
+    PRIMARY KEY (user_id, modseq)
+  ) WITHOUT ROWID;
+
+  CREATE TABLE jmap_push (
+    id                INTEGER PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_id            INTEGER REFERENCES api_keys(id) ON DELETE CASCADE,
+    device_client_id  TEXT NOT NULL,
+    url               TEXT NOT NULL,
+    p256dh            TEXT,
+    auth              TEXT,
+    verification_code TEXT NOT NULL,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    types             TEXT,
+    expires_at        INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL,
+    UNIQUE (user_id, device_client_id)
+  );
+
+  ${jmapTriggers()}
+  `,
 ];
+
+/** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */
+function jmapChange(user: string, type: string, obj: string, kind: string, thread = 'NULL', from = '', where = '') {
+  return `
+    INSERT OR IGNORE INTO jmap_modseq (user_id, base) SELECT ${user}, lower(hex(randomblob(6))) ${from} ${where};
+    UPDATE jmap_modseq SET modseq = modseq + 1 WHERE user_id = (SELECT ${user} ${from} ${where});
+    INSERT INTO jmap_changes (user_id, modseq, type, obj, kind, thread, tag, at)
+      SELECT ${user}, q.modseq, '${type}', ${obj}, '${kind}', ${thread}, lower(hex(randomblob(4))), CAST(strftime('%s', 'now') AS INTEGER)
+        FROM jmap_modseq q ${from ? from.replace(/^FROM/, ',') : ''} WHERE q.user_id = ${user} ${where.replace(/^WHERE/, 'AND')};`;
+}
+
+function jmapTriggers(): string {
+  // JMAP ids (src/server/jmap/ids.ts). created_at keeps an id from coming back when SQLite reuses a
+  // rowid; a new thread or a new draft revision is a new email, because JMAP emails are immutable.
+  const emailId = (r: string) =>
+    `'M' || ${r}.id || 'T' || ${r}.thread_id || 'C' || ${r}.created_at || CASE WHEN ${r}.jmap_rev > 0 THEN 'V' || ${r}.jmap_rev ELSE '' END`;
+  const threadOf = (r: string) => `(SELECT 'T' || t.id || 'C' || t.created_at FROM threads t WHERE t.id = ${r}.thread_id)`;
+  const threadId = (r: string) => `'T' || ${r}.id || 'C' || ${r}.created_at`;
+  const mailboxId = (r: string) => `'L' || ${r}.id || 'C' || ${r}.created_at`;
+  // A mailbox being deleted takes its rows with it; record nothing for it.
+  const live = (u: string) => `EXISTS (SELECT 1 FROM users WHERE id = ${u})`;
+  const viaMessage = { from: 'FROM messages m', where: `WHERE m.id = NEW.message_id AND ${live('m.user_id')}` };
+  const viaOldMessage = { from: 'FROM messages m', where: `WHERE m.id = OLD.message_id AND ${live('m.user_id')}` };
+  return `
+  CREATE TRIGGER jmap_message_insert AFTER INSERT ON messages WHEN ${live('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Email', emailId('NEW'), 'c', threadOf('NEW'))}
+  END;
+  CREATE TRIGGER jmap_message_delete AFTER DELETE ON messages WHEN ${live('OLD.user_id')} BEGIN
+    ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}
+  END;
+  CREATE TRIGGER jmap_message_update AFTER UPDATE OF folder, is_read, is_starred, is_important, snoozed_until, keywords ON messages
+    WHEN (OLD.folder IS NOT NEW.folder OR OLD.is_read IS NOT NEW.is_read OR OLD.is_starred IS NOT NEW.is_starred
+          OR OLD.is_important IS NOT NEW.is_important OR (OLD.snoozed_until IS NULL) <> (NEW.snoozed_until IS NULL)
+          OR OLD.keywords IS NOT NEW.keywords)
+     AND OLD.thread_id = NEW.thread_id AND OLD.jmap_rev = NEW.jmap_rev AND ${live('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Email', emailId('NEW'), 'u', threadOf('NEW'))}
+  END;
+  CREATE TRIGGER jmap_message_replace AFTER UPDATE OF thread_id, jmap_rev ON messages
+    WHEN (OLD.thread_id <> NEW.thread_id OR OLD.jmap_rev <> NEW.jmap_rev) AND ${live('NEW.user_id')} BEGIN
+    ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}
+    ${jmapChange('NEW.user_id', 'Email', emailId('NEW'), 'c', threadOf('NEW'))}
+  END;
+  CREATE TRIGGER jmap_label_add AFTER INSERT ON message_labels BEGIN
+    ${jmapChange('m.user_id', 'Email', emailId('m'), 'u', threadOf('m'), viaMessage.from, viaMessage.where)}
+  END;
+  CREATE TRIGGER jmap_label_remove AFTER DELETE ON message_labels BEGIN
+    ${jmapChange('m.user_id', 'Email', emailId('m'), 'u', threadOf('m'), viaOldMessage.from, viaOldMessage.where)}
+  END;
+  CREATE TRIGGER jmap_mailbox_insert AFTER INSERT ON labels WHEN ${live('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Mailbox', mailboxId('NEW'), 'c')}
+  END;
+  CREATE TRIGGER jmap_mailbox_update AFTER UPDATE OF name, position ON labels
+    WHEN (OLD.name IS NOT NEW.name OR OLD.position IS NOT NEW.position) AND ${live('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Mailbox', mailboxId('NEW'), 'u')}
+  END;
+  CREATE TRIGGER jmap_mailbox_delete AFTER DELETE ON labels WHEN ${live('OLD.user_id')} BEGIN
+    ${jmapChange('OLD.user_id', 'Mailbox', mailboxId('OLD'), 'd')}
+  END;
+  CREATE TRIGGER jmap_thread_insert AFTER INSERT ON threads WHEN ${live('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Thread', threadId('NEW'), 'c')}
+  END;
+  CREATE TRIGGER jmap_thread_delete AFTER DELETE ON threads WHEN ${live('OLD.user_id')} BEGIN
+    ${jmapChange('OLD.user_id', 'Thread', threadId('OLD'), 'd')}
+  END;
+  CREATE TRIGGER jmap_user_delete AFTER DELETE ON users BEGIN
+    DELETE FROM jmap_changes WHERE user_id = OLD.id;
+    DELETE FROM jmap_modseq WHERE user_id = OLD.id;
+  END;
+  `;
+}

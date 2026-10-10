@@ -58,6 +58,9 @@ export const DEFAULT_SETTINGS = {
   'alerts.queueThreshold': 50,
   'alerts.quotaPercent': 90,
 
+  /** Let people connect mail apps over JMAP with an app password. */
+  'jmap.enabled': false,
+
   'cloudflare.apiToken': '',
   'cloudflare.workerName': 'wren',
 };

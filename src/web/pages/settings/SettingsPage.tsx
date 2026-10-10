@@ -1009,6 +1009,107 @@ function SignatureDialog({ address, value, fallback, onClose, onSave }: { addres
   );
 }
 
+/** App passwords for mail apps (JMAP). Shown only when an admin has turned mail apps on. */
+function MailAppsCard() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<string | null>(null);
+  const info = useQuery({
+    queryKey: ['mail-apps'],
+    queryFn: () => api.get<{ enabled: boolean; serverUrl: string; sessionUrl: string; username: string }>('/api/account/mail-apps'),
+  });
+  const keys = useQuery({ queryKey: ['api-keys'], queryFn: () => api.get<{ keys: any[] }>('/api/account/api-keys').then((r) => r.keys) });
+  if (!info.data?.enabled) return null;
+  const passwords = (keys.data ?? []).filter((k) => k.scope === 'mail');
+  const copy = (text: string) => {
+    void navigator.clipboard.writeText(text);
+    toast('Copied');
+  };
+  const row = (label: string, value: string) => (
+    <div className="flex items-center gap-2">
+      <span className="w-24 shrink-0 text-xs text-muted">{label}</span>
+      <code className="min-w-0 flex-1 truncate rounded-lg bg-panel px-2.5 py-1.5 font-mono text-[13px]">{value}</code>
+      <IconButton label={`Copy ${label.toLowerCase()}`} onClick={() => copy(value)}>
+        <Copy className="size-4" />
+      </IconButton>
+    </div>
+  );
+
+  return (
+    <Card title="Mail apps" description="Read and send your mail in apps that support JMAP. Each app gets its own password, which you can revoke at any time.">
+      <div className="mb-4 grid gap-2">
+        {row('Server', info.data.serverUrl)}
+        {row('Username', info.data.username)}
+      </div>
+      <form
+        className="mb-4 flex gap-2"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!name.trim()) return;
+          setBusy(true);
+          try {
+            const r = await api.post<{ key: string }>('/api/account/api-keys', { name: name.trim(), scope: 'mail' });
+            setCreated(r.key);
+            setName('');
+            qc.invalidateQueries({ queryKey: ['api-keys'] });
+          } catch (err) {
+            toast({ message: (err as Error).message, tone: 'error' });
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="App name, e.g. “Phone” or “Laptop mail app”" maxLength={60} />
+        <Button type="submit" icon={<KeyRound className="size-4" />} loading={busy}>
+          Create app password
+        </Button>
+      </form>
+      {created && (
+        <div className="mb-4 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-4">
+          <p className="mb-2 text-sm font-medium">Enter this password in the app now. You won’t see it again.</p>
+          <div className="flex gap-2">
+            <code className="flex-1 rounded-lg bg-panel px-3 py-2 font-mono text-[13px] break-all">{created}</code>
+            <IconButton label="Copy" onClick={() => copy(created)}>
+              <Copy className="size-4" />
+            </IconButton>
+          </div>
+          <p className="mt-2 text-xs text-muted">Your account password doesn’t work in mail apps, so a lost phone never exposes it.</p>
+        </div>
+      )}
+      {!passwords.length ? (
+        <p className="text-sm text-muted">No app passwords yet.</p>
+      ) : (
+        <ul className="-my-2 divide-y divide-line">
+          {passwords.map((k) => (
+            <li key={k.id} className="flex items-center gap-3 py-2.5">
+              <Laptop className="size-4 text-muted" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">{k.name}</p>
+                <p className="text-xs text-muted">
+                  created {relativeTime(k.createdAt)} · {k.lastUsedAt ? `last used ${relativeTime(k.lastUsedAt)}` : 'never used'}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  if (!window.confirm(`Revoke the password for “${k.name}”? That app will be signed out.`)) return;
+                  await api.del(`/api/account/api-keys/${k.id}`);
+                  qc.invalidateQueries({ queryKey: ['api-keys'] });
+                }}
+              >
+                Revoke
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 function SecurityTab() {
   const { user, refresh } = useSession();
   const toast = useToast();
@@ -1022,6 +1123,7 @@ function SecurityTab() {
   const [keyName, setKeyName] = useState('');
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api.get<{ sessions: any[] }>('/api/account/sessions').then((r) => r.sessions) });
   const keys = useQuery({ queryKey: ['api-keys'], queryFn: () => api.get<{ keys: any[] }>('/api/account/api-keys').then((r) => r.keys) });
+  const sendKeys = (keys.data ?? []).filter((k) => k.scope !== 'mail');
 
   return (
     <div className="space-y-6">
@@ -1132,6 +1234,8 @@ function SecurityTab() {
         </ul>
       </Card>
 
+      <MailAppsCard />
+
       <Card
         title="API keys"
         description="Use a key to send mail from scripts and apps over the HTTP API."
@@ -1147,7 +1251,7 @@ function SecurityTab() {
             qc.invalidateQueries({ queryKey: ['api-keys'] });
           }}
         >
-          <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="Key name, e.g. “Thunderbird” or “Website contact form”" />
+          <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="Key name, e.g. “Website contact form”" />
           <Button type="submit" icon={<KeyRound className="size-4" />}>
             Create
           </Button>
@@ -1173,11 +1277,11 @@ function SecurityTab() {
   -d '{"to":"friend@example.com","subject":"Hi","text":"Hello!"}'`}</pre>
           </div>
         )}
-        {!keys.data?.length ? (
+        {!sendKeys.length ? (
           <p className="text-sm text-muted">No keys yet.</p>
         ) : (
           <ul className="-my-2 divide-y divide-line">
-            {keys.data.map((k) => (
+            {sendKeys.map((k) => (
               <li key={k.id} className="flex items-center gap-3 py-2.5">
                 <KeyRound className="size-4 text-muted" />
                 <div className="min-w-0 flex-1">

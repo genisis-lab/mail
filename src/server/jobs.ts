@@ -13,6 +13,8 @@ import { jobsDueAt, runJobs } from './services/jobs.js';
 import { pruneJobs } from './services/mail-import.js';
 import { nextBackupAt, runBackups } from './services/auto-backup.js';
 import { continueParcelBackfill, parcelBackfillPending } from './mail/parcel.js';
+import { pruneChanges } from './jmap/changes.js';
+import { pruneSubscriptions } from './jmap/push.js';
 
 const log = logger('jobs');
 const HOUR = 60 * 60_000;
@@ -36,6 +38,8 @@ export function runMaintenance() {
   run('DELETE FROM autoreply_log WHERE sent_at < ?', [ts - 30 * DAY]);
   pruneTokens();
   run('DELETE FROM roundtrip_tests WHERE sent_at < ?', [ts - 30 * DAY]);
+  pruneChanges();
+  pruneSubscriptions();
   if (trash.length || spam.length) log.info(`Retention: purged ${trash.length} trash and ${spam.length} spam messages`);
 }
 

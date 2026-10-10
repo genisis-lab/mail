@@ -180,6 +180,11 @@ the background, password forgotten when done), or any `.mbox` file. Messages alr
 there are skipped. Export everything as one `.mbox` that imports back as it was.
 Contacts import from Google/Outlook CSV or vCard and export to both.
 
+**Mail apps.** Wren speaks JMAP, the modern open protocol for mail apps, so apps that
+support it can read, organize and send your mail with live push. Each app signs in
+with its own app password, never your account password. An admin turns it on. See
+[docs/jmap.md](docs/jmap.md).
+
 **Search.** Full text (SQLite FTS5) plus `from:` `to:` `cc:` `subject:` `label:`
 `has:attachment` `has:package` `filename:` `is:unread|starred|important|snoozed`
 `in:inbox|sent|spam|trash|anywhere` `before:` `after:` `older_than:` `newer_than:`
@@ -192,7 +197,7 @@ from search".
 archive, star, forward, delete, never/always spam), blocked senders, labels, swipe
 actions, notifications, inbox tabs, self-service aliases and sign-up addresses (if the
 admin allows), password, a recovery email for "Forgot password?", passkeys, TOTP 2FA
-with recovery codes, sign-in alerts, active sessions, and API keys.
+with recovery codes, sign-in alerts, active sessions, app passwords for mail apps, and API keys.
 
 **Admin.**
 - Dashboard with volume chart, provider health, and a "Get Wren ready" checklist built

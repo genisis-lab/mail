@@ -12,6 +12,8 @@ import { adminOpsRoutes } from './routes/admin-ops.js';
 import { meRoutes } from './routes/me.js';
 import { inboundRoutes } from './routes/inbound.js';
 import { avatarRoutes } from './routes/avatars.js';
+import { jmapRoutes } from './jmap/routes.js';
+import { pushChanges } from './jmap/push.js';
 
 const log = logger('http');
 
@@ -45,7 +47,13 @@ export function createApp() {
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'same-origin');
     c.header('X-Frame-Options', 'SAMEORIGIN');
-    if (!c.req.path.startsWith('/api/')) c.header('Content-Security-Policy', CSP);
+    if (!c.req.path.startsWith('/api/') && !c.req.path.startsWith('/jmap/')) c.header('Content-Security-Policy', CSP);
+  });
+
+  // Tell mail apps (JMAP push) about whatever this request changed, after the response.
+  app.use('*', async (c, next) => {
+    await next();
+    pushChanges();
   });
 
   // CSRF: cookie-authenticated mutating requests must carry our custom header,
@@ -126,6 +134,9 @@ export function createApp() {
 
   app.use('/api/v1/*', requireApiKey);
   app.route('/api/v1', apiV1Routes);
+
+  // Mail apps (JMAP), signed in with app passwords.
+  app.route('/', jmapRoutes as any);
 
   app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 

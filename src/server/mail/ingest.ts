@@ -20,6 +20,7 @@ import { recordDeliveryEvents } from '../services/delivery-events.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
 import { notifyNewMail } from '../services/push.js';
+import { noteDelivery } from '../jmap/push.js';
 
 const log = logger('ingest');
 
@@ -270,6 +271,8 @@ async function deliverToUser(
     run(`UPDATE messages SET folder = 'archive' WHERE id = ?`, [id]);
   }
   if (folder === 'inbox' && !isRead && opts.source !== 'system') notifyNewMail(userId);
+  // Mail apps tell people about new mail on the EmailDelivery push type.
+  if (folder !== 'spam' && opts.source !== 'system') noteDelivery(userId);
 
   if (folder !== 'spam') {
     const targets = [...filters.forwardTo, ...(fwd.enabled && fwd.to ? [fwd.to] : [])];

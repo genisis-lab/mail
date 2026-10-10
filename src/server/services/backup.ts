@@ -19,7 +19,8 @@ import { indexMessage } from '../mail/store.js';
 export const EXPORT_FORMAT = 'wren-export';
 
 /** Never exported: sessions (everyone signs in again), rate-limit counters and internal state. */
-const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'webauthn_challenges', 'known_devices', 'backups']);
+// JMAP's change log and push subscriptions describe this database's history and devices, not its contents.
+const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'webauthn_challenges', 'known_devices', 'backups', 'jmap_modseq', 'jmap_changes', 'jmap_push']);
 
 export interface ExportHeader {
   format: typeof EXPORT_FORMAT;
@@ -177,6 +178,9 @@ export async function restoreExport(body: ReadableStream<Uint8Array>, opts: { al
     }
     // Rebuild the search index in the background (see runDueWork).
     setMeta('fts_rebuild_after', 0);
+    // Mail apps start over: every state they hold now fails to match, so they sync from scratch.
+    run('DELETE FROM jmap_changes');
+    run('DELETE FROM jmap_modseq');
   };
 
   const pit = platform().pointInTime;

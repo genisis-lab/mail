@@ -79,17 +79,25 @@ function loadSession(c: Context): { session: SessionRow; user: UserRow } | null 
   return { session, user };
 }
 
+/** What a key may do: "send" (the HTTP send API) or "mail" (an app password for mail apps over JMAP). */
+export type KeyScope = 'send' | 'mail';
+
+/** Look up an API key or app password and its active owner. */
+export function findApiKey(key: string, scope: KeyScope): { user: UserRow; keyId: number } | null {
+  const row = get<{ id: number; user_id: number; scopes: string }>('SELECT id, user_id, scopes FROM api_keys WHERE key_hash = ?', [sha256(key)]);
+  if (!row || !row.scopes.split(',').includes(scope)) return null;
+  const user = getUser(row.user_id);
+  if (!user || user.status !== 'active') return null;
+  // Mail apps call often; a minute's precision is plenty for "last used".
+  run('UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)', [now(), row.id, now() - 60_000]);
+  return { user, keyId: row.id };
+}
+
 /** Resolve "Authorization: Bearer wren_…" API keys. */
 function loadApiKey(c: Context): { user: UserRow; keyId: number } | null {
   const auth = c.req.header('authorization');
   if (!auth?.startsWith('Bearer ')) return null;
-  const key = auth.slice(7).trim();
-  const row = get<{ id: number; user_id: number }>('SELECT id, user_id FROM api_keys WHERE key_hash = ?', [sha256(key)]);
-  if (!row) return null;
-  const user = getUser(row.user_id);
-  if (!user || user.status !== 'active') return null;
-  run('UPDATE api_keys SET last_used_at = ? WHERE id = ?', [now(), row.id]);
-  return { user, keyId: row.id };
+  return findApiKey(auth.slice(7).trim(), 'send');
 }
 
 /** Require a fully signed-in user (password + 2FA when enabled). */

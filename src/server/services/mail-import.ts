@@ -53,6 +53,11 @@ function ensureLabel(userId: number, name: string): number {
 
 /** Store one raw message. Returns 'imported' or 'duplicate'. */
 export async function importRawMessage(userId: number, raw: Uint8Array, opts: ImportOptions): Promise<'imported' | 'duplicate'> {
+  return (await importRaw(userId, raw, opts)).status;
+}
+
+/** Store one raw message, and say which message it is now (the existing one, for a duplicate). */
+export async function importRaw(userId: number, raw: Uint8Array, opts: ImportOptions): Promise<{ status: 'imported' | 'duplicate'; id: number }> {
   const buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
   const p = await parseMail(buf);
   const messageId = p.messageId || `import.${sha256(buf).slice(0, 32)}@wren.invalid`;
@@ -61,7 +66,7 @@ export async function importRawMessage(userId: number, raw: Uint8Array, opts: Im
   if (existing) {
     for (const l of labelIds) run('INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)', [existing.id, l]);
     if (opts.starred) run('UPDATE messages SET is_starred = 1 WHERE id = ?', [existing.id]);
-    return 'duplicate';
+    return { status: 'duplicate', id: existing.id };
   }
   const user = getUser(userId);
   if (!user) throw new Error('User not found');
@@ -94,7 +99,7 @@ export async function importRawMessage(userId: number, raw: Uint8Array, opts: Im
     labelIds,
   });
   if (opts.folder === 'trash') run('UPDATE messages SET trashed_at = ? WHERE id = ?', [now(), id]);
-  return 'imported';
+  return { status: 'imported', id };
 }
 
 // ── mbox / Google Takeout ───────────────────────────────────────────────────
