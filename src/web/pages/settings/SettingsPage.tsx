@@ -1018,7 +1018,7 @@ function MailAppsCard() {
   const [created, setCreated] = useState<string | null>(null);
   const info = useQuery({
     queryKey: ['mail-apps'],
-    queryFn: () => api.get<{ enabled: boolean; serverUrl: string; sessionUrl: string; username: string }>('/api/account/mail-apps'),
+    queryFn: () => api.get<{ enabled: boolean; blocked: boolean; serverUrl: string; sessionUrl: string; username: string }>('/api/account/mail-apps'),
   });
   const keys = useQuery({ queryKey: ['api-keys'], queryFn: () => api.get<{ keys: any[] }>('/api/account/api-keys').then((r) => r.keys) });
   if (!info.data?.enabled) return null;
@@ -1039,33 +1039,39 @@ function MailAppsCard() {
 
   return (
     <Card title="Mail apps" description="Read and send your mail in apps that support JMAP. Each app gets its own password, which you can revoke at any time.">
-      <div className="mb-4 grid gap-2">
-        {row('Server', info.data.serverUrl)}
-        {row('Username', info.data.username)}
-      </div>
-      <form
-        className="mb-4 flex gap-2"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!name.trim()) return;
-          setBusy(true);
-          try {
-            const r = await api.post<{ key: string }>('/api/account/api-keys', { name: name.trim(), scope: 'mail' });
-            setCreated(r.key);
-            setName('');
-            qc.invalidateQueries({ queryKey: ['api-keys'] });
-          } catch (err) {
-            toast({ message: (err as Error).message, tone: 'error' });
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="App name, e.g. “Phone” or “Laptop mail app”" maxLength={60} />
-        <Button type="submit" icon={<KeyRound className="size-4" />} loading={busy}>
-          Create app password
-        </Button>
-      </form>
+      {info.data.blocked ? (
+        <p className="mb-4 text-sm text-muted">Your administrator turned off mail apps for your account, so your app passwords don’t work right now.</p>
+      ) : (
+        <>
+          <div className="mb-4 grid gap-2">
+            {row('Server', info.data.serverUrl)}
+            {row('Username', info.data.username)}
+          </div>
+          <form
+            className="mb-4 flex gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!name.trim()) return;
+              setBusy(true);
+              try {
+                const r = await api.post<{ key: string }>('/api/account/api-keys', { name: name.trim(), scope: 'mail' });
+                setCreated(r.key);
+                setName('');
+                qc.invalidateQueries({ queryKey: ['api-keys'] });
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="App name, e.g. “Phone” or “Laptop mail app”" maxLength={60} />
+            <Button type="submit" icon={<KeyRound className="size-4" />} loading={busy}>
+              Create app password
+            </Button>
+          </form>
+        </>
+      )}
       {created && (
         <div className="mb-4 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-4">
           <p className="mb-2 text-sm font-medium">Enter this password in the app now. You won’t see it again.</p>

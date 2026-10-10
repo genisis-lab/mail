@@ -431,6 +431,15 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       lockedUntil: lockedUntil(u.email),
     },
     mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
+    mailApps: {
+      // Server-wide switch (Admin → Settings → Security), then this person's own.
+      enabled: !!getSettings()['jmap.enabled'],
+      allowed: !u.mail_apps_blocked,
+      passwords: all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
+        `SELECT id, name, last_used_at, created_at FROM api_keys WHERE user_id = ? AND (',' || scopes || ',') LIKE '%,mail,%' ORDER BY created_at DESC`,
+        [id],
+      ).map((k) => ({ id: k.id, name: k.name, lastUsedAt: k.last_used_at, createdAt: k.created_at })),
+    },
     exports,
     storage: { folders, attachments },
     addresses,

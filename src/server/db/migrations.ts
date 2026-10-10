@@ -665,6 +665,11 @@ export const migrations: string[] = [
 
   ${jmapTriggers()}
   `,
+
+  // 14: an admin can turn mail apps (JMAP) off for one person while they stay on for everyone else.
+  `
+  ALTER TABLE users ADD COLUMN mail_apps_blocked INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

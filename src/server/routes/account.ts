@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DEFAULT_PREFS } from '../../shared/types.js';
 import { all, get, insert, now, run } from '../db/index.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, randomToken, sha256, totpUri, verifyPassword, verifyTotp } from '../lib/crypto.js';
-import { badRequest, notFound, unauthorized } from '../lib/http.js';
+import { badRequest, forbidden, notFound, unauthorized } from '../lib/http.js';
 import { isEmail } from '../lib/addr.js';
 import { config } from '../config.js';
 import { getSettings } from '../settings.js';
@@ -304,7 +304,14 @@ accountRoutes.delete('/passkeys/:id', (c) => {
 /** What a mail app needs to sign in, when an admin has turned mail apps on. */
 accountRoutes.get('/mail-apps', (c) => {
   const user = c.get('user');
-  return c.json({ enabled: !!getSettings()['jmap.enabled'], serverUrl: config.publicUrl, sessionUrl: `${config.publicUrl}/jmap/session`, username: user.email });
+  return c.json({
+    enabled: !!getSettings()['jmap.enabled'],
+    // Turned off for this person by an admin (their app passwords don't work while it is).
+    blocked: !!user.mail_apps_blocked,
+    serverUrl: config.publicUrl,
+    sessionUrl: `${config.publicUrl}/jmap/session`,
+    username: user.email,
+  });
 });
 
 accountRoutes.get('/api-keys', (c) => {
@@ -318,6 +325,7 @@ accountRoutes.post('/api-keys', async (c) => {
   const user = c.get('user');
   const { name, scope } = await body(c, z.object({ name: z.string().min(1).max(60), scope: z.enum(['send', 'mail']).default('send') }));
   if (scope === 'mail' && !getSettings()['jmap.enabled']) throw badRequest('Mail apps are turned off on this server. Ask your administrator to turn them on.');
+  if (scope === 'mail' && user.mail_apps_blocked) throw forbidden('Your administrator turned off mail apps for your account.');
   if ((get<{ c: number }>('SELECT COUNT(*) AS c FROM api_keys WHERE user_id = ?', [user.id])?.c ?? 0) >= 20) throw badRequest('You can have at most 20 keys and app passwords');
   const key = `wren_${randomToken(24)}`;
   const id = insert('INSERT INTO api_keys (user_id, name, prefix, key_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?, ?)', [

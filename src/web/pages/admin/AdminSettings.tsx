@@ -121,7 +121,7 @@ export function AdminSettingsPage() {
               checked={draft['jmap.enabled']}
               onChange={(v) => set('jmap.enabled', v)}
               label="Let people use mail apps (JMAP)"
-              description="People create an app password in Settings → Security and sign in to a JMAP mail app with it. Their account password never works in apps. Turning this off stops every app at once."
+              description="People create an app password in Settings → Security and sign in to a JMAP mail app with it. Their account password never works in apps. To leave someone out, turn mail apps off on their page in Users. Turning this off stops every app at once."
             />
           </div>
         </Card>

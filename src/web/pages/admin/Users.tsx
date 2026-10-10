@@ -32,6 +32,8 @@ export interface AdminUser {
   mustChangePassword?: boolean;
   /** Locked out by too many wrong passwords right now. */
   locked?: boolean;
+  /** An admin turned mail apps (JMAP) off for them. */
+  mailAppsBlocked?: boolean;
 }
 
 export function useDomains() {
@@ -195,6 +197,7 @@ export function UsersPage() {
                         {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
                         {u.locked && <Badge tone="warn">locked out</Badge>}
                         {u.mustChangePassword && <Badge>new password required</Badge>}
+                        {u.mailAppsBlocked && <Badge>mail apps off</Badge>}
                         {u.totpEnabled && <ShieldCheck className="size-3.5 text-ok" aria-label="2-step verification on" />}
                       </p>
                       <p className="truncate text-xs text-muted">

@@ -7,9 +7,15 @@ as Apple Mail, Outlook or the Gmail app, can't connect.
 
 ## Turning it on
 
-Mail apps are off until an admin turns them on: **Admin → Settings → Security → Let
-people use mail apps (JMAP)**. Turning it off again locks every app out at once
-(their app passwords stay, and work again if it's turned back on).
+Mail apps are off until an admin turns them on: **Admin → Settings & policies →
+Security → Let people use mail apps (JMAP)**. That turns them on for everyone. Turning
+it off again locks every app out at once (their app passwords stay, and work again if
+it's turned back on).
+
+To leave one person out, open their page in **Admin → Users** and turn off **Allow mail
+apps**. Their app passwords stop working right away, any push to their apps stops, and
+they can't create new ones; everyone else is unaffected. The Users list marks them
+"mail apps off". Turn it back on and their existing app passwords work again.
 
 ## Connecting an app
 

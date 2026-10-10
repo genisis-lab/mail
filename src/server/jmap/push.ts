@@ -156,7 +156,12 @@ export function flushPush(): Promise<void> {
           if (s.closeAfterState) s.close();
         }
       }
-      const subs = all<PushRow>('SELECT * FROM jmap_push WHERE user_id = ? AND verified = 1 AND expires_at > ?', [user_id, now()]);
+      // Not to people an admin turned mail apps off for, or suspended (their subscriptions wait, unused).
+      const subs = all<PushRow>(
+        `SELECT p.* FROM jmap_push p JOIN users u ON u.id = p.user_id
+          WHERE p.user_id = ? AND p.verified = 1 AND p.expires_at > ? AND u.mail_apps_blocked = 0 AND u.status = 'active'`,
+        [user_id, now()],
+      );
       for (const sub of subs) {
         const types = sub.types ? new Set<string>(JSON.parse(sub.types)) : null;
         const change = stateChange(user_id, types, delivery);
@@ -202,7 +207,10 @@ export function eventSource(userId: number, query: { types?: string; closeafter?
         closed = true;
         if (timer) clearInterval(timer);
         if (lifetime) clearTimeout(lifetime);
-        streams.get(userId)?.delete(entry);
+        const set = streams.get(userId);
+        set?.delete(entry);
+        // An empty set would make schedulePush think someone is still listening.
+        if (set && !set.size) streams.delete(userId);
         try {
           controller.close();
         } catch {
@@ -239,7 +247,13 @@ export function eventSource(userId: number, query: { types?: string; closeafter?
   return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-/** Close every open stream (tests). */
+/** Close one person's open streams (mail apps turned off for them, or they were suspended). */
+export function closeUserStreams(userId: number) {
+  for (const s of [...(streams.get(userId) ?? [])]) s.close();
+  streams.delete(userId);
+}
+
+/** Close every open stream (mail apps turned off for everyone; tests). */
 export function closeStreams() {
   for (const set of streams.values()) for (const s of [...set]) s.close();
   streams.clear();

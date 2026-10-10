@@ -181,6 +181,7 @@ jmapRoutes.use('/jmap/*', async (c, next) => {
     return unauthorized();
   }
   if (found.user.kind !== 'person') return unauthorized();
+  if (found.user.mail_apps_blocked) return problem('about:blank', 'An administrator turned off mail apps for this account', 403);
   if (mustChangePassword(found.user)) return problem('about:blank', 'Sign in to Wren on the web and choose a new password first', 403);
   if (mustSetup2fa(found.user)) return problem('about:blank', 'Sign in to Wren on the web and set up two-step sign-in first', 403);
   c.set('user', found.user);
