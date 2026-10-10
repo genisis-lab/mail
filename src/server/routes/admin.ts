@@ -25,6 +25,7 @@ import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOu
 import { purgeMessages } from '../mail/store.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
 import { systemSender } from '../services/system-mail.js';
+import { closeStreams, closeUserStreams } from '../jmap/push.js';
 
 export const adminRoutes = new Hono<AppEnv>();
 // Set by createApp(): Workers freeze Date.now() at module load.
@@ -141,6 +142,7 @@ function userDto(u: any, locked?: Set<string>) {
     messages: u.messages ?? 0,
     recoveryEmail: u.recovery_email ?? null,
     mustChangePassword: mustChangePassword(u),
+    mailAppsBlocked: !!u.mail_apps_blocked,
   };
 }
 
@@ -221,6 +223,8 @@ adminRoutes.put('/users/:id', async (c) => {
       sendLimitPerDay: z.number().int().min(0).nullable().optional(),
       /** Ask for a new password before they can do anything else (true), or cancel that (false). */
       requirePasswordChange: z.boolean().optional(),
+      /** Let this person connect mail apps (JMAP) while they're on for everyone (true), or not (false). */
+      mailApps: z.boolean().optional(),
     }),
   );
   if (u.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can modify the owner account');
@@ -244,7 +248,10 @@ adminRoutes.put('/users/:id', async (c) => {
     if (input.quotaMb !== undefined) run('UPDATE users SET quota_bytes = ? WHERE id = ?', [input.quotaMb ? input.quotaMb * 1024 * 1024 : null, id]);
     if (input.sendLimitPerDay !== undefined) run('UPDATE users SET send_limit_per_day = ? WHERE id = ?', [input.sendLimitPerDay, id]);
     if (input.requirePasswordChange !== undefined) run('UPDATE users SET password_change_required_at = ? WHERE id = ?', [input.requirePasswordChange ? now() : null, id]);
+    if (input.mailApps !== undefined) run('UPDATE users SET mail_apps_blocked = ? WHERE id = ?', [input.mailApps ? 0 : 1, id]);
   });
+  // Their mail apps lose access at once (app passwords are refused from the next request).
+  if (input.mailApps === false || input.status === 'suspended') closeUserStreams(id);
   act(c, 'admin.user_updated', u.email, input);
   return c.json({ ok: true });
 });
@@ -340,6 +347,7 @@ adminRoutes.delete('/users/:id', (c) => {
     run('DELETE FROM users WHERE id = ?', [id]);
     return n;
   });
+  closeUserStreams(id);
   act(c, 'admin.user_deleted', u.email, handTo ? { addressesTo: handTo.email, moved } : undefined);
   return c.json({ ok: true, moved });
 });
@@ -796,6 +804,8 @@ adminRoutes.put('/settings', async (c) => {
   } catch (err) {
     throw badRequest((err as Error).message);
   }
+  // Mail apps turned off: end their live streams now rather than when each times out.
+  if (!getSettings()['jmap.enabled']) closeStreams();
   act(c, 'admin.settings_updated', Object.keys(input).join(', '));
   return c.json({ settings: settingsDto() });
 });

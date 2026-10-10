@@ -7,7 +7,7 @@ import { fileSize, longDate, number, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, Empty, Menu, Spinner } from '../../components/ui';
+import { Badge, Button, Card, Empty, Menu, Spinner, Switch } from '../../components/ui';
 import { PageHeader } from './common';
 import { EditUserModal, ResetPasswordModal, SignInLinkModal, type AdminUser } from './Users';
 import { DeleteUserModal, ExportCard, MailHandlingCard, RenameModal } from './UserControls';
@@ -36,6 +36,8 @@ interface Detail {
     mustChangePassword: boolean;
   };
   mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
+  /** enabled: the server-wide switch; allowed: this person's own. */
+  mailApps: { enabled: boolean; allowed: boolean; passwords: { id: number; name: string; lastUsedAt: number | null; createdAt: number }[] };
   exports: Parameters<typeof ExportCard>[0]['jobs'];
   storage: { folders: { folder: string; c: number; bytes: number }[]; attachments: { c: number; bytes: number } | null };
   addresses: { id: number; address: string; kind: string; enabled: number; can_send: number; created_by: number | null }[];
@@ -288,6 +290,47 @@ export function UserDetailPage() {
                   <Button size="sm" variant="ghost" onClick={() => void call(() => api.del(`/api/admin/users/${u.id}/sessions/${s.id}`), 'Device signed out')}>
                     Sign out
                   </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card
+          title="Mail apps"
+          description={
+            d.mailApps.enabled ? (
+              'Apps that sign in with an app password over JMAP.'
+            ) : (
+              <>
+                Mail apps are off for everyone. Turn them on in{' '}
+                <Link to="/admin/settings/security" className="text-accent-ink hover:underline">
+                  Settings & policies → Security
+                </Link>
+                .
+              </>
+            )
+          }
+        >
+          <Switch
+            checked={d.mailApps.allowed}
+            disabled={u.role === 'owner' && me.role !== 'owner'}
+            onChange={(v) =>
+              void call(
+                () => api.put(`/api/admin/users/${u.id}`, { mailApps: v }),
+                v ? 'They can use mail apps again' : 'Mail apps turned off for them. Their apps are signed out.',
+              )
+            }
+            label="Allow mail apps"
+            description="When off, their app passwords stop working and they can’t create new ones. Everyone else is unaffected."
+          />
+          {d.mailApps.passwords.length > 0 && (
+            <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
+              {d.mailApps.passwords.map((k) => (
+                <li key={k.id} className="flex items-center gap-3 py-2">
+                  <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{k.name}</span>
+                  <span className="text-xs text-muted">{k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : 'never used'}</span>
                 </li>
               ))}
             </ul>

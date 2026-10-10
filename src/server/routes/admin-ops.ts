@@ -25,6 +25,7 @@ import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
+import { closeUserStreams } from '../jmap/push.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -431,6 +432,15 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       lockedUntil: lockedUntil(u.email),
     },
     mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
+    mailApps: {
+      // Server-wide switch (Admin → Settings → Security), then this person's own.
+      enabled: !!getSettings()['jmap.enabled'],
+      allowed: !u.mail_apps_blocked,
+      passwords: all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
+        `SELECT id, name, last_used_at, created_at FROM api_keys WHERE user_id = ? AND (',' || scopes || ',') LIKE '%,mail,%' ORDER BY created_at DESC`,
+        [id],
+      ).map((k) => ({ id: k.id, name: k.name, lastUsedAt: k.last_used_at, createdAt: k.created_at })),
+    },
     exports,
     storage: { folders, attachments },
     addresses,
@@ -585,6 +595,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
       case 'suspend':
         run(`UPDATE users SET status = 'suspended' WHERE id = ?`, [id]);
         run('DELETE FROM sessions WHERE user_id = ?', [id]);
+        closeUserStreams(id);
         break;
       case 'activate':
         run(`UPDATE users SET status = 'active' WHERE id = ?`, [id]);
@@ -604,6 +615,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
       case 'delete':
         purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
         run('DELETE FROM users WHERE id = ?', [id]);
+        closeUserStreams(id);
         break;
     }
     results.push({ id, email: u.email, ok: true });

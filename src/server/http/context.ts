@@ -88,8 +88,9 @@ export function findApiKey(key: string, scope: KeyScope): { user: UserRow; keyId
   if (!row || !row.scopes.split(',').includes(scope)) return null;
   const user = getUser(row.user_id);
   if (!user || user.status !== 'active') return null;
-  // Mail apps call often; a minute's precision is plenty for "last used".
-  run('UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)', [now(), row.id, now() - 60_000]);
+  // Mail apps call often; a minute's precision is plenty for "last used". An app refused because
+  // an admin turned mail apps off for this person isn't "using" its password (JMAP answers it 403).
+  if (scope !== 'mail' || !user.mail_apps_blocked) run('UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)', [now(), row.id, now() - 60_000]);
   return { user, keyId: row.id };
 }
 

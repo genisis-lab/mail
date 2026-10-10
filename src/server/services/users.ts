@@ -29,6 +29,8 @@ export interface UserRow {
   avatar_blob: string | null;
   avatar_type: string | null;
   avatar_at: number | null;
+  /** An admin turned mail apps (JMAP) off for this person. */
+  mail_apps_blocked: number;
 }
 
 export function getUser(id: number): UserRow | undefined {

@@ -149,6 +149,11 @@ export function flushPush(): Promise<void> {
     for (const { user_id, modseq } of due) {
       run('UPDATE jmap_modseq SET pushed = ? WHERE user_id = ?', [modseq, user_id]);
       const delivery = delivered.delete(user_id);
+      // Nothing for people an admin turned mail apps off for, or suspended (their subscriptions wait, unused).
+      if (!get(`SELECT 1 FROM users WHERE id = ? AND status = 'active' AND mail_apps_blocked = 0`, [user_id])) {
+        closeUserStreams(user_id);
+        continue;
+      }
       for (const s of streams.get(user_id) ?? []) {
         const change = stateChange(user_id, s.types, delivery);
         if (Object.keys(change.changed[accountId(user_id)]).length) {
@@ -202,7 +207,10 @@ export function eventSource(userId: number, query: { types?: string; closeafter?
         closed = true;
         if (timer) clearInterval(timer);
         if (lifetime) clearTimeout(lifetime);
-        streams.get(userId)?.delete(entry);
+        const set = streams.get(userId);
+        set?.delete(entry);
+        // An empty set would make schedulePush think someone is still listening.
+        if (set && !set.size) streams.delete(userId);
         try {
           controller.close();
         } catch {
@@ -239,7 +247,13 @@ export function eventSource(userId: number, query: { types?: string; closeafter?
   return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-/** Close every open stream (tests). */
+/** Close one person's open streams (mail apps turned off for them, or they were suspended). */
+export function closeUserStreams(userId: number) {
+  for (const s of [...(streams.get(userId) ?? [])]) s.close();
+  streams.delete(userId);
+}
+
+/** Close every open stream (mail apps turned off for everyone; tests). */
 export function closeStreams() {
   for (const set of streams.values()) for (const s of [...set]) s.close();
   streams.clear();
