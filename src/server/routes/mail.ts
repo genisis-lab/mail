@@ -12,7 +12,7 @@ import { purgeMessages } from '../mail/store.js';
 import { unsubscribe } from '../services/unsubscribe.js';
 import { inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
 import type { Rsvp } from '../../shared/ics.js';
-import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { body, browserSessions, clientIp, intParam, requestedAccount, type AppEnv } from '../http/context.js';
 import { audit } from '../services/audit.js';
 import { raiseAlert } from '../services/alerts.js';
 import { listPackages, parcelNote, parcelRows, parcelRowsOnce } from '../mail/parcel.js';
@@ -291,13 +291,23 @@ mailRoutes.post('/block', async (c) => {
 
 export const attachmentRoutes = new Hono<AppEnv>();
 
+/** An attachment one of these people can open: their own, or in a shared mailbox they belong to. */
+function attachmentFor(id: number, people: number[]) {
+  return get<any>(
+    `SELECT a.* FROM attachments a WHERE a.id = ? AND (a.user_id IN ${IN_LIST} OR a.user_id IN (SELECT mailbox_id FROM mailbox_members WHERE user_id IN ${IN_LIST}))`,
+    [id, listParam(people), listParam(people)],
+  );
+}
+
 attachmentRoutes.get('/:id', async (c) => {
   const user = c.get('user');
   const id = intParam(c, 'id');
-  // Links (images, downloads) carry no mailbox header, so also allow shared mailboxes the person belongs to.
+  // Links (images, downloads) carry no mailbox header, and pictures inside an email no account either,
+  // so also allow the shared mailboxes the person belongs to and the other accounts signed in on this browser.
   const a =
     get<any>('SELECT * FROM attachments WHERE id = ? AND user_id = ?', [id, user.id]) ??
-    get<any>('SELECT a.* FROM attachments a JOIN mailbox_members mm ON mm.mailbox_id = a.user_id WHERE a.id = ? AND mm.user_id = ?', [id, c.get('actor').id]);
+    attachmentFor(id, [c.get('actor').id]) ??
+    (requestedAccount(c) === null ? attachmentFor(id, browserSessions(c).map((s) => s.user.id)) : undefined);
   if (!a) throw notFound();
   const data = await getBlob(a.blob);
   const inline = c.req.query('inline') === '1';

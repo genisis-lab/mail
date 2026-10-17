@@ -88,7 +88,8 @@ export async function noteSignIn(c: Context, user: UserRow, method: string) {
           `<b>${escapeHtml(label)}</b><br>${escapeHtml(when)}${where ? `<br>${escapeHtml(where)}` : ''}<br>Signed in with ${escapeHtml(method)}`,
           'If this was you, there’s nothing to do. If not, change your password now and sign out your other sessions.',
         ],
-        button: { label: 'Check your account', url: appUrl('/settings/security') },
+        // This account's settings, even in a browser signed in to several.
+        button: { label: 'Check your account', url: appUrl(`/u/${user.id}/settings/security`) },
         footer: 'You can turn these emails off in Settings → Security.',
       }),
     });

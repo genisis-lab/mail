@@ -1,11 +1,14 @@
 /**
- * Web Push (RFC 8030) with VAPID (RFC 8292). Pushes carry no payload: the
- * service worker wakes up, asks Wren what's new over the signed-in session and
- * shows the notification itself. Nothing about the message passes through the
- * push service, and no payload encryption is needed.
+ * Web Push (RFC 8030) with VAPID (RFC 8292). A push says only which accounts
+ * have new mail (encrypted for the browser, RFC 8291): the service worker
+ * wakes up, asks Wren what's new over each account's session on that browser
+ * and shows the notification itself. Nothing about the message passes through
+ * the push service. One browser can get the notifications of every account
+ * signed in on it, so a subscription is kept per account and device.
  */
-import { all, get, getMeta, now, run, setMeta } from '../db/index.js';
+import { all, get, getMeta, IN_LIST, listParam, now, run, setMeta } from '../db/index.js';
 import { logger } from '../lib/log.js';
+import { encryptPayload } from '../lib/webpush.js';
 import { config } from '../config.js';
 import { platform } from '../platform.js';
 
@@ -76,32 +79,64 @@ export interface SubscriptionInput {
   keys: { p256dh: string; auth: string };
 }
 
+/** This device gets the account's notifications (a browser shares one subscription between its accounts). */
 export function saveSubscription(userId: number, sub: SubscriptionInput, userAgent: string | null) {
   run(
     `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent`,
+     ON CONFLICT(user_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent`,
     [userId, sub.endpoint, sub.keys.p256dh, sub.keys.auth, userAgent?.slice(0, 300) ?? null, now()],
   );
 }
 
-/** Send a payload-less push to every device of these users. Returns how many were delivered. */
+/** This device stops getting the account's notifications. Returns how many other accounts it still notifies. */
+export function removeSubscription(userId: number, endpoint: string): number {
+  run('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [userId, endpoint]);
+  return get<{ c: number }>('SELECT COUNT(*) AS c FROM push_subscriptions WHERE endpoint = ?', [endpoint])?.c ?? 0;
+}
+
+/**
+ * A browser's subscription only notifies accounts signed in on it: forget the
+ * ones that were signed out there before Wren cleaned up on sign-out.
+ */
+export function pruneDevice(endpoint: string, signedIn: number[]) {
+  run(`DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id NOT IN ${IN_LIST}`, [endpoint, listParam(signedIn)]);
+}
+
+/**
+ * Push to every device of these users: once per device, naming the accounts on
+ * it that have something new. Returns how many devices took it.
+ */
 export async function pushToUsers(userIds: number[]): Promise<number> {
   if (!userIds.length) return 0;
-  const subs = all<{ id: number; endpoint: string }>(`SELECT id, endpoint FROM push_subscriptions WHERE user_id IN (SELECT value FROM json_each(?))`, [JSON.stringify(userIds)]);
+  const subs = all<{ user_id: number; endpoint: string; p256dh: string; auth: string }>(
+    `SELECT user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id IN ${IN_LIST} ORDER BY id`,
+    [listParam(userIds)],
+  );
+  const devices = new Map<string, typeof subs>();
+  for (const s of subs) devices.set(s.endpoint, [...(devices.get(s.endpoint) ?? []), s]);
   let delivered = 0;
   const { vapid: v } = await vapid();
-  for (const s of subs) {
+  for (const [endpoint, rows] of devices) {
     try {
-      const audience = new URL(s.endpoint).origin;
-      const res = await fetch(s.endpoint, {
+      const audience = new URL(endpoint).origin;
+      const accounts = [...new Set(rows.map((r) => r.user_id))];
+      // An endpoint's keys never change, so any of its rows will do.
+      const payload = await encryptPayload(new TextEncoder().encode(JSON.stringify({ accounts })), rows[0].p256dh, rows[0].auth).catch(() => null);
+      const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { Authorization: `vapid t=${await vapidJwt(audience)}, k=${v.publicKey}`, TTL: '86400', Urgency: 'normal', 'Content-Length': '0' },
+        headers: {
+          Authorization: `vapid t=${await vapidJwt(audience)}, k=${v.publicKey}`,
+          TTL: '86400',
+          Urgency: 'normal',
+          ...(payload ? { 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'aes128gcm' } : { 'Content-Length': '0' }),
+        },
+        body: (payload ?? undefined) as BodyInit | undefined,
       });
       if (res.status === 404 || res.status === 410) {
-        run('DELETE FROM push_subscriptions WHERE id = ?', [s.id]); // the browser unsubscribed
+        run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]); // the browser unsubscribed
       } else if (res.ok) {
         delivered++;
-        run('UPDATE push_subscriptions SET last_used_at = ? WHERE id = ?', [now(), s.id]);
+        run(`UPDATE push_subscriptions SET last_used_at = ? WHERE endpoint = ? AND user_id IN ${IN_LIST}`, [now(), endpoint, listParam(accounts)]);
       } else {
         log.warn(`Push to ${audience} failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
       }
@@ -126,7 +161,7 @@ export function notifyNewMail(mailboxUserId: number) {
   lastPush.set(mailboxUserId, ts);
   const box = get<{ kind: string }>('SELECT kind FROM users WHERE id = ?', [mailboxUserId]);
   const users = box?.kind === 'shared' ? all<{ user_id: number }>('SELECT user_id FROM mailbox_members WHERE mailbox_id = ?', [mailboxUserId]).map((r) => r.user_id) : [mailboxUserId];
-  if (!get('SELECT 1 FROM push_subscriptions WHERE user_id IN (SELECT value FROM json_each(?)) LIMIT 1', [JSON.stringify(users)])) return;
+  if (!get(`SELECT 1 FROM push_subscriptions WHERE user_id IN ${IN_LIST} LIMIT 1`, [listParam(users)])) return;
   const p = pushToUsers(users).catch((err) => log.warn('Push failed', err));
   const defer = platform().defer;
   if (defer) defer(p);

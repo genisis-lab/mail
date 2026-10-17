@@ -9,11 +9,26 @@ import { getSettings, setSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { createProvider } from '../services/providers.js';
 import { platform } from '../platform.js';
-import { createUser, getUserByEmail, sessionUser, getUser, validatePassword } from '../services/users.js';
+import { createUser, getUserByEmail, sessionUser, getUser, parsePrefs, validatePassword } from '../services/users.js';
 import { markRecoveryVerified, sendPasswordReset, welcomeUser } from '../services/account-links.js';
 import { consumeToken, peekToken } from '../services/tokens.js';
-import { body, clearRateLimit, clientIp, createSession, destroySession, getPendingSession, rateLimit, SESSION_COOKIE, type AppEnv } from '../http/context.js';
-import { getCookie } from 'hono/cookie';
+import {
+  body,
+  browserSessions,
+  clearPending,
+  clearRateLimit,
+  clientIp,
+  createSession,
+  currentSession,
+  getPendingSession,
+  MAX_ACCOUNTS,
+  rateLimit,
+  signOut,
+  tidyAccountCookies,
+  type AppEnv,
+} from '../http/context.js';
+import { removeSubscription } from '../services/push.js';
+import { inboxSummary } from '../mail/threads.js';
 import { finishLogin, loginOptions } from '../services/passkeys.js';
 import { noteSignIn } from '../services/signin-alerts.js';
 import { WebAuthnError } from '../lib/webauthn.js';
@@ -39,21 +54,36 @@ function instanceInfo() {
   };
 }
 
+/** The account the request is for (X-Wren-Account; else the first one signed in here), and whether a sign-in waits for its code. */
 authRoutes.get('/me', (c) => {
-  const token = getCookie(c, SESSION_COOKIE);
-  let user = null;
-  let mfaPending = false;
-  if (token) {
-    const s = get<{ user_id: number; mfa_pending: number; expires_at: number }>('SELECT user_id, mfa_pending, expires_at FROM sessions WHERE id = ?', [sha256(token)]);
-    if (s && s.expires_at > now()) {
-      const u = getUser(s.user_id);
-      if (u && u.status === 'active') {
-        if (s.mfa_pending) mfaPending = true;
-        else user = sessionUser(u);
-      }
-    }
-  }
-  return c.json({ user, mfaPending, instance: instanceInfo() });
+  const s = currentSession(c);
+  return c.json({ user: s ? sessionUser(s.user) : null, mfaPending: !!getPendingSession(c), instance: instanceInfo() });
+});
+
+/**
+ * Every account signed in on this browser, for the account switcher: the first
+ * one (shown at /inbox) first, then the others (at /u/<id>/inbox) in the order
+ * they were added, each with its unread count.
+ */
+authRoutes.get('/accounts', (c) => {
+  const sessions = browserSessions(c);
+  tidyAccountCookies(c, sessions);
+  return c.json({
+    accounts: sessions.map(({ user }, i) => {
+      const prefs = parsePrefs(user.prefs);
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarAt: user.avatar_at,
+        default: i === 0,
+        // In-tab notifications for this account (when the device doesn't get pushes).
+        notify: prefs.notifications,
+        ...inboxSummary(user.id, prefs.inboxTabs),
+      };
+    }),
+    max: MAX_ACCOUNTS,
+  });
 });
 
 authRoutes.post('/login', async (c) => {
@@ -102,8 +132,8 @@ authRoutes.post('/mfa', async (c) => {
   }
   if (!ok) throw unauthorized('That code is not valid');
   clearRateLimit(`mfa:${user.id}`);
-  run('DELETE FROM sessions WHERE id = ?', [session.id]);
   createSession(c, user.id);
+  run('DELETE FROM sessions WHERE id = ?', [session.id]);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { mfa: true }, clientIp(c));
   await noteSignIn(c, user, pending.passkey ? 'a passkey and 2-step verification' : 'your password and 2-step verification');
@@ -152,8 +182,22 @@ authRoutes.post('/passkey', async (c) => {
   return c.json({ user: sessionUser(user) });
 });
 
-authRoutes.post('/logout', (c) => {
-  destroySession(c);
+/**
+ * Sign out of the account the request is for (?all=1: every account on this
+ * browser). With the browser's push `endpoint`, this device also stops getting
+ * their notifications.
+ */
+authRoutes.post('/logout', async (c) => {
+  const input = await c.req.json<{ endpoint?: unknown }>().catch(() => null);
+  const { signedOut, remaining } = signOut(c, c.req.query('all') === '1');
+  const endpoint = input?.endpoint;
+  if (typeof endpoint === 'string' && endpoint.length <= 1000) for (const id of signedOut) removeSubscription(id, endpoint);
+  return c.json({ ok: true, remaining });
+});
+
+/** Give up a sign-in that's waiting for its 2-step code (the accounts already signed in stay). */
+authRoutes.post('/cancel', (c) => {
+  clearPending(c);
   return c.json({ ok: true });
 });
 

@@ -524,6 +524,24 @@ export function counters(userId: number) {
   return { ...rest, categories: { primary: primary_unread, updates: updates_unread, promotions: promotions_unread }, labels };
 }
 
+/**
+ * The inbox's unread count as the sidebar shows it (Primary only when the inbox
+ * has tabs), and its newest message: what the account switcher shows for each
+ * account signed in on the device.
+ */
+export function inboxSummary(userId: number, primaryOnly: boolean): { unread: number; latestId: number } {
+  const ts = now();
+  const unread =
+    get<{ n: number }>(
+      `SELECT COUNT(DISTINCT thread_id) AS n FROM messages
+        WHERE user_id = ? AND is_read = 0 AND ((folder = 'inbox' AND (snoozed_until IS NULL OR snoozed_until <= ?)) OR (folder = 'sent' AND nudged_at IS NOT NULL))
+          ${primaryOnly ? `AND category = 'primary'` : ''}`,
+      [userId, ts],
+    )?.n ?? 0;
+  const latestId = get<{ id: number | null }>(`SELECT MAX(id) AS id FROM messages WHERE user_id = ? AND direction = 'in' AND folder = 'inbox'`, [userId])?.id ?? 0;
+  return { unread, latestId };
+}
+
 /** Wake snoozed messages whose time has come: back to the inbox, unread, on top. */
 export function wakeSnoozed(): number {
   const ts = now();
