@@ -48,9 +48,9 @@ export function queueSend(item: Omit<QueuedSend, 'id' | 'queuedAt'>) {
   write([...read(), { ...item, id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, queuedAt: Date.now() }]);
 }
 
-/** Forget everything waiting (signing out on this device). */
-export function clearOutbox() {
-  write([]);
+/** Forget what's waiting from one account signed out on this device (or from all of them). */
+export function clearOutbox(userId?: number) {
+  write(userId === undefined ? [] : read().filter((q) => q.userId !== userId));
 }
 
 let flushing = false;
@@ -66,7 +66,7 @@ export async function flushOutbox(userId: number, notify: (msg: string, error?: 
   flushing = true;
   try {
     for (const item of list) {
-      const api = apiFor(item.mailbox);
+      const api = apiFor(item.mailbox, item.userId);
       try {
         await api.post('/api/compose/send', item.payload);
         write(read().filter((q) => q.id !== item.id));

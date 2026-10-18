@@ -1,6 +1,6 @@
 /** Installable app and Web Push: service worker registration, install prompt, push subscription. */
 import { useEffect, useState } from 'react';
-import { api } from './api';
+import { api, apiFor } from './api';
 
 export function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || import.meta.env.DEV) return;
@@ -72,6 +72,25 @@ export async function currentPushSubscription(): Promise<PushSubscription | null
   return (await reg?.pushManager.getSubscription()) ?? null;
 }
 
+/** This browser's push address, if it has one (signing out tells the server to stop using it). */
+export async function pushEndpoint(): Promise<string | null> {
+  try {
+    return (await currentPushSubscription())?.endpoint ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this device gets an account's notifications. The browser has one
+ * subscription for all its accounts, and each account turns it on or off.
+ */
+export async function pushStatus(account?: number): Promise<{ subscribed: boolean; others: number }> {
+  const sub = await currentPushSubscription().catch(() => null);
+  if (!sub) return { subscribed: false, others: 0 };
+  return apiFor(null, account).post<{ subscribed: boolean; others: number }>('/api/me/push/status', { endpoint: sub.endpoint });
+}
+
 /** Ask for permission and register this device for new-mail pushes. */
 export async function enablePush(): Promise<void> {
   if (!pushSupported()) throw new Error('This browser can’t receive notifications');
@@ -95,9 +114,28 @@ export async function enablePush(): Promise<void> {
   await api.post('/api/me/push/subscribe', { endpoint: json.endpoint!, keys: json.keys as { p256dh: string; auth: string } });
 }
 
+/** This account stops getting notifications here; the browser keeps its subscription while another account uses it. */
 export async function disablePush(): Promise<void> {
   const sub = await currentPushSubscription();
   if (!sub) return;
-  await api.post('/api/me/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
-  await sub.unsubscribe();
+  const r = await api.post<{ shared: number }>('/api/me/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => ({ shared: 0 }));
+  if (!r.shared) await sub.unsubscribe();
+}
+
+/**
+ * Signed in to another account on a device that already gets notifications for
+ * an account here: it gets the new account's too (each can turn them off in Settings).
+ */
+export async function pushHere(account: number): Promise<void> {
+  try {
+    if (!pushSupported() || Notification.permission !== 'granted') return;
+    const sub = await currentPushSubscription();
+    if (!sub) return;
+    const status = await pushStatus(account);
+    if (status.subscribed || !status.others) return;
+    const json = sub.toJSON();
+    await apiFor(null, account).post('/api/me/push/subscribe', { endpoint: json.endpoint!, keys: json.keys as { p256dh: string; auth: string } });
+  } catch {
+    /* they can turn it on in Settings */
+  }
 }

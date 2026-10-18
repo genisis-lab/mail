@@ -52,11 +52,12 @@ describe('several accounts in one browser', () => {
     ]);
 
     // No account named: the first one, as before.
-    expect((await h.call('GET', '/api/auth/me')).body.user.email).toBe('admin@wren.test');
+    expect((await h.call('GET', '/api/auth/me')).body).toMatchObject({ user: { email: 'admin@wren.test' }, accounts: 2 });
     expect((await h.call('GET', '/api/auth/me', undefined, as(bob))).body.user.email).toBe('bob@wren.test');
     expect((await h.call('GET', '/api/auth/me', undefined, as(admin))).body.user.email).toBe('admin@wren.test');
     // An account this browser isn't signed in to is never swapped for another one.
-    expect((await h.call('GET', '/api/auth/me', undefined, as(cat))).body.user).toBeNull();
+    // (It tells the app that other accounts are signed in here, to offer them.)
+    expect((await h.call('GET', '/api/auth/me', undefined, as(cat))).body).toMatchObject({ user: null, accounts: 2 });
     expect((await h.call('GET', '/api/auth/me', undefined, { 'X-Wren-Account': 'nope' })).body.user).toBeNull();
     expect((await h.call('GET', '/api/mail/threads', undefined, as(cat))).status).toBe(401);
 
@@ -107,7 +108,9 @@ describe('several accounts in one browser', () => {
     const browser = await browserPushKeys();
     for (const id of [admin, bob]) expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: FCM, keys: browser.keys }, as(id))).status).toBe(200);
     expect(all('SELECT user_id FROM push_subscriptions WHERE endpoint = ? ORDER BY user_id', [FCM]).map((r: any) => r.user_id)).toEqual([admin, bob]);
-    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM }, as(cat))).body.subscribed).toBe(false);
+    // Cat doesn't get them here yet, while two other accounts here do (so signing in to Cat can turn them on too).
+    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM }, as(cat))).body).toEqual({ subscribed: false, others: 2 });
+    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM }, as(bob))).body).toEqual({ subscribed: true, others: 1 });
 
     const seen: { url: string; body: Uint8Array }[] = [];
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
@@ -193,7 +196,7 @@ describe('several accounts in one browser', () => {
     const r = await h.call('POST', '/api/auth/logout?all=1');
     expect(r.body).toEqual({ ok: true, remaining: 0 });
     expect(await accounts()).toEqual([]);
-    expect((await h.call('GET', '/api/auth/me')).body.user).toBeNull();
+    expect((await h.call('GET', '/api/auth/me')).body).toMatchObject({ user: null, accounts: 0 });
     // This browser's two sessions end; the admin's session from setup (another browser) stays.
     expect(count()).toBe(before - 2);
   });

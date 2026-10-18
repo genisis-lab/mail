@@ -173,8 +173,16 @@ sessions, appearance, and personal API keys.
 - **Shared mailboxes** are `users.kind = 'shared'` rows that can't sign in, plus
   `mailbox_members`. The `X-Wren-Mailbox` header (or `?mailbox=`) makes mail routes
   act on the shared mailbox for its members; `messages.sent_by` records who replied.
-- **Web Push** uses VAPID (ES256) with keys generated on first use. Pushes are empty;
-  the service worker fetches `/api/me/notifications` with the session cookie.
+- **Web Push** uses VAPID (ES256) with keys generated on first use. A push only names
+  the accounts with new mail (`{"accounts": [ids]}`, encrypted per RFC 8291); the
+  service worker fetches `/api/me/notifications` for each over that account's session.
+- **Several accounts in one browser** (`http/context.ts`, `web/lib/accounts.ts`): the
+  first account's session is in `wren_sid`, each one added after it in `wren_sid_<id>`,
+  and a sign-in waiting for its 2-step code in `wren_mfa`. Every request names its
+  account (`X-Wren-Account`, or `?account=` on links the browser opens); with none, the
+  first one. The web app serves added accounts under `/u/<id>/` (the router's basename),
+  so a tab never acts as another account. Push subscriptions are kept per account and
+  device, and the service worker keeps an offline copy per account.
 - **Admins never read mail:** delivery and inbound log details show headers only.
 - **Delivery status** (`providers/events.ts`, `mail/dsn.ts`, `services/delivery-events.ts`):
   each provider's event webhook posts to the provider's existing secret URL and is

@@ -164,15 +164,25 @@ to the organizer.
 previous / next, download and open in a new tab.
 
 **On your phone.** Installable as an app (PWA) with its own icon. New-mail
-notifications through Web Push. Pushes carry no data: the app asks Wren what's new, so
-nothing about your mail passes through the push service. Gmail-style rows with swipe
-actions, pull down to refresh, press and hold to select, a floating Compose button, and
-the unread count in the tab title and app badge.
+notifications through Web Push. A push only says which account has new mail (encrypted
+for your device): the app then asks Wren what's new, so nothing about your mail passes
+through the push service. Gmail-style rows with swipe actions, pull down to refresh,
+press and hold to select, a floating Compose button, and the unread count in the tab
+title and app badge.
+
+**Several accounts.** Like Gmail, sign in to more than one account in the same browser
+(up to 10) and switch from your picture: it lists your other accounts with their unread
+counts, and **Add another account** signs in to one more without signing out. Each
+account has its own address (the first at `/inbox`, the others at `/u/<id>/inbox`), so
+tabs of different accounts can sit side by side, and a tab always acts as its own
+account. Each account gets its own notifications on the device, saying which account the
+mail is for, and keeps its own offline copy. Sign out of one account or of all of them.
+An alias is another address on the same account; this is for separate accounts.
 
 **Offline.** Mail you've opened recently (your inbox and up to 150 conversations) stays
 readable with no connection. Mail you send while offline waits on the device and goes
 out when you're back online; if the server refuses it, it's saved to Drafts. Signing
-out clears what was saved on the device.
+out of an account clears what was saved for it on the device.
 
 **Moving in and out.** Import from Gmail (a Google Takeout `.mbox` keeps labels, stars
 and read state), from any IMAP account (Gmail, iCloud, Yahoo, Fastmail, Zoho…; copied in

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Label, SessionUser, UserPrefs } from '../../shared/types';
-import { api } from './api';
+import { api, getApiAccount, setApiAccount } from './api';
 
 export interface Instance {
   name: string;
@@ -17,11 +17,27 @@ export interface Instance {
 export interface MeResponse {
   user: SessionUser | null;
   mfaPending: boolean;
+  /** How many accounts are signed in on this browser. */
+  accounts: number;
   instance: Instance;
 }
 
+/** The account this tab showed last, to offer signing in again once it's signed out. */
+let lastUser: { email: string; name: string } | null = null;
+export const lastAccount = () => lastUser;
+
 export function useMe() {
-  return useQuery({ queryKey: ['me'], queryFn: () => api.get<MeResponse>('/api/auth/me'), staleTime: 60_000 });
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: async () => {
+      const me = await api.get<MeResponse>('/api/auth/me');
+      // A tab opened at /inbox shows the first account signed in, and stays that account even if the first one changes.
+      if (me.user && getApiAccount() === null) setApiAccount(me.user.id);
+      if (me.user) lastUser = { email: me.user.email, name: me.user.name };
+      return me;
+    },
+    staleTime: 60_000,
+  });
 }
 
 interface SessionValue {

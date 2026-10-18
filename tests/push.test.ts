@@ -45,7 +45,7 @@ describe('web push', () => {
     expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: FCM, keys: browser.keys })).status).toBe(200);
     expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/gone', keys: browser.keys })).status).toBe(200);
     expect((await h.call('GET', '/api/me/push')).body.devices).toBe(2);
-    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM })).body).toEqual({ subscribed: true });
+    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM })).body).toEqual({ subscribed: true, others: 0 });
 
     const seen: { url: string; headers: Headers; body: Uint8Array }[] = [];
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {

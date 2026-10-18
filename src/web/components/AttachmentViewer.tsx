@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, ExternalLink, FileQuestion, X } from 'lucide-react';
 import type { AttachmentInfo } from '../../shared/types';
+import { linkUrl } from '../lib/api';
 import { fileSize } from '../lib/format';
 import { cx, Spinner, useDialogFocus } from './ui';
 
@@ -24,7 +25,7 @@ export function previewKind(a: Pick<AttachmentInfo, 'contentType' | 'filename' |
   return 'none';
 }
 
-const url = (a: AttachmentInfo, inline = false) => `/api/attachments/${a.id}${inline ? '?inline=1' : ''}`;
+const url = (a: AttachmentInfo, inline = false) => linkUrl(`/api/attachments/${a.id}${inline ? '?inline=1' : ''}`);
 
 export function AttachmentViewer({ items, index, onIndex, onClose }: { items: AttachmentInfo[]; index: number | null; onIndex: (i: number) => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);

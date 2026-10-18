@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarPlus, Check, MapPin, Repeat, Users, Video, X } from 'lucide-react';
-import { api, mailboxUrl } from '../../lib/api';
+import { api, linkUrl } from '../../lib/api';
 import { useToast } from '../../components/toast';
 import { Button, cx } from '../../components/ui';
 
@@ -180,7 +180,7 @@ export function InviteCard({ messageId, canAnswer = true }: { messageId: number;
             </a>
           )}
           {!cancelled && inv.start && (
-            <a href={mailboxUrl(`/api/mail/messages/${messageId}/invite.ics`)}>
+            <a href={linkUrl(`/api/mail/messages/${messageId}/invite.ics`)}>
               <Button size="sm" variant="ghost" icon={<CalendarPlus className="size-4" />}>
                 Add to calendar
               </Button>

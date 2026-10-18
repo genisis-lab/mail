@@ -42,7 +42,7 @@ import {
   Fish,
 } from 'lucide-react';
 import type { Label, MessageDetail, ThreadDetail } from '../../../shared/types';
-import { api, mailboxUrl } from '../../lib/api';
+import { api, linkUrl } from '../../lib/api';
 import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/actions';
 import { fileSize, longDate, relativeTime, shortDate } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
@@ -708,8 +708,8 @@ function MessageCard({
               { label: 'Forward', icon: <Forward className="size-4" />, onClick: () => onReply('forward') },
               { divider: true },
               { label: 'Print', icon: <Printer className="size-4" />, onClick: () => window.print() },
-              { label: 'Show original', icon: <Code2 className="size-4" />, onClick: () => window.open(mailboxUrl(`/api/mail/messages/${m.id}/raw`), '_blank') },
-              { label: 'Download message', icon: <Download className="size-4" />, onClick: () => (window.location.href = mailboxUrl(`/api/mail/messages/${m.id}/raw?download=1`)) },
+              { label: 'Show original', icon: <Code2 className="size-4" />, onClick: () => window.open(linkUrl(`/api/mail/messages/${m.id}/raw`), '_blank') },
+              { label: 'Download message', icon: <Download className="size-4" />, onClick: () => (window.location.href = linkUrl(`/api/mail/messages/${m.id}/raw?download=1`)) },
               { divider: true },
               { label: 'Mark unread from here', icon: <Mail className="size-4" />, onClick: () => void msgAction('unread') },
               ...(m.canUnsubscribe && !m.unsubscribed ? [{ label: 'Unsubscribe', icon: <MailX className="size-4" />, onClick: () => void unsubscribe() }] : []),
@@ -940,7 +940,7 @@ function MessageCard({
                   >
                     <span className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
                       {previewKind(a) === 'image' ? (
-                        <img src={`/api/attachments/${a.id}?inline=1`} alt="" className="h-full w-full object-cover" loading="lazy" />
+                        <img src={linkUrl(`/api/attachments/${a.id}?inline=1`)} alt="" className="h-full w-full object-cover" loading="lazy" />
                       ) : (
                         <AttachmentIcon type={a.contentType} name={a.filename} />
                       )}
@@ -951,7 +951,7 @@ function MessageCard({
                     </span>
                   </button>
                   <a
-                    href={`/api/attachments/${a.id}`}
+                    href={linkUrl(`/api/attachments/${a.id}`)}
                     className="absolute top-2 right-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100"
                     aria-label={`Download ${a.filename}`}
                     title="Download"

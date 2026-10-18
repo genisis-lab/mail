@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, FileArchive, Server, Trash2, Upload, X } from 'lucide-react';
 import { MboxSplitter } from '../../../shared/mbox';
-import { api } from '../../lib/api';
+import { api, linkUrl } from '../../lib/api';
 import { fileSize, number, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Field, Input, Modal, Select } from '../../components/ui';
@@ -301,7 +301,7 @@ function JobRow({ job }: { job: Job }) {
       </div>
       <div className="flex shrink-0 gap-1">
         {job.kind === 'export' && job.status === 'done' && (
-          <a href={`/api/me/export/${job.id}/download`} download className="inline-flex h-8 items-center gap-2 rounded-full bg-accent px-3 text-[13px] font-medium text-accent-fg hover:brightness-110">
+          <a href={linkUrl(`/api/me/export/${job.id}/download`)} download className="inline-flex h-8 items-center gap-2 rounded-full bg-accent px-3 text-[13px] font-medium text-accent-fg hover:brightness-110">
             <Download className="size-3.5" aria-hidden /> Download .mbox
           </a>
         )}

@@ -54,10 +54,14 @@ function instanceInfo() {
   };
 }
 
-/** The account the request is for (X-Wren-Account; else the first one signed in here), and whether a sign-in waits for its code. */
+/**
+ * The account the request is for (X-Wren-Account; else the first one signed in
+ * here), whether a sign-in waits for its code, and how many accounts are
+ * signed in on this browser.
+ */
 authRoutes.get('/me', (c) => {
   const s = currentSession(c);
-  return c.json({ user: s ? sessionUser(s.user) : null, mfaPending: !!getPendingSession(c), instance: instanceInfo() });
+  return c.json({ user: s ? sessionUser(s.user) : null, mfaPending: !!getPendingSession(c), accounts: browserSessions(c).length, instance: instanceInfo() });
 });
 
 /**

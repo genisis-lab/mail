@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Trash2 } from 'lucide-react';
-import { api } from '../../lib/api';
+import { api, linkUrl } from '../../lib/api';
 import { fileSize, number, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Field, IconButton, Input, Modal, Select, Switch, Textarea } from '../../components/ui';
@@ -264,7 +264,7 @@ export function ExportCard({ userId, jobs, run }: { userId: number; jobs: Export
                 </p>
               </div>
               {j.status === 'done' && (
-                <a href={`/api/admin/users/${userId}/export/${j.id}/download`} className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline">
+                <a href={linkUrl(`/api/admin/users/${userId}/export/${j.id}/download`)} className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline">
                   <Download className="size-4" aria-hidden /> Download
                 </a>
               )}

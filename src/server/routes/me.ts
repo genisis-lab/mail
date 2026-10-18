@@ -242,10 +242,16 @@ meRoutes.post('/push/subscribe', async (c) => {
   return c.json({ ok: true });
 });
 
-/** Whether this device gets the account's notifications (the browser's subscription may be another account's). */
+/**
+ * Whether this device gets the account's notifications, and for how many of the
+ * other accounts signed in on this browser (they share its subscription).
+ */
 meRoutes.post('/push/status', async (c) => {
   const { endpoint } = await body(c, z.object({ endpoint: z.string().max(1000) }));
-  return c.json({ subscribed: !!get('SELECT 1 FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [c.get('user').id, endpoint]) });
+  const self = c.get('user').id;
+  const here = new Set(browserSessions(c).map((s) => s.user.id));
+  const users = all<{ user_id: number }>('SELECT user_id FROM push_subscriptions WHERE endpoint = ?', [endpoint]).map((r) => r.user_id);
+  return c.json({ subscribed: users.includes(self), others: users.filter((id) => id !== self && here.has(id)).length });
 });
 
 /** Stop this account's notifications on this device. `shared`: other accounts here still use the subscription. */

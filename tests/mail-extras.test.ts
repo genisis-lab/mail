@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { get, getMeta, run } from '../src/server/db/index';
 import { config } from '../src/server/config';
 import { ingest } from '../src/server/mail/ingest';
@@ -135,27 +135,36 @@ describe('manage subscriptions', () => {
 });
 
 describe('push notifications', () => {
-  /** Run the service worker's push handler against a canned /api/me/notifications answer. */
-  const push = async (data: unknown) => {
+  /** The service worker, with /api/me/notifications answered by `answer` (given the account the request names). */
+  const worker = (answer: (account: string | undefined) => unknown, windows: any[] = []) => {
     const handlers: Record<string, (e: any) => void> = {};
     const shown: { title: string; options: any }[] = [];
     const context = vm.createContext({
       self: {
         addEventListener: (type: string, fn: (e: any) => void) => (handlers[type] = fn),
         registration: { showNotification: async (title: string, options: any) => void shown.push({ title, options }) },
+        clients: { matchAll: async () => windows, openWindow: async () => null },
         navigator: {},
         location: { origin: 'https://mail.example' },
       },
-      fetch: async () => new Response(JSON.stringify(data)),
+      fetch: async (_url: string, init: { headers?: Record<string, string> }) => new Response(JSON.stringify(answer(init?.headers?.['X-Wren-Account']))),
       caches: { open: async () => ({}) },
       URL,
       Response,
     });
     vm.runInContext(readFileSync(new URL('../src/web/public/sw.js', import.meta.url), 'utf8'), context);
-    let done: Promise<unknown> = Promise.resolve();
-    handlers.push({ waitUntil: (p: Promise<unknown>) => (done = p) });
-    await done;
-    return shown[0];
+    const fire = async (type: string, event: Record<string, unknown>) => {
+      let done: Promise<unknown> = Promise.resolve();
+      handlers[type]({ ...event, waitUntil: (p: Promise<unknown>) => (done = p) });
+      await done;
+    };
+    return { shown, fire };
+  };
+  /** Run the service worker's push handler against a canned /api/me/notifications answer. */
+  const push = async (data: unknown) => {
+    const w = worker(() => data);
+    await w.fire('push', {});
+    return w.shown[0];
   };
   const item = { id: 9, threadId: 4, mailbox: null, from: { address: 'shipment-tracking@amazon.com', name: 'Amazon.com' }, subject: 'Out for delivery: "Echo Dot"', code: null };
 
@@ -169,6 +178,34 @@ describe('push notifications', () => {
   it('keeps ordinary mail as it was', async () => {
     const n = await push({ total: 1, items: [{ ...item, parcel: null }] });
     expect(n.title).toBe('Amazon.com');
+  });
+
+  it('shows each account’s new mail on its own, saying which account it’s for', async () => {
+    const accounts: Record<string, unknown> = {
+      '7': { total: 1, accounts: 2, account: { id: 7, address: 'ada@wren.test', name: 'Ada', path: '' }, items: [{ ...item, parcel: null, threadId: 4 }] },
+      '9': { total: 2, accounts: 2, account: { id: 9, address: 'bob@wren.test', name: 'Bob', path: '/u/9' }, items: [{ ...item, parcel: null, threadId: 5, subject: 'Lunch?' }, { ...item, parcel: null, threadId: 6 }] },
+    };
+    const w = worker((account) => accounts[account ?? ''] ?? { total: 0, items: [] });
+    await w.fire('push', { data: { json: () => ({ accounts: [7, 9] }) } });
+    expect(w.shown.map((n) => [n.title, n.options.tag, n.options.data.url])).toEqual([
+      ['Amazon.com', 'wren-mail-7', '/inbox/4'],
+      ['2 new messages', 'wren-mail-9', '/u/9/inbox'],
+    ]);
+    expect(w.shown[0].options.body).toBe('Out for delivery: "Echo Dot"\nada@wren.test');
+    expect(w.shown[1].options.body.split('\n')).toEqual(['Amazon.com: Lunch?', 'Amazon.com: Out for delivery: "Echo Dot"', 'bob@wren.test']);
+  });
+
+  it('opens the mail in a tab of its account', async () => {
+    const tab = (url: string) => ({ url, navigate: vi.fn(async () => null), focus: vi.fn(async () => null) });
+    const windows = [tab('https://mail.example/inbox'), tab('https://mail.example/u/9/starred'), tab('https://mail.example/u/12/inbox')];
+    const w = worker(() => ({}), windows);
+    await w.fire('notificationclick', { notification: { close: () => {}, data: { url: '/u/9/inbox/5' } } });
+    expect(windows[1].navigate).toHaveBeenCalledWith('/u/9/inbox/5');
+    expect(windows[1].focus).toHaveBeenCalled();
+    expect(windows[0].navigate).not.toHaveBeenCalled();
+    // The first account's mail goes to a tab without a /u/ prefix.
+    await w.fire('notificationclick', { notification: { close: () => {}, data: { url: '/inbox/4' } } });
+    expect(windows[0].navigate).toHaveBeenCalledWith('/inbox/4');
   });
 });
 
