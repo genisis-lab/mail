@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.4.0 — several accounts in one browser; mail apps
+
+**Several accounts.** Sign in to more than one account on your Wren server in the same
+browser and switch between them, like Gmail. Your picture (top right) lists your other
+accounts, each with its unread count; tap one to open it. **Add another account** signs
+in to one more without signing out (up to 10 per browser). From there you can also
+create an account, if your server allows it, and an invitation link now works while
+you're signed in. An alias is another address on the same account; this is for
+separate accounts.
+- Each account has its own address in the app: the first one at `/inbox` as before, the
+  others at `/u/<id>/inbox`. Tabs of different accounts can be open side by side, and
+  with several accounts the tab title says whose tab it is.
+- A tab always acts as its own account. If that account is signed out somewhere else,
+  the tab asks you to sign in again, or to carry on with an account still signed in,
+  instead of showing another account's mail.
+- **Notifications for every account.** The device gets new-mail notifications for each
+  account signed in on it, and each one says which account the mail is for; tapping it
+  opens that account. A device that already gets notifications turns them on for an
+  account you add, and each account can turn them off in Settings → General →
+  Notifications. Without push, an open tab also tells you about new mail for your other
+  accounts. The app icon's count adds up the unread mail of all of them.
+- **Signing out.** Your picture has **Sign out of this account** and **Sign out of all
+  accounts**. Signing out of an account stops this device's notifications for it and
+  clears what was saved for it on the device; the other accounts stay signed in. When
+  the first account signs out, the next one takes its place at `/inbox`.
+- Each account keeps its own offline copy on the device.
+- A sign-in waiting for its 2-step code waits on its own and signs no one out, and "Use
+  a different account" only gives up that sign-in.
+
+**Mail apps (JMAP).** Wren now speaks JMAP (RFC 8620, 8621 and 9425), the modern open
+protocol for mail apps, so apps that support it can read, search, organize and send your
+mail, with live push. It works over HTTPS, so it runs on Cloudflare Workers.
+- An admin turns it on for everyone: Admin → Settings & policies → Security → **Let
+  people use mail apps (JMAP)**. It stays off until then.
+- To leave one person out, turn off **Allow mail apps** on their page in Admin → Users.
+  Their app passwords stop working at once, and work again when it's turned back on.
+- Each app signs in with its own app password (Settings → Security → Mail apps), never
+  the account password. App passwords work with 2-step sign-in on and can be revoked one
+  by one.
+- Folders, labels, read, starred and important, conversations, search, drafts, sending,
+  the out-of-office reply and storage quota all carry over. Shared mailboxes aren't
+  available to apps yet. Setup and details: [docs/jmap.md](docs/jmap.md).
+
+**Under the hood.** Dependency updates (Hono, postal-mime, Vite, Wrangler and others),
+and CI on the latest GitHub Actions.
+
+**Upgrading.** Redeploy; the database updates (migrations 13 to 15) run by themselves.
+Everyone stays signed in, and devices that get notifications keep getting them.
+
 ## v0.3.1 — profile and sender pictures; iPhone fixes
 
 **Profile pictures.** Settings → General → Profile picture: upload one (it's cropped to a
