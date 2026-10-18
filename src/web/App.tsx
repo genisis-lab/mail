@@ -55,13 +55,15 @@ export function App() {
   }
 
   if (!user) {
+    // Other accounts are still signed in on this browser, just not this tab's (signed out, or never here).
+    const mode = me.data.accounts > 0 ? 'again' : 'signin';
     return (
       <Routes>
         <Route path="/register" element={<RegisterPage instance={instance} />} />
         <Route path="/reset" element={<ResetPage instance={instance} />} />
         <Route path="/forgot" element={<ForgotPage instance={instance} />} />
         <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn={false} />} />
-        <Route path="*" element={<LoginPage instance={instance} mfaPending={me.data.mfaPending} next={location.pathname} />} />
+        <Route path="*" element={<LoginPage instance={instance} mfaPending={me.data.mfaPending} next={location.pathname} mode={mode} />} />
       </Routes>
     );
   }
@@ -80,9 +82,11 @@ export function App() {
       <ComposeProvider>
         <Routes>
           <Route path="/login" element={<Navigate to="/inbox" replace />} />
-          <Route path="/register" element={<Navigate to="/inbox" replace />} />
+          {/* Another account next to this one, like Gmail's "Add another account". */}
+          <Route path="/add-account" element={<LoginPage instance={instance} mfaPending={false} next="/inbox" mode="add" />} />
+          <Route path="/register" element={<RegisterPage instance={instance} adding />} />
           <Route path="/reset" element={<ResetPage instance={instance} />} />
-          <Route path="/forgot" element={<Navigate to="/settings/security" replace />} />
+          <Route path="/forgot" element={<ForgotPage instance={instance} />} />
           <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn />} />
           <Route path="/admin/*" element={isAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
           <Route path="/*" element={<MailLayout />} />

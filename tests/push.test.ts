@@ -4,6 +4,7 @@ import { ingest } from '../src/server/mail/ingest';
 import { buildMime } from '../src/server/mail/compose';
 import { fromB64url, pushToUsers, validEndpoint, vapidJwt, vapidPublicKey } from '../src/server/services/push';
 import { harness } from './harness';
+import { browserPushKeys } from './webpush';
 
 const h = harness();
 const FCM = 'https://fcm.googleapis.com/fcm/send/abc123';
@@ -39,15 +40,16 @@ describe('web push', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('sends payload-less pushes with VAPID auth and drops expired subscriptions', async () => {
-    const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
-    expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: FCM, keys })).status).toBe(200);
-    expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/gone', keys })).status).toBe(200);
+  it('sends pushes that only name the account, with VAPID auth, and drops expired subscriptions', async () => {
+    const browser = await browserPushKeys();
+    expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: FCM, keys: browser.keys })).status).toBe(200);
+    expect((await h.call('POST', '/api/me/push/subscribe', { endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/gone', keys: browser.keys })).status).toBe(200);
     expect((await h.call('GET', '/api/me/push')).body.devices).toBe(2);
+    expect((await h.call('POST', '/api/me/push/status', { endpoint: FCM })).body).toEqual({ subscribed: true, others: 0 });
 
-    const seen: { url: string; headers: Headers; body: unknown }[] = [];
+    const seen: { url: string; headers: Headers; body: Uint8Array }[] = [];
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
-      seen.push({ url, headers: new Headers(init.headers), body: init.body });
+      seen.push({ url, headers: new Headers(init.headers), body: init.body as Uint8Array });
       return new Response(null, { status: url.includes('/gone') ? 410 : 201 });
     });
     const userId = all<{ id: number }>(`SELECT id FROM users WHERE email = 'admin@wren.test'`)[0].id;
@@ -55,7 +57,9 @@ describe('web push', () => {
     const fcm = seen.find((s) => s.url === FCM)!;
     expect(fcm.headers.get('authorization')).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]{87}$/);
     expect(fcm.headers.get('ttl')).toBe('86400');
-    expect(fcm.body).toBeUndefined();
+    // Encrypted for the browser, and nothing about the mail: just whose it is.
+    expect(fcm.headers.get('content-encoding')).toBe('aes128gcm');
+    expect(await browser.read(fcm.body)).toEqual({ accounts: [userId] });
     expect(all('SELECT endpoint FROM push_subscriptions')).toEqual([{ endpoint: FCM }]);
   });
 

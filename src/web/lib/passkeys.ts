@@ -1,4 +1,5 @@
 /** Browser side of passkeys: turn the server's options into WebAuthn calls and the results back into JSON. */
+import type { SessionUser } from '../../shared/types';
 import { api } from './api';
 
 const toBuf = (s: string) => {
@@ -66,7 +67,7 @@ export async function addPasskey(password: string, name: string): Promise<void> 
 }
 
 /** Sign in with a passkey. Returns whether the 2-step code is still needed. */
-export async function signInWithPasskey(email?: string): Promise<{ mfaRequired?: boolean }> {
+export async function signInWithPasskey(email?: string): Promise<{ mfaRequired?: boolean; user?: SessionUser }> {
   const o = await api.post<{ challenge: string; rpId: string; timeout: number; userVerification: UserVerificationRequirement; allowCredentials: { type: 'public-key'; id: string; transports?: AuthenticatorTransport[] }[] }>(
     '/api/auth/passkey/options',
     email ? { email } : {},

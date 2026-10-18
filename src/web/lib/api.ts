@@ -13,6 +13,11 @@ type Json = Record<string, unknown> | unknown[];
 /** Requests under these paths act on the shared mailbox being viewed, if any. */
 const MAILBOX_SCOPED = /^\/api\/(mail|compose|attachments|labels)(\/|\?|$)/;
 let currentMailbox: number | null = null;
+/**
+ * The account this tab acts as. One browser can be signed in to several, so
+ * every request names its account and never lands on another one.
+ */
+let currentAccount: number | null = null;
 
 /** Point mail requests at a shared mailbox (null: the person's own). */
 export function setApiMailbox(id: number | null) {
@@ -23,14 +28,26 @@ export function getApiMailbox(): number | null {
   return currentMailbox;
 }
 
-/** A link the browser opens itself (raw source, downloads): carry the mailbox in the query string. */
-export function mailboxUrl(url: string, mailbox = currentMailbox): string {
-  if (!mailbox || !MAILBOX_SCOPED.test(url)) return url;
-  return `${url}${url.includes('?') ? '&' : '?'}mailbox=${mailbox}`;
+/** Pin this tab's requests to one of the accounts signed in on this browser. */
+export function setApiAccount(id: number | null) {
+  currentAccount = id;
 }
 
-async function request<T>(method: string, url: string, data?: Json | FormData, mailbox = currentMailbox): Promise<T> {
+export function getApiAccount(): number | null {
+  return currentAccount;
+}
+
+/** A link the browser opens itself (downloads, raw source, pictures): carry the account and mailbox in the query string. */
+export function linkUrl(url: string, mailbox = currentMailbox): string {
+  const params: string[] = [];
+  if (currentAccount && url.startsWith('/api/')) params.push(`account=${currentAccount}`);
+  if (mailbox && MAILBOX_SCOPED.test(url)) params.push(`mailbox=${mailbox}`);
+  return params.length ? `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}` : url;
+}
+
+async function request<T>(method: string, url: string, data?: Json | FormData, mailbox = currentMailbox, account = currentAccount): Promise<T> {
   const headers: Record<string, string> = { 'X-Wren': '1' };
+  if (account) headers['X-Wren-Account'] = String(account);
   if (mailbox && MAILBOX_SCOPED.test(url)) headers['X-Wren-Mailbox'] = String(mailbox);
   let body: BodyInit | undefined;
   if (data instanceof FormData) body = data;
@@ -48,9 +65,10 @@ async function request<T>(method: string, url: string, data?: Json | FormData, m
   }
   if (!res.ok) {
     const err = new ApiError(parsed?.error || `Request failed (${res.status})`, res.status, parsed?.code);
-    if (res.status === 401 && !url.startsWith('/api/auth/')) window.dispatchEvent(new CustomEvent('wren:unauthorized'));
+    // This tab's account was signed out (a request for another account here says nothing about this one).
+    if (res.status === 401 && account === currentAccount && !url.startsWith('/api/auth/')) window.dispatchEvent(new CustomEvent('wren:unauthorized'));
     // Something must happen before anything else (2-step setup, a new password): reload the session to show it.
-    if (parsed?.code === 'mfa_setup_required' || parsed?.code === 'password_change_required') window.dispatchEvent(new CustomEvent('wren:mfa-required'));
+    if (account === currentAccount && (parsed?.code === 'mfa_setup_required' || parsed?.code === 'password_change_required')) window.dispatchEvent(new CustomEvent('wren:mfa-required'));
     throw err;
   }
   return parsed as T;
@@ -65,13 +83,16 @@ export const api = {
 
 export type Api = typeof api;
 
-/** The same client, pinned to one mailbox (a compose window keeps the mailbox it was opened in). */
-export function apiFor(mailbox: number | null): Api {
+/**
+ * The same client, pinned to one mailbox (a compose window keeps the mailbox it
+ * was opened in), and optionally to another account signed in on this browser.
+ */
+export function apiFor(mailbox: number | null, account = currentAccount): Api {
   return {
-    get: <T = any>(url: string) => request<T>('GET', url, undefined, mailbox),
-    post: <T = any>(url: string, data?: Json | FormData) => request<T>('POST', url, data ?? {}, mailbox),
-    put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}, mailbox),
-    del: <T = any>(url: string, data?: Json) => request<T>('DELETE', url, data, mailbox),
+    get: <T = any>(url: string) => request<T>('GET', url, undefined, mailbox, account),
+    post: <T = any>(url: string, data?: Json | FormData) => request<T>('POST', url, data ?? {}, mailbox, account),
+    put: <T = any>(url: string, data?: Json) => request<T>('PUT', url, data ?? {}, mailbox, account),
+    del: <T = any>(url: string, data?: Json) => request<T>('DELETE', url, data, mailbox, account),
   };
 }
 

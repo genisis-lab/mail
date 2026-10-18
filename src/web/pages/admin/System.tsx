@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DatabaseBackup, Download, History, Megaphone, Trash2, Upload } from 'lucide-react';
-import { api, ApiError } from '../../lib/api';
+import { api, ApiError, linkUrl } from '../../lib/api';
 import { fileSize, longDate, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Field, IconButton, Input, Select, Spinner, Switch, Textarea } from '../../components/ui';
@@ -139,7 +139,7 @@ export function SystemPage() {
 }
 
 async function uploadRestore(file: File, allowKeyMismatch: boolean) {
-  const res = await fetch(`/api/admin/restore${allowKeyMismatch ? '?allowKeyMismatch=1' : ''}`, {
+  const res = await fetch(linkUrl(`/api/admin/restore${allowKeyMismatch ? '?allowKeyMismatch=1' : ''}`), {
     method: 'POST',
     headers: { 'X-Wren': '1', 'Content-Type': 'application/x-ndjson' },
     body: file,
@@ -197,7 +197,7 @@ function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boole
     >
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-2">
-          <a href="/api/admin/export">
+          <a href={linkUrl('/api/admin/export')}>
             <Button icon={<Download className="size-4" />}>Download export</Button>
           </a>
           <input
@@ -373,7 +373,7 @@ function AutoBackupCard({ isOwner }: { isOwner: boolean }) {
                 <Badge tone={b.status === 'done' ? 'ok' : b.status === 'running' ? 'accent' : 'danger'}>{b.status === 'done' ? 'ready' : b.status === 'running' ? 'running' : 'failed'}</Badge>
                 {b.status === 'done' && (
                   <>
-                    <a href={`/api/admin/backups/${b.id}/download`}>
+                    <a href={linkUrl(`/api/admin/backups/${b.id}/download`)}>
                       <Button size="sm" variant="ghost" icon={<Download className="size-4" />}>
                         Download
                       </Button>

@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from 'react';
+import { linkUrl } from '../lib/api';
 import { colorFor, initials } from '../lib/format';
 import { cx } from './ui';
 
@@ -49,7 +50,7 @@ export function Avatar({ name, address, size = 40, className, picture = true }: 
   const [loaded, setLoaded] = useState<string | null>(null);
   const version = versions.get(key);
   const query = [version ? `v=${version}` : '', generation ? `g=${generation}` : ''].filter(Boolean).join('&');
-  const src = picture && key.includes('@') && !missing.has(key) ? `/api/avatars/${encodeURIComponent(key)}${query ? `?${query}` : ''}` : null;
+  const src = picture && key.includes('@') && !missing.has(key) ? linkUrl(`/api/avatars/${encodeURIComponent(key)}${query ? `?${query}` : ''}`) : null;
   return (
     <span
       aria-hidden

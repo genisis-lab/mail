@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Download, Mail, MoreVertical, Pencil, Plus, Search, Trash2, Upload, Users } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, linkUrl } from '../lib/api';
 import { contactsFromFile } from '../lib/contacts-import';
 import { relativeTime } from '../lib/format';
 import { Avatar } from '../components/Avatar';
@@ -116,8 +116,8 @@ export function ContactsPage() {
             items={[
               { label: 'Import from CSV or vCard…', icon: <Upload className="size-4" />, onClick: () => fileInput.current?.click() },
               { divider: true },
-              { label: 'Export as vCard (.vcf)', icon: <Download className="size-4" />, onClick: () => (window.location.href = '/api/contacts/export?format=vcf') },
-              { label: 'Export as CSV', icon: <Download className="size-4" />, onClick: () => (window.location.href = '/api/contacts/export?format=csv') },
+              { label: 'Export as vCard (.vcf)', icon: <Download className="size-4" />, onClick: () => (window.location.href = linkUrl('/api/contacts/export?format=vcf')) },
+              { label: 'Export as CSV', icon: <Download className="size-4" />, onClick: () => (window.location.href = linkUrl('/api/contacts/export?format=csv')) },
             ]}
           />
         </div>

@@ -670,6 +670,28 @@ export const migrations: string[] = [
   `
   ALTER TABLE users ADD COLUMN mail_apps_blocked INTEGER NOT NULL DEFAULT 0;
   `,
+
+  // 15: one browser can be signed in to several accounts and get each one's notifications,
+  //     so a push subscription (one per browser) is kept per account and device.
+  `
+  CREATE TABLE push_subscriptions_new (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint     TEXT NOT NULL,
+    p256dh       TEXT NOT NULL,
+    auth         TEXT NOT NULL,
+    user_agent   TEXT,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER,
+    UNIQUE (user_id, endpoint)
+  );
+  INSERT INTO push_subscriptions_new (id, user_id, endpoint, p256dh, auth, user_agent, created_at, last_used_at)
+    SELECT id, user_id, endpoint, p256dh, auth, user_agent, created_at, last_used_at FROM push_subscriptions;
+  DROP TABLE push_subscriptions;
+  ALTER TABLE push_subscriptions_new RENAME TO push_subscriptions;
+  CREATE INDEX idx_push_user ON push_subscriptions(user_id);
+  CREATE INDEX idx_push_endpoint ON push_subscriptions(endpoint);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

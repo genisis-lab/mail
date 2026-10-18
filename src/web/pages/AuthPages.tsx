@@ -1,11 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Globe, KeyRound, Mail, Send, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronRight, Globe, KeyRound, Mail, Send, ShieldCheck, Sparkles } from 'lucide-react';
 import { APP_NAME, APP_TAGLINE } from '../../shared/brand';
-import { api } from '../lib/api';
+import type { SessionUser } from '../../shared/types';
+import { landingPath, openAccount, openSignedIn, signOut, useAccounts } from '../lib/accounts';
+import { api, getApiAccount } from '../lib/api';
 import { passkeysSupported, signInWithPasskey } from '../lib/passkeys';
-import type { Instance } from '../lib/session';
+import { lastAccount, useMe, type Instance } from '../lib/session';
+import { Avatar } from '../components/Avatar';
 import { Logo } from '../components/Logo';
 import { TwoFactorSetup } from '../components/TwoFactorSetup';
 import { Button, Field, Input, Select, Spinner } from '../components/ui';
@@ -26,10 +29,21 @@ function AuthShell({ instance, children, wide }: { instance: Instance; children:
   );
 }
 
-export function LoginPage({ instance, mfaPending, next }: { instance: Instance; mfaPending: boolean; next: string }) {
+/** Where "sign in" is from here: the sign-in page, or adding another account when one is signed in. */
+function useSignInPath() {
+  return useMe().data?.user ? '/add-account' : '/login';
+}
+
+/**
+ * Sign in. `add`: another account next to the one signed in (from the account
+ * menu). `again`: this tab's account isn't signed in on this browser any more,
+ * but others are, and it offers them too.
+ */
+export function LoginPage({ instance, mfaPending, next, mode = 'signin' }: { instance: Instance; mfaPending: boolean; next: string; mode?: 'signin' | 'add' | 'again' }) {
   const qc = useQueryClient();
-  const [step, setStep] = useState<'password' | 'mfa'>(mfaPending ? 'mfa' : 'password');
-  const [email, setEmail] = useState('');
+  const last = mode === 'again' ? lastAccount() : null;
+  const [step, setStep] = useState<'password' | 'mfa'>(mfaPending && mode !== 'add' ? 'mfa' : 'password');
+  const [email, setEmail] = useState(last?.email ?? '');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -37,9 +51,11 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const navigate = useNavigate();
 
-  const done = async () => {
+  const done = async (user?: SessionUser) => {
+    // A tab that belongs to an account opens the one just signed in at its own address.
+    if (user && (await openSignedIn(user.id, next))) return;
     await qc.invalidateQueries({ queryKey: ['me'] });
-    if (next && next !== '/login') navigate(next, { replace: true });
+    navigate(landingPath(next), { replace: true });
   };
 
   return (
@@ -51,9 +67,9 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
             setBusy(true);
             setError(null);
             try {
-              const r = await api.post<{ mfaRequired?: boolean }>('/api/auth/login', { email, password });
+              const r = await api.post<{ mfaRequired?: boolean; user?: SessionUser }>('/api/auth/login', { email, password });
               if (r.mfaRequired) setStep('mfa');
-              else await done();
+              else await done(r.user);
             } catch (err) {
               setError((err as Error).message);
             } finally {
@@ -63,15 +79,23 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
           className="space-y-4"
         >
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-            <p className="mt-1 text-sm text-muted">to continue to {instance.name}</p>
+            <h1 className="text-2xl font-semibold tracking-tight">{mode === 'add' ? 'Add another account' : last ? 'Sign in again' : 'Sign in'}</h1>
+            <p className="mt-1 text-sm text-muted">
+              {mode === 'add'
+                ? `Sign in to another ${instance.name} account. You can switch between them from your picture.`
+                : mode === 'again'
+                  ? last
+                    ? `You’re signed out of ${last.email} on this device.`
+                    : 'That account isn’t signed in on this device.'
+                  : `to continue to ${instance.name}`}
+            </p>
           </div>
           {instance.loginMessage && <div className="rounded-xl bg-accent-softer px-4 py-3 text-sm text-fg">{instance.loginMessage}</div>}
           <Field label="Email address">
-            <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
+            <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus={!last} required />
           </Field>
           <Field label="Password" error={error}>
-            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus={!!last} required />
           </Field>
           <div className="-mt-2 text-right">
             <Link to={`/forgot${email ? `?email=${encodeURIComponent(email)}` : ''}`} className="text-sm font-medium text-accent-ink hover:underline">
@@ -93,7 +117,7 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
                 try {
                   const r = await signInWithPasskey(email.trim() || undefined);
                   if (r.mfaRequired) setStep('mfa');
-                  else await done();
+                  else await done(r.user);
                 } catch (err) {
                   setError((err as Error).message);
                 } finally {
@@ -106,12 +130,20 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
           )}
           {instance.registration !== 'closed' && (
             <p className="text-center text-sm text-muted">
-              New here?{' '}
+              {mode === 'signin' ? 'New here?' : 'No account yet?'}{' '}
               <Link to="/register" className="font-medium text-accent-ink hover:underline">
                 Create an account
               </Link>
             </p>
           )}
+          {mode === 'add' && (
+            <p className="text-center text-sm">
+              <Link to="/inbox" className="font-medium text-muted hover:text-fg">
+                Cancel
+              </Link>
+            </p>
+          )}
+          {mode === 'again' && <SignedInHere />}
         </form>
       ) : (
         <form
@@ -120,8 +152,8 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
             setBusy(true);
             setError(null);
             try {
-              await api.post('/api/auth/mfa', { code });
-              await done();
+              const r = await api.post<{ user: SessionUser }>('/api/auth/mfa', { code });
+              await done(r.user);
             } catch (err) {
               setError((err as Error).message);
               if ((err as any).status === 401 && /expired/i.test((err as Error).message)) setStep('password');
@@ -148,7 +180,8 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
             type="button"
             className="w-full text-center text-sm text-muted hover:text-fg"
             onClick={async () => {
-              await api.post('/api/auth/logout').catch(() => {});
+              // Gives up only this sign-in: accounts already signed in here stay.
+              await api.post('/api/auth/cancel').catch(() => {});
               setStep('password');
             }}
           >
@@ -160,8 +193,37 @@ export function LoginPage({ instance, mfaPending, next }: { instance: Instance; 
   );
 }
 
-export function RegisterPage({ instance }: { instance: Instance }) {
+/** The accounts still signed in on this browser, to carry on with one of them instead. */
+function SignedInHere() {
   const qc = useQueryClient();
+  // The list may be from before this tab's account was signed out.
+  useEffect(() => void qc.invalidateQueries({ queryKey: ['accounts'] }), [qc]);
+  const accounts = (useAccounts().data?.accounts ?? []).filter((a) => a.id !== getApiAccount());
+  if (!accounts.length) return null;
+  return (
+    <div className="border-t border-line pt-4">
+      <p className="mb-2 text-sm text-muted">Or continue with an account signed in on this device</p>
+      <ul className="space-y-1">
+        {accounts.map((a) => (
+          <li key={a.id}>
+            <button type="button" onClick={() => openAccount(a)} className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-hover">
+              <Avatar name={a.name} address={a.email} size={32} picture={false} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{a.name || a.email}</span>
+                <span className="block truncate text-xs text-muted">{a.email}</span>
+              </span>
+              <ChevronRight className="size-4 text-muted" aria-hidden />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function RegisterPage({ instance, adding = false }: { instance: Instance; adding?: boolean }) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const inviteToken = params.get('invite');
   const [invite, setInvite] = useState<{ valid: boolean; email?: string; domain?: string } | null>(null);
@@ -185,12 +247,13 @@ export function RegisterPage({ instance }: { instance: Instance }) {
   }, [inviteToken]);
 
   const closed = !inviteToken && instance.registration !== 'open';
+  const signInPath = adding ? '/add-account' : '/login';
   if (closed || (invite && !invite.valid)) {
     return (
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">{invite && !invite.valid ? 'Invitation expired' : 'Registration is invite-only'}</h1>
         <p className="mt-2 text-sm text-muted">Ask an administrator of {instance.name} for an invitation link.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+        <Link to={signInPath} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Back to sign in
         </Link>
       </AuthShell>
@@ -209,8 +272,11 @@ export function RegisterPage({ instance }: { instance: Instance }) {
           setBusy(true);
           setError(null);
           try {
-            await api.post('/api/auth/register', { localPart, domain, name, password, invite: inviteToken ?? undefined });
+            const r = await api.post<{ user: SessionUser }>('/api/auth/register', { localPart, domain, name, password, invite: inviteToken ?? undefined });
+            // Signed in next to another account: open the new one.
+            if (await openSignedIn(r.user.id)) return;
             await qc.invalidateQueries({ queryKey: ['me'] });
+            navigate('/inbox', { replace: true });
           } catch (err) {
             setError((err as Error).message);
           } finally {
@@ -219,8 +285,8 @@ export function RegisterPage({ instance }: { instance: Instance }) {
         }}
       >
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Create your account</h1>
-          <p className="mt-1 text-sm text-muted">Get a mailbox on {instance.name}</p>
+          <h1 className="text-2xl font-semibold tracking-tight">{adding ? 'Create another account' : 'Create your account'}</h1>
+          <p className="mt-1 text-sm text-muted">{adding ? `Get another mailbox on ${instance.name}, next to the one you’re signed in to` : `Get a mailbox on ${instance.name}`}</p>
         </div>
         <Field label="Your name">
           <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus required autoComplete="name" />
@@ -248,7 +314,7 @@ export function RegisterPage({ instance }: { instance: Instance }) {
         </Button>
         <p className="text-center text-sm text-muted">
           Already have an account?{' '}
-          <Link to="/login" className="font-medium text-accent-ink hover:underline">
+          <Link to={signInPath} className="font-medium text-accent-ink hover:underline">
             Sign in
           </Link>
         </p>
@@ -261,6 +327,7 @@ export function RegisterPage({ instance }: { instance: Instance }) {
 export function ResetPage({ instance }: { instance: Instance }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const signInPath = useSignInPath();
   const [params] = useSearchParams();
   const token = params.get('token') ?? '';
   const [info, setInfo] = useState<{ valid: boolean; kind?: 'reset' | 'setup'; email?: string; name?: string } | null>(token ? null : { valid: false });
@@ -293,7 +360,7 @@ export function ResetPage({ instance }: { instance: Instance }) {
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">Password updated</h1>
         <p className="mt-2 text-sm text-muted">Sign in with your new password to continue.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+        <Link to={signInPath} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Go to sign in
         </Link>
       </AuthShell>
@@ -305,7 +372,7 @@ export function ResetPage({ instance }: { instance: Instance }) {
       <AuthShell instance={instance}>
         <h1 className="text-xl font-semibold">This link has expired</h1>
         <p className="mt-2 text-sm text-muted">The link is invalid or was already used. Ask an administrator of {instance.name} for a new one.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+        <Link to={signInPath} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Back to sign in
         </Link>
       </AuthShell>
@@ -326,7 +393,8 @@ export function ResetPage({ instance }: { instance: Instance }) {
           setBusy(true);
           setError(null);
           try {
-            const r = await api.post<{ signedIn: boolean }>('/api/auth/reset', { token, password });
+            const r = await api.post<{ signedIn: boolean; user?: SessionUser }>('/api/auth/reset', { token, password });
+            if (r.signedIn && r.user && (await openSignedIn(r.user.id))) return;
             if (r.signedIn) {
               await qc.invalidateQueries({ queryKey: ['me'] });
               navigate('/inbox', { replace: true });
@@ -579,13 +647,7 @@ export function ForceTwoFactorPage({ instance }: { instance: Instance }) {
       <h1 className="text-2xl font-semibold tracking-tight">Set up 2-step verification</h1>
       <p className="mt-1 mb-5 text-sm text-muted">Your administrator requires two-factor authentication before you can use {instance.name}.</p>
       <TwoFactorSetup onDone={() => qc.invalidateQueries({ queryKey: ['me'] })} />
-      <button
-        className="mt-6 text-sm text-muted hover:text-fg"
-        onClick={async () => {
-          await api.post('/api/auth/logout');
-          qc.invalidateQueries({ queryKey: ['me'] });
-        }}
-      >
+      <button className="mt-6 text-sm text-muted hover:text-fg" onClick={() => void signOut()}>
         Sign out
       </button>
     </AuthShell>
@@ -638,14 +700,7 @@ export function ForcePasswordPage({ instance, email }: { instance: Instance; ema
         <Button type="submit" variant="primary" className="w-full" loading={busy}>
           Save and continue
         </Button>
-        <button
-          type="button"
-          className="block w-full text-center text-sm text-muted hover:text-fg"
-          onClick={async () => {
-            await api.post('/api/auth/logout');
-            qc.invalidateQueries({ queryKey: ['me'] });
-          }}
-        >
+        <button type="button" className="block w-full text-center text-sm text-muted hover:text-fg" onClick={() => void signOut()}>
           Sign out
         </button>
       </form>
@@ -656,6 +711,7 @@ export function ForcePasswordPage({ instance, email }: { instance: Instance; ema
 /** "Forgot password?": a reset link goes to the account's confirmed recovery email. */
 export function ForgotPage({ instance }: { instance: Instance }) {
   const [params] = useSearchParams();
+  const signInPath = useSignInPath();
   const [email, setEmail] = useState(params.get('email') ?? '');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -673,7 +729,7 @@ export function ForgotPage({ instance }: { instance: Instance }) {
           If <b className="text-fg">{email}</b> has a confirmed recovery email, a link to choose a new password is on its way there. It works once, for one hour.
         </p>
         <p className="mt-3 text-sm text-muted">Nothing arrived? Check spam, or ask an administrator of {instance.name} to send you a sign-in link.</p>
-        <Link to="/login" className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
+        <Link to={signInPath} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
           Back to sign in
         </Link>
       </AuthShell>
@@ -708,7 +764,7 @@ export function ForgotPage({ instance }: { instance: Instance }) {
           Send reset link
         </Button>
         <p className="text-center text-sm">
-          <Link to="/login" className="font-medium text-accent-ink hover:underline">
+          <Link to={signInPath} className="font-medium text-accent-ink hover:underline">
             Back to sign in
           </Link>
         </p>

@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Bell, Copy, Download, Fingerprint, KeyRound, Laptop, LifeBuoy, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
 import type { FilterActions, FilterCriteria, Label, SwipeAction, UserPrefs } from '../../../shared/types';
+import { useAccounts } from '../../lib/accounts';
 import { api } from '../../lib/api';
 import { longDate, relativeTime } from '../../lib/format';
 import { useLabels, useSession } from '../../lib/session';
@@ -11,7 +12,7 @@ import { TwoFactorSetup } from '../../components/TwoFactorSetup';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Checkbox, cx, Empty, Field, IconButton, Input, Modal, Select, Spinner, Switch, Tabs } from '../../components/ui';
 import { LabelDialog } from '../MailLayout';
-import { currentPushSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, useInstallPrompt } from '../../lib/pwa';
+import { disablePush, enablePush, isIos, isStandalone, pushStatus, pushSupported, useInstallPrompt } from '../../lib/pwa';
 import { ImportExportTab } from './ImportExport';
 import { addPasskey, deviceName, passkeysSupported } from '../../lib/passkeys';
 import { SavedRepliesTab } from './SavedReplies';
@@ -354,15 +355,21 @@ function SwipeOptions() {
   );
 }
 
-/** New-mail notifications: Web Push on this device, or alerts while a tab is open. */
+/**
+ * New-mail notifications: Web Push on this device, or alerts while a tab is
+ * open. Each account signed in on the device turns its own on or off.
+ */
 function NotificationsRow() {
-  const { prefs, refresh } = useSession();
+  const { user, prefs, refresh } = useSession();
   const toast = useToast();
+  const several = (useAccounts().data?.accounts.length ?? 0) > 1;
   const [push, setPush] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const supported = pushSupported();
   useEffect(() => {
-    void currentPushSubscription().then((s) => setPush(!!s));
+    pushStatus()
+      .then((s) => setPush(s.subscribed))
+      .catch(() => setPush(false));
   }, []);
   const savePref = async (v: boolean) => {
     await api.put('/api/account/prefs', { notifications: v });
@@ -397,8 +404,16 @@ function NotificationsRow() {
                 setBusy(false);
               }
             }}
-            label="Notify me about new mail on this device"
-            description={blocked ? 'Notifications are blocked for this site. Allow them in your browser’s site settings, then turn this on.' : isIos() && !isStandalone() ? 'On iPhone and iPad, add Wren to your Home Screen first (Share → Add to Home Screen), then turn this on from the app.' : undefined}
+            label={several ? `Notify me about new mail for ${user.email} on this device` : 'Notify me about new mail on this device'}
+            description={
+              blocked
+                ? 'Notifications are blocked for this site. Allow them in your browser’s site settings, then turn this on.'
+                : isIos() && !isStandalone()
+                  ? 'On iPhone and iPad, add Wren to your Home Screen first (Share → Add to Home Screen), then turn this on from the app.'
+                  : several
+                    ? 'Each account signed in on this device has its own setting.'
+                    : undefined
+            }
           />
           {push && (
             <Button

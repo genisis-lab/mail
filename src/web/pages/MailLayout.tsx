@@ -28,6 +28,7 @@ import {
   Star,
   Tag,
   Trash2,
+  UserPlus,
   Users,
   X,
   CloudOff,
@@ -35,11 +36,12 @@ import {
   Package,
 } from 'lucide-react';
 import type { Label, View } from '../../shared/types';
-import { clearOutbox, flushOutbox, queuedSends } from '../lib/outbox';
+import { openAccount, signOut, useAccounts } from '../lib/accounts';
+import { flushOutbox, queuedSends } from '../lib/outbox';
 import { api } from '../lib/api';
 import { useHotkeys } from '../lib/hotkeys';
 import { MailboxProvider, useMailbox } from '../lib/mailbox';
-import { useNewMailNotifications, useUnreadTitle } from '../lib/notify';
+import { useNewMailNotifications, useOtherAccountNotifications, useUnreadTitle } from '../lib/notify';
 import { useInstallPrompt } from '../lib/pwa';
 import { inboxCount, useCounters, useLabels, useSession } from '../lib/session';
 import { Avatar, refreshAvatar } from '../components/Avatar';
@@ -110,12 +112,19 @@ function MailShell() {
   const compose = useCompose();
   const navigate = useNavigate();
   const location = useLocation();
-  const { prefs, instance } = useSession();
+  const { user, prefs, instance } = useSession();
   const mailbox = useMailbox();
   const counters = useCounters();
+  const accounts = useAccounts().data?.accounts;
   const gPrefix = useRef(0);
-  useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', inboxCount(counters.data, prefs.inboxTabs), instance.name);
-  useNewMailNotifications(prefs.notifications, mailbox.current?.id ?? null);
+  // Several accounts signed in here: say whose tab this is, and count everyone's unread mail on the app icon.
+  const several = (accounts?.length ?? 0) > 1;
+  const unread = inboxCount(counters.data, prefs.inboxTabs);
+  const own = mailbox.current ? accounts?.find((a) => a.id === user.id)?.unread : unread;
+  const others = accounts?.filter((a) => a.id !== user.id).reduce((n, a) => n + a.unread, 0) ?? 0;
+  useUnreadTitle(mailbox.current ? mailbox.current.address : 'Inbox', unread, instance.name, several ? user.email : undefined, several ? (own ?? 0) + others : undefined);
+  useNewMailNotifications(prefs.notifications, user.id, mailbox.current?.id ?? null, several ? user.email : undefined);
+  useOtherAccountNotifications(accounts, user.id);
 
   // The installed app's "Compose" shortcut opens /inbox?compose=1.
   useEffect(() => {
@@ -258,7 +267,9 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
   const { user, instance, isAdmin } = useSession();
   const installPrompt = useInstallPrompt();
   const navigate = useNavigate();
-  const qc = useQueryClient();
+  const toast = useToast();
+  const accounts = useAccounts().data;
+  const others = accounts?.accounts.filter((a) => a.id !== user.id) ?? [];
   // Your own picture under every address you send from, as of its last change.
   const ownAddresses = [user.email, ...user.identities.map((i) => i.address)].join(',');
   useEffect(() => refreshAvatar(ownAddresses.split(','), user.avatarAt ?? 0), [ownAddresses, user.avatarAt]);
@@ -318,25 +329,42 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                     Admin panel
                   </MenuRow>
                 )}
+              </div>
+              {/* The other accounts signed in on this browser, like Gmail: one tap opens one. */}
+              <div className="mt-1.5 flex flex-col gap-0.5 border-t border-line pt-1.5">
+                {others.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => (close(), openAccount(a))}
+                    className="flex items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-hover"
+                    aria-label={`Switch to ${a.email}${a.unread ? `, ${a.unread} unread` : ''}`}
+                  >
+                    <Avatar name={a.name} address={a.email} size={32} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{a.name || a.email}</span>
+                      <span className="block truncate text-xs text-muted">{a.email}</span>
+                    </span>
+                    {a.unread > 0 && <span className="shrink-0 text-xs font-semibold tabular-nums">{a.unread > 999 ? '999+' : a.unread}</span>}
+                  </button>
+                ))}
                 <MenuRow
-                  icon={<LogOut className="size-4" />}
-                  onClick={async () => {
+                  icon={<UserPlus className="size-4" />}
+                  onClick={() => {
                     close();
-                    // Send anything still waiting from offline; what's left goes with the session.
-                    await flushOutbox(user.id, () => {}).catch(() => {});
-                    await api.post('/api/auth/logout');
-                    clearOutbox();
-                    try {
-                      sessionStorage.removeItem('wren.mailbox');
-                    } catch {
-                      /* private mode */
-                    }
-                    qc.clear();
-                    window.location.href = '/login';
+                    if (accounts && accounts.accounts.length >= accounts.max) toast({ message: `You can be signed in to ${accounts.max} accounts at once on this device. Sign out of one first.`, tone: 'error' });
+                    else navigate('/add-account');
                   }}
                 >
-                  Sign out
+                  Add another account
                 </MenuRow>
+                <MenuRow icon={<LogOut className="size-4" />} onClick={() => (close(), void signOut().catch((err) => toast({ message: (err as Error).message, tone: 'error' })))}>
+                  {others.length ? 'Sign out of this account' : 'Sign out'}
+                </MenuRow>
+                {others.length > 0 && (
+                  <MenuRow icon={<LogOut className="size-4" />} onClick={() => (close(), void signOut(true).catch((err) => toast({ message: (err as Error).message, tone: 'error' })))}>
+                    Sign out of all accounts
+                  </MenuRow>
+                )}
               </div>
             </div>
           )}

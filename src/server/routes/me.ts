@@ -6,8 +6,8 @@ import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
 import { domainOf, normalizeEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
-import { pushToUsers, saveSubscription, validEndpoint, vapidPublicKey } from '../services/push.js';
+import { accountPath, body, browserSessions, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
+import { pruneDevice, pushToUsers, removeSubscription, saveSubscription, validEndpoint, vapidPublicKey } from '../services/push.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, importMboxBatch, startExport, startImapImport } from '../services/mail-import.js';
 import { ImapError } from '../mail/imap-client.js';
@@ -238,13 +238,27 @@ meRoutes.post('/push/subscribe', async (c) => {
     run('DELETE FROM push_subscriptions WHERE id IN (SELECT id FROM push_subscriptions WHERE user_id = ? ORDER BY COALESCE(last_used_at, created_at) LIMIT 1)', [user.id]);
   }
   saveSubscription(user.id, sub, c.req.header('user-agent') ?? null);
+  pruneDevice(sub.endpoint, browserSessions(c).map((s) => s.user.id));
   return c.json({ ok: true });
 });
 
+/**
+ * Whether this device gets the account's notifications, and for how many of the
+ * other accounts signed in on this browser (they share its subscription).
+ */
+meRoutes.post('/push/status', async (c) => {
+  const { endpoint } = await body(c, z.object({ endpoint: z.string().max(1000) }));
+  const self = c.get('user').id;
+  const here = new Set(browserSessions(c).map((s) => s.user.id));
+  const users = all<{ user_id: number }>('SELECT user_id FROM push_subscriptions WHERE endpoint = ?', [endpoint]).map((r) => r.user_id);
+  return c.json({ subscribed: users.includes(self), others: users.filter((id) => id !== self && here.has(id)).length });
+});
+
+/** Stop this account's notifications on this device. `shared`: other accounts here still use the subscription. */
 meRoutes.post('/push/unsubscribe', async (c) => {
   const { endpoint } = await body(c, z.object({ endpoint: z.string().max(1000) }));
-  run('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [c.get('user').id, endpoint]);
-  return c.json({ ok: true });
+  pruneDevice(endpoint, browserSessions(c).map((s) => s.user.id));
+  return c.json({ ok: true, shared: removeSubscription(c.get('user').id, endpoint) });
 });
 
 meRoutes.post('/push/test', async (c) => c.json({ delivered: await pushToUsers([c.get('user').id]) }));
@@ -270,8 +284,12 @@ meRoutes.get('/notifications', (c) => {
       [JSON.stringify(boxes), since],
     )?.c ?? 0;
   const parcels = parcelRowsOnce();
+  const sessions = browserSessions(c);
   return c.json({
     total,
+    // Which account this is, for a browser signed in to several: its address goes on the notification.
+    account: { id: user.id, address: user.email, name: user.name, path: accountPath(sessions, user.id) },
+    accounts: sessions.length,
     items: rows.map((r) => ({
       id: r.id,
       threadId: r.thread_id,
