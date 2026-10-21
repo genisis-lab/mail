@@ -60,7 +60,10 @@ function keepDocumentStyles(html: string): string {
  *    (`proxy`: {url: sig}), so the sender never sees the reader's address
  *  - opens links in a new tab without a referrer
  */
-export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo[]; allowRemote: boolean; proxy?: Record<string, string> }): RenderResult {
+export function renderMailHtml(
+  html: string,
+  opts: { attachments: AttachmentInfo[]; allowRemote: boolean; proxy?: Record<string, string>; attachmentUrl?: (id: number) => string },
+): RenderResult {
   const cidMap = new Map<string, number>();
   for (const a of opts.attachments) if (a.contentId) cidMap.set(a.contentId.toLowerCase(), a.id);
   let blocked = 0;
@@ -77,7 +80,7 @@ export function renderMailHtml(html: string, opts: { attachments: AttachmentInfo
     const u = url.trim();
     if (/^cid:/i.test(u)) {
       const id = cidMap.get(u.slice(4).replace(/[<>]/g, '').toLowerCase());
-      return id ? `/api/attachments/${id}?inline=1` : '';
+      return id ? (opts.attachmentUrl?.(id) ?? `/api/attachments/${id}?inline=1`) : '';
     }
     if (isRemote(u) && !opts.allowRemote) {
       blocked++;

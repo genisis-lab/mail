@@ -243,6 +243,8 @@ export interface MessageDetail {
   spoofWarning?: boolean;
   /** Remote pictures in the HTML and their image-proxy signatures ({url: sig}); loaded through /api/img/. */
   images?: Record<string, string>;
+  /** Goes out as a private link that works for `days`; expiresAt is set once it has gone out. */
+  privateLink?: { days: number; expiresAt: number | null } | null;
 }
 
 /** A package on the Packages page: the card, and the conversation it's from. */

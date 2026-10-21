@@ -262,8 +262,12 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     code: r.direction === 'in' ? r.otp ?? null : null,
     spoofWarning: spoofed(r),
     images: signedImages(r.html_body),
+    privateLink: r.private_link ? JSON.parse(r.private_link) : null,
   };
 }
+
+/** Whether a message goes out (or went out) as a private link (mail/private.ts): for toDetail. */
+const PRIVATE_LINK = `(SELECT json_object('days', days, 'expiresAt', expires_at) FROM private_links pl WHERE pl.message_id = m.id) AS private_link`;
 
 /**
  * Mail that claims to come from one of this server's own domains, arrived from
@@ -280,10 +284,10 @@ function spoofed(r: any): boolean {
 }
 
 export async function getMessage(userId: number, id: number): Promise<MessageDetail | null> {
-  const r = get<any>('SELECT m.*, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed FROM messages m WHERE m.id = ? AND m.user_id = ?', [
-    id,
-    userId,
-  ]);
+  const r = get<any>(
+    `SELECT m.*, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed, ${PRIVATE_LINK} FROM messages m WHERE m.id = ? AND m.user_id = ?`,
+    [id, userId],
+  );
   if (!r) return null;
   await loadBody(r);
   const atts = attachmentsFor([id]).get(id) ?? [];
@@ -295,7 +299,7 @@ export async function getThread(userId: number, threadId: number): Promise<Threa
   const t = get<{ id: number; subject: string; muted: number; follow_up_at: number | null }>('SELECT id, subject, muted, follow_up_at FROM threads WHERE id = ? AND user_id = ?', [threadId, userId]);
   if (!t) return null;
   const cols =
-    'm.*, sb.name AS sent_by_name, sb.email AS sent_by_email, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by';
+    `m.*, sb.name AS sent_by_name, sb.email AS sent_by_email, (SELECT 1 FROM unsubscribes us WHERE us.user_id = m.user_id AND us.sender = m.from_addr) AS unsubscribed, ${PRIVATE_LINK} FROM messages m LEFT JOIN users sb ON sb.id = m.sent_by`;
   let rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? AND m.folder NOT IN ('spam','trash') ORDER BY m.date ASC, m.id ASC`, [threadId]);
   if (!rows.length) rows = all<any>(`SELECT ${cols} WHERE m.thread_id = ? ORDER BY m.date ASC, m.id ASC`, [threadId]);
   for (const r of rows) await loadBody(r);

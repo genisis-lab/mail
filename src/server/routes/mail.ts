@@ -17,6 +17,7 @@ import { audit } from '../services/audit.js';
 import { raiseAlert } from '../services/alerts.js';
 import { listPackages, parcelNote, parcelRows, parcelRowsOnce } from '../mail/parcel.js';
 import { proxiedImage } from '../services/image-proxy.js';
+import { linkAttachment, linkContent, ownLink, revokeLink } from '../mail/private.js';
 
 export const mailRoutes = new Hono<AppEnv>();
 
@@ -257,6 +258,30 @@ mailRoutes.get('/messages/:id/invite.ics', async (c) => {
   return new Response(f.ics, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.ics"` } });
 });
 
+// ── Private links (mail/private.ts): the sender's view ─────────────────────
+
+/** What a private link shows, for its sender's card. */
+mailRoutes.get('/messages/:id/private', async (c) => {
+  const link = ownLink(c.get('user').id, intParam(c, 'id'));
+  if (!link) throw notFound('This private link has expired or was withdrawn');
+  return c.json(await linkContent(link));
+});
+
+mailRoutes.get('/messages/:id/private/attachments/:att', async (c) => {
+  const link = ownLink(c.get('user').id, intParam(c, 'id'));
+  const a = link && linkAttachment(link, intParam(c, 'att'));
+  if (!a) throw notFound();
+  return attachmentResponse(a, c.req.query('inline') === '1');
+});
+
+/** "Stop sharing now". */
+mailRoutes.delete('/messages/:id/private', (c) => {
+  const box = c.get('mailbox');
+  if (box && !box.canSend) throw forbidden('You can read this shared mailbox, but not send from it');
+  if (!revokeLink(c.get('user').id, intParam(c, 'id'))) throw notFound('This private link has expired or was withdrawn');
+  return c.json({ ok: true });
+});
+
 /** Unsubscribe from the mailing list a message came from. */
 mailRoutes.post('/messages/:id/unsubscribe', async (c) => {
   const user = c.get('user');
@@ -309,8 +334,12 @@ attachmentRoutes.get('/:id', async (c) => {
     attachmentFor(id, [c.get('actor').id]) ??
     (requestedAccount(c) === null ? attachmentFor(id, browserSessions(c).map((s) => s.user.id)) : undefined);
   if (!a) throw notFound();
+  return attachmentResponse(a, c.req.query('inline') === '1');
+});
+
+/** An attachment's file: shown in the browser when asked (`inline`) and of a safe type, otherwise downloaded. */
+export async function attachmentResponse(a: { blob: string; content_type: string; filename: string }, inline: boolean): Promise<Response> {
   const data = await getBlob(a.blob);
-  const inline = c.req.query('inline') === '1';
   // Only render "safe" types inline; everything else downloads.
   const safeInline = /^(image\/(png|jpe?g|gif|webp|bmp|avif)|application\/pdf|text\/plain|audio\/|video\/)/i.test(a.content_type);
   const disposition = inline && safeInline ? 'inline' : 'attachment';
@@ -327,7 +356,7 @@ attachmentRoutes.get('/:id', async (c) => {
       ...(pdf ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
     },
   });
-});
+}
 
 // ── Labels ──────────────────────────────────────────────────────────────────
 

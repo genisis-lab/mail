@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { CalendarClock, ChevronDown, FileText, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
+import { CalendarClock, ChevronDown, FileText, Lock, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../shared/types';
 import { apiFor, getApiMailbox } from '../lib/api';
@@ -31,6 +31,8 @@ export interface ComposeInit {
   threadId?: number | null;
   /** The shared mailbox this message is written in (null: the person's own). */
   mailbox?: number | null;
+  /** Send as a private link that stops working after this many days (null: a normal message). */
+  privateDays?: number | null;
 }
 
 interface Window_ extends ComposeInit {
@@ -138,6 +140,7 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
         subject: d.subject,
         html: cidToUrl(d.html ?? '', d.attachments),
         attachments: d.attachments,
+        privateDays: d.privateLink?.days ?? null,
       });
     },
     [open],
@@ -270,6 +273,7 @@ export function ComposeForm({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [toolbar, setToolbar] = useState(true);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [privateDays, setPrivateDays] = useState<number | null>(init.privateDays ?? null);
   const editor = useRef<RichEditorHandle>(null);
   const html = useRef(init.html ?? '');
   const dirty = useRef(false);
@@ -289,8 +293,9 @@ export function ComposeForm({
       attachments: attachments.map((a) => a.id),
       replyToId: init.replyToId ?? null,
       forwardOfId: init.forwardOfId ?? null,
+      privateDays,
     }),
-    [from, to, cc, bcc, subject, attachments, init.replyToId, init.forwardOfId],
+    [from, to, cc, bcc, subject, attachments, init.replyToId, init.forwardOfId, privateDays],
   );
 
   const save = useCallback(async (): Promise<number | null> => {
@@ -417,6 +422,7 @@ export function ComposeForm({
             subject: d.subject,
             html: cidToUrl(d.html ?? '', d.attachments),
             attachments: d.attachments,
+            privateDays: d.privateLink?.days ?? null,
           };
           if (onReopen) onReopen(reopen);
           toast(sendAt ? 'Scheduled send cancelled' : 'Sending undone');
@@ -631,6 +637,40 @@ export function ComposeForm({
         )}
       </div>
 
+      {privateDays !== null && (
+        <div className={cx('shrink-0', variant === 'window' ? 'px-3' : '')}>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent-softer px-3 py-1.5 text-[13px]">
+            <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
+            <span className="min-w-0 flex-1">Recipients get a link instead of the message. It stops working after</span>
+            <select
+              aria-label="The link stops working after"
+              value={privateDays}
+              onChange={(e) => {
+                setPrivateDays(Number(e.target.value));
+                markDirty();
+              }}
+              className="h-7 rounded-md border border-line bg-panel px-1.5 text-[13px] outline-none"
+            >
+              <option value={1}>1 day</option>
+              <option value={7}>1 week</option>
+              <option value={30}>1 month</option>
+            </select>
+            <button
+              type="button"
+              aria-label="Send as a normal message"
+              title="Send as a normal message"
+              className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
+              onClick={() => {
+                setPrivateDays(null);
+                markDirty();
+              }}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className={cx('flex shrink-0 items-center gap-1 py-2.5', variant === 'window' ? 'px-3' : '')}>
         <div className="flex overflow-hidden rounded-full bg-accent text-accent-fg shadow-sm">
           <button
@@ -660,6 +700,18 @@ export function ComposeForm({
         </IconButton>
         <IconButton size="sm" label="Insert photo" onClick={() => imageInput.current?.click()}>
           <ImageIcon className="size-4" />
+        </IconButton>
+        <IconButton
+          size="sm"
+          label="Send as private link"
+          active={privateDays !== null}
+          aria-pressed={privateDays !== null}
+          onClick={() => {
+            setPrivateDays((d) => (d === null ? 7 : null));
+            markDirty();
+          }}
+        >
+          <Lock className="size-4" />
         </IconButton>
         <SavedRepliesMenu
           onInsert={(h) => {

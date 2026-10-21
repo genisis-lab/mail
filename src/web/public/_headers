@@ -12,3 +12,10 @@
 
 /icons/*
   Cache-Control: public, max-age=86400
+
+# Private links (/p/<token>): the token is in the address. Referrer-Policy joins the one above
+# ("same-origin, no-referrer"), and browsers use the last one.
+/p/*
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex
+  Cache-Control: no-store
