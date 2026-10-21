@@ -16,10 +16,11 @@ import { disablePush, enablePush, isIos, isStandalone, pushStatus, pushSupported
 import { ImportExportTab } from './ImportExport';
 import { addPasskey, deviceName, passkeysSupported } from '../../lib/passkeys';
 import { SavedRepliesTab } from './SavedReplies';
+import { EncryptionTab } from './Encryption';
 import { Avatar, refreshAvatar, resetAvatars } from '../../components/Avatar';
 import { squarePicture } from '../../lib/picture';
 
-type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'replies' | 'import' | 'security';
+type Tab = 'general' | 'labels' | 'filters' | 'accounts' | 'replies' | 'import' | 'security' | 'encryption';
 
 export function SettingsPage() {
   const { tab = 'general' } = useParams();
@@ -44,6 +45,7 @@ export function SettingsPage() {
             { value: 'replies', label: 'Saved replies' },
             { value: 'import', label: 'Import & export' },
             { value: 'security', label: 'Security' },
+            { value: 'encryption', label: 'Encryption' },
           ]}
         />
       </div>
@@ -56,6 +58,7 @@ export function SettingsPage() {
           {tab === 'replies' && <SavedRepliesTab />}
           {tab === 'import' && <ImportExportTab />}
           {tab === 'security' && <SecurityTab />}
+          {tab === 'encryption' && <EncryptionTab />}
         </div>
       </div>
     </div>

@@ -21,6 +21,8 @@ export interface DraftInput {
   bcc?: string | Addr[];
   subject?: string;
   html?: string;
+  /** Plain text only, sent exactly as written (PGP-encrypted or signed text); `html` is ignored. */
+  text?: string;
   attachments?: number[];
   /** db id of the message being replied to / forwarded */
   replyToId?: number | null;
@@ -76,8 +78,8 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
   const cc = addrList(input.cc);
   const bcc = addrList(input.bcc);
   const subject = (input.subject ?? '').slice(0, 998);
-  const html = input.html ?? '';
-  const text = htmlToText(html);
+  const html = input.text !== undefined ? '' : (input.html ?? '');
+  const text = input.text ?? htmlToText(html);
   const ts = now();
   const body = await bodyColumns(text, html);
 
@@ -90,7 +92,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
       run(
         `UPDATE messages SET from_addr = ?, from_name = ?, identity = ?, to_json = ?, cc_json = ?, bcc_json = ?, subject = ?,
            html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ?, jmap_rev = jmap_rev + 1 WHERE id = ?`,
-        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, html.length, draftId],
+        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, (html || text).length, draftId],
       );
       // A new conversation takes its subject from the draft as it's finished, not as first autosaved.
       run('UPDATE threads SET subject = ? WHERE id = (SELECT thread_id FROM messages WHERE id = ?) AND (SELECT COUNT(*) FROM messages WHERE thread_id = threads.id) = 1', [
@@ -123,7 +125,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
         `INSERT INTO messages (user_id, thread_id, folder, direction, from_addr, from_name, identity, to_json, cc_json, bcc_json, subject, snippet,
            text_body, html_body, body_blob, date, size, is_read, status, in_reply_to, refs, created_at)
          VALUES (?, ?, 'drafts', 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?)`,
-        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), body.text_body, body.html_body, body.body_blob, ts, html.length, inReplyTo, refs, ts],
+        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), body.text_body, body.html_body, body.body_blob, ts, (html || text).length, inReplyTo, refs, ts],
       );
     }
     if (input.attachments) linkAttachments(userId, draftId, input.attachments);
@@ -190,7 +192,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     cc,
     bcc,
     subject: d.subject,
-    html: priv ? '<p></p>' : d.html_body || '<p></p>',
+    // A plain-text draft (encrypted or signed) goes out as text/plain alone.
+    html: priv ? '<p></p>' : d.html_body || (d.text_body ? null : '<p></p>'),
     text: priv ? '' : d.text_body,
     inReplyTo: d.in_reply_to,
     references: refs,
