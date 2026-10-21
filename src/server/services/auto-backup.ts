@@ -7,13 +7,18 @@
  *
  * Message files (raw MIME, attachments) are already in R2 and are kept for
  * 30 days after nothing references them, so a restore finds them.
+ *
+ * Parts are encrypted like every stored file (see putBlob), so only this
+ * instance's WREN_SECRET reads them; downloading one decrypts it into a
+ * normal export file.
  */
 import { all, get, insert, now, run } from '../db/index.js';
 import { logger } from '../lib/log.js';
+import { loadBlob, putBlob } from '../mail/blobs.js';
 import { platform } from '../platform.js';
 import { getSettings } from '../settings.js';
 import { raiseAlert, resolveAlert } from './alerts.js';
-import { dataTables, exportHeader } from './backup.js';
+import { dataTables, exportHeader, RestoreError } from './backup.js';
 
 const log = logger('auto-backup');
 const PART_BYTES = 8 * 1024 * 1024;
@@ -118,9 +123,7 @@ export async function stepBackup(b: BackupRow, budgetMs = STEP_MS, partBytes = P
     const flush = async () => {
       if (!text) return;
       const data = enc.encode(text);
-      const key = randomKey();
-      await platform().blobs.put(key, data);
-      parts.push(key);
+      parts.push(await putBlob(data, randomKey()));
       bytes += data.length;
       text = '';
       // Progress is saved after every part, so a crash resumes here.
@@ -194,8 +197,11 @@ export function backupStream(b: BackupRow): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (i >= parts.length) return controller.close();
-      const data = await platform().blobs.get(parts[i++]);
-      if (!data) return controller.error(new Error('Part of this backup is missing from storage'));
+      // As a RestoreError, the reason reaches the person restoring (e.g. a backup saved with a different WREN_SECRET).
+      const data = await loadBlob(parts[i++]).catch((err: Error) => {
+        throw new RestoreError(err.message);
+      });
+      if (!data) return controller.error(new RestoreError('Part of this backup is missing from storage'));
       controller.enqueue(data);
     },
   });

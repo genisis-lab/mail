@@ -19,7 +19,7 @@ import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
 import { ProviderError } from '../providers/types.js';
-import { blobStoreSize, putBlob } from '../mail/blobs.js';
+import { blobEncryptionStatus, blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
 import { purgeMessages } from '../mail/store.js';
@@ -83,7 +83,7 @@ adminRoutes.get('/overview', async (c) => {
   if (config.keyMismatch)
     warnings.push({
       level: 'warn',
-      message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials and two-factor secrets cannot be read. Restore the previous key, or re-enter provider settings and reset 2FA for affected users.',
+      message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials, two-factor secrets and stored mail files (attachments, original messages) cannot be read. Restore the previous key, or re-enter provider settings and reset 2FA for affected users.',
       link: '/admin/providers',
     });
   if (config.publicUrl.includes('localhost')) warnings.push({ level: 'info', message: 'PUBLIC_URL is localhost — inbound webhook URLs will not be reachable by providers.' });
@@ -109,6 +109,7 @@ adminRoutes.get('/system', async (c) =>
     publicUrl: config.publicUrl,
     storage: storage(),
     backup: { pointInTime: !!platform().pointInTime, searchRebuilding: searchRebuildPending() },
+    encryptingFiles: blobEncryptionStatus(),
     keyMismatch: config.keyMismatch,
     ...platform().systemInfo(),
   }),
