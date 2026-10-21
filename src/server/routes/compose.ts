@@ -21,6 +21,8 @@ const draftSchema = z.object({
   attachments: z.array(z.number().int().positive()).max(100).optional(),
   replyToId: z.number().int().positive().nullable().optional(),
   forwardOfId: z.number().int().positive().nullable().optional(),
+  // Send as a private link that stops working after a day, a week or a month.
+  privateDays: z.union([z.literal(1), z.literal(7), z.literal(30)]).nullable().optional(),
 });
 
 async function draftResponse(userId: number, id: number) {

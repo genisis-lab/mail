@@ -692,6 +692,28 @@ export const migrations: string[] = [
   CREATE INDEX idx_push_user ON push_subscriptions(user_id);
   CREATE INDEX idx_push_endpoint ON push_subscriptions(endpoint);
   `,
+
+  // 16: private links: recipients get a link instead of the message, and it stops working
+  //     after a set time. The row is made when a draft is marked private; the token's hash,
+  //     the expiry and the content are filled in as the message goes out (mail/private.ts).
+  //     attachments: the message's attachment rows as JSON [{id, filename, content_type, size, content_id, inline, blob}].
+  //     Expired and withdrawn rows are deleted.
+  `
+  CREATE TABLE private_links (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+    days        INTEGER NOT NULL,
+    token_hash  TEXT UNIQUE,
+    expires_at  INTEGER,
+    html_body   TEXT,
+    text_body   TEXT,
+    body_blob   TEXT,
+    attachments TEXT NOT NULL DEFAULT '[]',
+    created_at  INTEGER NOT NULL
+  );
+  CREATE INDEX idx_private_links_expiry ON private_links(expires_at);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

@@ -42,7 +42,7 @@ export async function loadBlob(name: string): Promise<Buffer | null> {
 export const BLOB_GRACE_MS = 30 * 86_400_000;
 
 /**
- * Remove blobs no longer referenced by any message, attachment or outbox row.
+ * Remove blobs no longer referenced by any message, attachment, outbox row or private link.
  * A blob is first marked when found unreferenced and deleted only after the
  * grace period.
  */
@@ -53,6 +53,8 @@ export async function collectGarbage(): Promise<{ removed: number; bytes: number
      UNION SELECT body_blob FROM messages WHERE body_blob IS NOT NULL
      UNION SELECT blob FROM attachments
      UNION SELECT raw_blob FROM outbox
+     UNION SELECT body_blob FROM private_links WHERE body_blob IS NOT NULL
+     UNION SELECT json_extract(j.value, '$.blob') FROM private_links p, json_each(p.attachments) j
      UNION SELECT avatar_blob FROM users WHERE avatar_blob IS NOT NULL
      UNION SELECT blob FROM avatar_cache WHERE blob IS NOT NULL
      UNION SELECT j.value FROM backups b, json_each(b.parts) j`,

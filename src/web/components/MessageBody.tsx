@@ -22,6 +22,7 @@ export function MessageBody({
   allowRemote,
   images,
   onBlockedImages,
+  attachmentUrl,
 }: {
   html: string | null;
   text: string | null;
@@ -30,6 +31,8 @@ export function MessageBody({
   /** Pictures the server signed for its image proxy ({url: sig}). */
   images?: Record<string, string>;
   onBlockedImages?: (n: number) => void;
+  /** Where an inline picture (cid:) loads from, when not /api/attachments/<id> (private links). */
+  attachmentUrl?: (id: number) => string;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(60);
@@ -39,9 +42,9 @@ export function MessageBody({
   const isHtml = !!html;
 
   const rendered = useMemo(() => {
-    if (html) return renderMailHtml(html, { attachments, allowRemote, proxy: images });
+    if (html) return renderMailHtml(html, { attachments, allowRemote, proxy: images, attachmentUrl });
     return { html: textToSafeHtml(text ?? ''), blockedImages: 0, trackers: 0 };
-  }, [html, text, attachments, allowRemote, images]);
+  }, [html, text, attachments, allowRemote, images, attachmentUrl]);
 
   useEffect(() => onBlockedImages?.(rendered.blockedImages), [rendered.blockedImages, onBlockedImages]);
 

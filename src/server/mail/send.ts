@@ -9,6 +9,7 @@ import { bodyColumns, loadBody } from './body.js';
 import { buildMime, quoteHtml, escapeHtml } from './compose.js';
 import { cancelOutbox, enqueue } from './outbound.js';
 import { htmlToText, makeSnippet } from './parse.js';
+import { isPrivate, linkMade, setPrivate } from './private.js';
 import { indexMessage, touchContacts } from './store.js';
 import { getMessage } from './threads.js';
 
@@ -24,6 +25,8 @@ export interface DraftInput {
   /** db id of the message being replied to / forwarded */
   replyToId?: number | null;
   forwardOfId?: number | null;
+  /** Send as a private link that works for this many days (null: a normal message). Web compose only. */
+  privateDays?: number | null;
 }
 
 function addrList(v: string | Addr[] | undefined): Addr[] {
@@ -124,6 +127,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
       );
     }
     if (input.attachments) linkAttachments(userId, draftId, input.attachments);
+    if (input.privateDays !== undefined) setPrivate(userId, draftId, input.privateDays);
     indexMessage(draftId);
     return draftId;
   });
@@ -176,6 +180,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   if (totalSize > s['limits.maxAttachmentMb'] * 1024 * 1024) throw badRequest(`Attachments exceed ${s['limits.maxAttachmentMb']} MB`);
 
   const refs: string[] = (d.refs || '').split(/\s+/).filter(Boolean);
+  // A private message's content never enters the outbox: it's replaced by the notice as it goes out (private.ts).
+  const priv = isPrivate(draftId);
   const { raw, messageId } = await buildMime({
     // Drafts made by a mail app (JMAP) already have their Message-ID.
     messageId: d.message_id || undefined,
@@ -184,13 +190,13 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     cc,
     bcc,
     subject: d.subject,
-    html: d.html_body || '<p></p>',
-    text: d.text_body,
+    html: priv ? '<p></p>' : d.html_body || '<p></p>',
+    text: priv ? '' : d.text_body,
     inReplyTo: d.in_reply_to,
     references: refs,
     calendar: opts.calendar,
     attachments: await Promise.all(
-      atts.map(async (a: any) => ({
+      (priv ? [] : atts).map(async (a: any) => ({
         filename: a.filename,
         contentType: a.content_type,
         content: await getBlob(a.blob),
@@ -246,7 +252,8 @@ function addKeyword(userId: number, messageId: string, keyword: string) {
 export function cancelSend(userId: number, messageId: number): boolean {
   const m = get<{ id: number; status: string; size: number }>(`SELECT id, status, size FROM messages WHERE id = ? AND user_id = ? AND folder = 'sent'`, [messageId, userId]);
   if (!m || m.status !== 'queued') return false;
-  if (!cancelOutbox(messageId)) return false;
+  // A private message being retried already has its link (and someone may have it).
+  if (linkMade(messageId) || !cancelOutbox(messageId)) return false;
   run(
     `UPDATE messages SET folder = 'drafts', status = 'draft', send_at = NULL, is_scheduled = 0, raw_blob = NULL, message_id = NULL WHERE id = ?`,
     [messageId],

@@ -12,6 +12,7 @@ import { adminOpsRoutes } from './routes/admin-ops.js';
 import { meRoutes } from './routes/me.js';
 import { inboundRoutes } from './routes/inbound.js';
 import { avatarRoutes } from './routes/avatars.js';
+import { privateRoutes } from './routes/private.js';
 import { jmapRoutes } from './jmap/routes.js';
 import { pushChanges } from './jmap/push.js';
 
@@ -45,7 +46,8 @@ export function createApp() {
   app.use('*', async (c, next) => {
     await next();
     c.header('X-Content-Type-Options', 'nosniff');
-    c.header('Referrer-Policy', 'same-origin');
+    // Private links ask for no referrer at all.
+    if (!c.res.headers.has('Referrer-Policy')) c.header('Referrer-Policy', 'same-origin');
     c.header('X-Frame-Options', 'SAMEORIGIN');
     if (!c.req.path.startsWith('/api/') && !c.req.path.startsWith('/jmap/')) c.header('Content-Security-Policy', CSP);
   });
@@ -105,6 +107,8 @@ export function createApp() {
   app.route('/api/setup', setupRoutes);
   app.route('/api/auth', authRoutes);
   app.route('/api/inbound', inboundRoutes as any);
+  // Private links: public (GET only, so the CSRF check above doesn't apply), no sign-in.
+  app.route('/api/private', privateRoutes);
 
   // Account routes stay reachable while 2FA setup is pending.
   app.use('/api/account/*', requireUser);

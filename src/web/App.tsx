@@ -7,6 +7,7 @@ import { ComposeProvider } from './components/Compose';
 import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForcePasswordPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
 import { MailLayout } from './pages/MailLayout';
 import { AdminLayout } from './pages/admin/AdminLayout';
+import { PrivateMessagePage } from './pages/PrivateMessagePage';
 
 export function App() {
   const me = useMe();
@@ -63,6 +64,7 @@ export function App() {
         <Route path="/reset" element={<ResetPage instance={instance} />} />
         <Route path="/forgot" element={<ForgotPage instance={instance} />} />
         <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn={false} />} />
+        <Route path="/p/:token" element={<PrivateMessagePage instance={instance} />} />
         <Route path="*" element={<LoginPage instance={instance} mfaPending={me.data.mfaPending} next={location.pathname} mode={mode} />} />
       </Routes>
     );
@@ -88,6 +90,7 @@ export function App() {
           <Route path="/reset" element={<ResetPage instance={instance} />} />
           <Route path="/forgot" element={<ForgotPage instance={instance} />} />
           <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn />} />
+          <Route path="/p/:token" element={<PrivateMessagePage instance={instance} />} />
           <Route path="/admin/*" element={isAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
           <Route path="/*" element={<MailLayout />} />
         </Routes>

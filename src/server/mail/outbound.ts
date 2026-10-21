@@ -13,6 +13,7 @@ import { storeMessage } from './store.js';
 import { escapeHtml } from './compose.js';
 import { suppress, suppressionFor, suppressionReason } from '../services/suppressions.js';
 import { badMailbox } from './dsn.js';
+import { preparePrivateLink } from './private.js';
 
 const log = logger('outbound');
 
@@ -213,6 +214,8 @@ export function setLocalDeliver(fn: LocalDeliver) {
 }
 
 async function deliver(job: OutboxRow) {
+  // A private message leaves as a notice with its link, made now so the expiry counts from here.
+  if (job.message_id) job.raw_blob = (await preparePrivateLink(job.message_id, job.id)) ?? job.raw_blob;
   const recipients: string[] = JSON.parse(job.recipients);
   const raw = await getBlob(job.raw_blob);
   const settings = getSettings();

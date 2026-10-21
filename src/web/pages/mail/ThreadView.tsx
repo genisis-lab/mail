@@ -51,6 +51,7 @@ import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
 import { InviteCard } from './InviteCard';
 import { ParcelCard } from './ParcelCard';
+import { PrivateLinkCard } from './PrivateLinkCard';
 import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
@@ -921,6 +922,7 @@ function MessageCard({
         )}
 
         {m.hasInvite && <InviteCard messageId={m.id} canAnswer={canAnswer} />}
+        {m.privateLink && <PrivateLinkCard messageId={m.id} link={m.privateLink} />}
         {!alwaysShowImages && !showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
         <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} images={m.images} onBlockedImages={setBlocked} />
 
