@@ -112,7 +112,7 @@ composeRoutes.post('/uploads', async (c) => {
         contentType: file.type || 'application/octet-stream',
         content: Buffer.from(await file.arrayBuffer()),
         inline: key === 'inline',
-        contentId: key === 'inline' ? `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@wren` : null,
+        contentId: key === 'inline' ? `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@inline` : null,
       }),
     );
   }

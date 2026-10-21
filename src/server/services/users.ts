@@ -193,7 +193,22 @@ export function deleteUser(id: number, handTo?: UserRow | null): number {
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   const moved = tx(() => {
     // The inbound log has no user id and is kept 90 days: blank what it says about their mail.
-    run(`UPDATE inbound_log SET subject = '', mail_from = '' WHERE rcpt_to COLLATE NOCASE IN (SELECT address FROM addresses WHERE user_id = ?)`, [id]);
+    // Rows are matched by the address mail was delivered to: user+tag@ counts as user@ (unless that's
+    // someone's own address), and mail their catch-all took is any address on the domain nobody owns.
+    run(
+      `WITH log AS (
+         SELECT id, lower(substr(rcpt_to, instr(rcpt_to, '@') + 1)) AS dom,
+           CASE WHEN instr(rcpt_to, '+') > 1 AND instr(rcpt_to, '+') < instr(rcpt_to, '@')
+                 AND lower(rcpt_to) NOT IN (SELECT lower(address) FROM addresses)
+             THEN lower(substr(rcpt_to, 1, instr(rcpt_to, '+') - 1) || substr(rcpt_to, instr(rcpt_to, '@')))
+             ELSE lower(rcpt_to) END AS rcpt
+         FROM inbound_log)
+       UPDATE inbound_log SET subject = '', mail_from = '' WHERE id IN (
+         SELECT id FROM log
+         WHERE rcpt IN (SELECT lower(address) FROM addresses WHERE user_id = ?)
+            OR (dom IN (SELECT lower(name) FROM domains WHERE catch_all_user_id = ?) AND rcpt NOT IN (SELECT lower(address) FROM addresses)))`,
+      [id, id],
+    );
     const n = handTo ? run(`UPDATE addresses SET user_id = ?, kind = 'alias', name = ?, created_by = NULL WHERE user_id = ?`, [handTo.id, handTo.name, id]).changes : 0;
     if (handTo) run('UPDATE domains SET catch_all_user_id = ? WHERE catch_all_user_id = ?', [handTo.id, id]);
     run('DELETE FROM users WHERE id = ?', [id]);

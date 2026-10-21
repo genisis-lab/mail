@@ -26,7 +26,8 @@ const REDIRECTS: [RegExp, RegExp, string[]][] = [
 
 const webUrl = (s: string): URL | null => {
   try {
-    const t = s.trim();
+    // As browsers do: drop tabs and newlines anywhere, and control characters and spaces at the ends.
+    const t = s.replace(/[\t\n\r]/g, '').replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
     // "//site/page" is a web link too: it takes the page's own scheme (browsers read \ as / here).
     const u = new URL(/^[/\\]{2}/.test(t) ? `https:${t}` : t);
     return /^https?:$/.test(u.protocol) ? u : null;

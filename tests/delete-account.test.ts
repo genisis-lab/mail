@@ -85,8 +85,16 @@ describe('deleting your own account', () => {
     await h.call('POST', '/api/account/api-keys', { name: 'Script' });
     expect(all('SELECT 1 FROM sessions WHERE user_id = ?', [ids.ivy])).toHaveLength(2);
     // A logged arrival at an alias, in other letter case.
-    run(`INSERT INTO inbound_log (source, mail_from, rcpt_to, subject, status, created_at) VALUES ('smtp', 'pat@example.org', 'Ivy.Shop@wren.test', 'Another secret', 'accepted', ?)`, [Date.now()]);
-    expect(all(`SELECT 1 FROM inbound_log WHERE subject LIKE '%secret%' AND mail_from = 'pat@example.org'`)).toHaveLength(2);
+    const log = (rcpt: string, subject: string) =>
+      run(`INSERT INTO inbound_log (source, mail_from, rcpt_to, subject, status, created_at) VALUES ('smtp', 'pat@example.org', ?, ?, 'accepted', ?)`, [rcpt, subject, Date.now()]);
+    log('Ivy.Shop@wren.test', 'Another secret');
+    // Plus-addressed mail is logged as written; someone else's plus address is theirs, not Ivy's.
+    log('ivy+bank@wren.test', 'Bank secret');
+    log('kim+bank@wren.test', 'Kim keeps this');
+    // Ivy also takes the domain's catch-all mail.
+    run(`UPDATE domains SET catch_all_user_id = ? WHERE name = 'wren.test'`, [ids.ivy]);
+    log('nobody@wren.test', 'Catch-all secret');
+    expect(all(`SELECT 1 FROM inbound_log WHERE subject LIKE '%secret%' AND mail_from = 'pat@example.org'`)).toHaveLength(4);
 
     const r = await del('ivy password 123');
     expect(r.body).toEqual({ ok: true, remaining: 0 });
@@ -111,7 +119,10 @@ describe('deleting your own account', () => {
     expect(all(`SELECT subject, mail_from FROM inbound_log WHERE rcpt_to LIKE 'ivy%'`)).toEqual([
       { subject: '', mail_from: '' },
       { subject: '', mail_from: '' },
+      { subject: '', mail_from: '' },
     ]);
+    expect(all(`SELECT subject FROM inbound_log WHERE rcpt_to = 'kim+bank@wren.test'`)).toEqual([{ subject: 'Kim keeps this' }]);
+    expect(all(`SELECT subject FROM inbound_log WHERE rcpt_to = 'nobody@wren.test'`)).toEqual([{ subject: '' }]);
   });
 
   it('carries on with the next account signed in on this browser', async () => {

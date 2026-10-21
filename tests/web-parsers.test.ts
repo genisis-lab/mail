@@ -136,6 +136,10 @@ describe('links and trackers in received mail', async () => {
     expect(linkMismatch('pay\u200bpal.com', 'https://evil.example/')).toBe('paypal.com');
     expect(linkMismatch('paypal.com', '//evil.example/login')).toBe('paypal.com');
     expect(linkMismatch('paypal.com', '/\\evil.example/login')).toBe('paypal.com');
+    // Browsers drop tabs and newlines inside, and control characters at the ends, before reading a link.
+    expect(linkMismatch('paypal.com', '/\t/evil.example/login')).toBe('paypal.com');
+    expect(linkMismatch('paypal.com', '/\n/evil.example/login')).toBe('paypal.com');
+    expect(linkMismatch('paypal.com', '\u0001//evil.example/login')).toBe('paypal.com');
     // A file or product name only looks like a domain; written as an address, it's checked.
     for (const name of ['invoice.pdf', 'deck.pptx', 'Budget.XLSX', 'Node.js', 'README.md', 'index.html', 'photo.jpeg', 'files.zip']) {
       expect(linkMismatch(name, 'https://drive.example/f/1')).toBeNull();
