@@ -14,7 +14,7 @@ import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { createUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -22,7 +22,6 @@ import { ProviderError } from '../providers/types.js';
 import { blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
-import { purgeMessages } from '../mail/store.js';
 import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
 import { systemSender } from '../services/system-mail.js';
 import { closeStreams, closeUserStreams } from '../jmap/push.js';
@@ -339,15 +338,7 @@ adminRoutes.delete('/users/:id', (c) => {
   // Optionally hand their addresses to someone else, so mail sent to them keeps arriving.
   const handTo = c.req.query('transferTo') ? getUser(Number(c.req.query('transferTo'))) : null;
   if (c.req.query('transferTo') && (!handTo || handTo.id === id || handTo.status !== 'active')) throw badRequest('Pick an active account to receive their mail');
-  const msgs = all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id);
-  purgeMessages(msgs);
-  const moved = tx(() => {
-    const n = handTo ? run(`UPDATE addresses SET user_id = ?, kind = 'alias', name = ?, created_by = NULL WHERE user_id = ?`, [handTo.id, handTo.name, id]).changes : 0;
-    if (handTo) run('UPDATE domains SET catch_all_user_id = ? WHERE catch_all_user_id = ?', [handTo.id, id]);
-    run('DELETE FROM users WHERE id = ?', [id]);
-    return n;
-  });
-  closeUserStreams(id);
+  const moved = deleteUser(id, handTo);
   act(c, 'admin.user_deleted', u.email, handTo ? { addressesTo: handTo.email, moved } : undefined);
   return c.json({ ok: true, moved });
 });

@@ -8,9 +8,9 @@ import { isEmail } from '../lib/addr.js';
 import { config } from '../config.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword } from '../services/users.js';
+import { checkTwoStepCode, deleteUser, getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword, type UserRow } from '../services/users.js';
 import { sendRecoveryVerification } from '../services/account-links.js';
-import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
+import { body, clientIp, intParam, rateLimit, signOut, type AppEnv } from '../http/context.js';
 import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
 import { WebAuthnError } from '../lib/webauthn.js';
 import { clearUserAvatar, setUserAvatar } from '../services/avatars.js';
@@ -346,3 +346,39 @@ accountRoutes.delete('/api-keys/:id', (c) => {
   return c.json({ ok: true });
 });
 
+// ── Deleting your own account ───────────────────────────────────────────────
+
+/** Why this person can't delete their own account (null: they can). */
+function deleteBlocked(user: UserRow): string | null {
+  if (!getSettings()['users.selfDelete']) return 'Your administrator has turned this off. Ask an administrator to delete your account for you.';
+  const left = get<{ owners: number | null; admins: number | null }>(
+    `SELECT SUM(role = 'owner') AS owners, SUM(role != 'user') AS admins FROM users WHERE kind = 'person' AND status = 'active' AND id != ?`,
+    [user.id],
+  );
+  if (user.role === 'owner' && !left?.owners) return 'You’re the only owner of this server. Make someone else an owner first, in Admin → Users.';
+  if (user.role !== 'user' && !left?.admins) return 'You’re the only administrator. Make someone else an administrator first, in Admin → Users.';
+  return null;
+}
+
+accountRoutes.get('/delete', (c) => c.json({ blocked: deleteBlocked(c.get('user')) }));
+
+/**
+ * Delete this account and everything in it, as when an administrator deletes
+ * someone. Needs the password, and a 2-step code when that's on. This browser
+ * carries on with its next account, if another is signed in here.
+ */
+accountRoutes.post('/delete', async (c) => {
+  const user = c.get('user');
+  const input = await body(c, z.object({ password: z.string().min(1).max(256), code: z.string().max(32).optional() }));
+  const blocked = deleteBlocked(user);
+  if (blocked) throw forbidden(blocked);
+  rateLimit(`delete-account:${user.id}`, 5, 15 * 60_000);
+  if (!(await verifyPassword(input.password, user.password_hash))) throw unauthorized('Password is incorrect');
+  if (user.totp_enabled && !input.code) throw badRequest('Enter the code from your authenticator app');
+  if (user.totp_enabled && !checkTwoStepCode(user, input.code!, clientIp(c))) throw unauthorized('That code is not valid');
+  // Sign out here first: it finds this browser's session and hands its place to the next account.
+  const { remaining } = signOut(c);
+  deleteUser(user.id);
+  audit(null, 'account.deleted', user.email, undefined, clientIp(c));
+  return c.json({ ok: true, remaining });
+});
