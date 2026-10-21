@@ -7,6 +7,7 @@ import { createUser, savePrefs, getPrefs } from '../src/server/services/users';
 import { resolveRecipient } from '../src/server/services/routing';
 import { ingest } from '../src/server/mail/ingest';
 import { buildMime } from '../src/server/mail/compose';
+import { getBlob } from '../src/server/mail/blobs';
 import { processQueue } from '../src/server/mail/outbound';
 import { saveDraft, sendDraft, cancelSend, composeTemplate } from '../src/server/mail/send';
 import { applyThreadAction, getThread, listThreads, counters } from '../src/server/mail/threads';
@@ -99,6 +100,10 @@ describe('inbound pipeline', () => {
     const fwd = get<any>(`SELECT * FROM outbox WHERE kind = 'forward' ORDER BY id DESC LIMIT 1`);
     expect(JSON.parse(fwd.recipients)).toEqual(['partner@example.com']);
     expect(fwd.mail_from).toBe('team@wren.test');
+    // The copy counts its hops, and doesn't say which software (or version) sent it.
+    const head = (await getBlob(fwd.raw_blob)).toString('utf8').split('\r\n\r\n')[0];
+    expect(head).toMatch(/^X-Forwarded-By: team@wren\.test$/m);
+    expect(head).not.toMatch(/^(X-Mailer|User-Agent|X-Originating-IP|X-Wren-[\w-]+):/im);
   });
 
   it('sends a vacation auto-reply once per sender', async () => {

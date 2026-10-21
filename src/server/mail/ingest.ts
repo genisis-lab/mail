@@ -286,8 +286,9 @@ async function deliverToUser(
   return { stored: true, status: folder === 'spam' ? 'spam' : 'accepted', reason: reason || folder };
 }
 
+/** Hops so far, from the header each forward adds (named so it doesn't say which software forwarded). */
 function forwardHops(p: Parsed): number {
-  return (p.headers.get('x-wren-forwarded') ?? []).flatMap((v) => v.split(',')).filter((v) => v.trim()).length;
+  return (p.headers.get('x-forwarded-by') ?? []).flatMap((v) => v.split(',')).filter((v) => v.trim()).length;
 }
 
 /**
@@ -303,7 +304,7 @@ async function forwardCopy(p: Parsed, raw: Buffer, via: string, to: string[], us
   const targets = to.map(normalizeEmail).filter((t) => t && t !== via.toLowerCase());
   if (!targets.length) return;
   const origName = p.from?.name || p.from?.address || 'Unknown sender';
-  const prior = getHeader(p, 'x-wren-forwarded');
+  const prior = getHeader(p, 'x-forwarded-by');
   const { raw: fwdRaw } = await buildMime({
     from: { address: via, name: `${origName} via ${via}`.slice(0, 120) },
     to: p.to.length ? p.to : [{ address: via }],
@@ -316,7 +317,7 @@ async function forwardCopy(p: Parsed, raw: Buffer, via: string, to: string[], us
     references: p.references,
     attachments: p.attachments,
     headers: {
-      'X-Wren-Forwarded': prior ? `${prior}, ${via}` : via,
+      'X-Forwarded-By': prior ? `${prior}, ${via}` : via,
       'X-Original-From': p.from ? formatAddr(p.from) : '',
       ...(p.messageId ? { 'X-Original-Message-ID': `<${p.messageId}>` } : {}),
     },

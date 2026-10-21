@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import type { Addr } from '../../shared/types.js';
-import { APP_NAME, APP_VERSION } from '../../shared/brand.js';
 import { domainOf } from '../lib/addr.js';
 import { buildMimeMessage } from './mime.js';
 import { htmlToText } from './parse.js';
@@ -52,7 +51,8 @@ export async function buildMime(input: ComposeInput): Promise<{ raw: Buffer; mes
     inReplyTo: input.inReplyTo,
     references: input.references,
     date: input.date,
-    headers: { 'X-Mailer': `${APP_NAME} ${APP_VERSION}`, ...(input.headers ?? {}) },
+    // No X-Mailer or the like: sent mail doesn't say which software or version wrote it.
+    headers: input.headers,
     attachments: input.attachments,
     calendar: input.calendar,
   });
