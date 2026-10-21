@@ -85,7 +85,7 @@ interface R2Bucket {
   get(key: string): Promise<R2ObjectBody | null>;
   put(key: string, value: ArrayBuffer | Uint8Array | string): Promise<R2Object | null>;
   delete(key: string | string[]): Promise<void>;
-  list(opts?: { cursor?: string; limit?: number; prefix?: string }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string }>;
+  list(opts?: { cursor?: string; limit?: number; prefix?: string; startAfter?: string }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string }>;
 }
 
 interface ForwardableEmailMessage {

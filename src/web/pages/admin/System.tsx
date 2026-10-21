@@ -56,6 +56,16 @@ export function SystemPage() {
     ['Version', `Wren ${s.version}`],
     ['Runtime', s.platform],
     ['Message storage', s.blobStorage],
+    [
+      'Mail files',
+      !s.encryptingFiles ? (
+        <Badge tone="ok">encrypted</Badge>
+      ) : s.keyMismatch ? (
+        <span className="text-muted">Encrypting existing mail files is paused until the original WREN_SECRET is back</span>
+      ) : (
+        <span className="text-muted">Encrypting existing mail files{s.encryptingFiles.left === null ? '…' : `: ${s.encryptingFiles.left.toLocaleString()} left`}</span>
+      ),
+    ],
     ['Incoming mail', selfHosted ? 'Provider webhooks (for example Resend inbound)' : 'Cloudflare Email Routing → this Worker, plus any provider webhooks'],
     [
       'Cloudflare Email Service',
@@ -72,7 +82,7 @@ export function SystemPage() {
     [
       'Encryption key',
       s.keyMismatch ? (
-        <Badge tone="danger">WREN_SECRET changed — encrypted settings can’t be read</Badge>
+        <Badge tone="danger">WREN_SECRET changed — mail files and encrypted settings can’t be read</Badge>
       ) : s.secretFromEnv ? (
         <Badge tone="ok">from WREN_SECRET</Badge>
       ) : (
@@ -171,7 +181,7 @@ function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boole
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'key_mismatch')) throw err;
         const go = window.confirm(
-          'This export was made with a different encryption key (WREN_SECRET). Provider credentials and two-factor secrets in it can’t be read here.\n\nRestore anyway? Two-factor sign-in will be turned off for all users and you’ll re-enter provider settings. (To keep them, set WREN_SECRET to the original instance’s key first.)',
+          'This export was made with a different encryption key (WREN_SECRET). Provider credentials and two-factor secrets in it can’t be read here, and neither can mail files (attachments, original messages) stored with that key.\n\nRestore anyway? Two-factor sign-in will be turned off for all users and you’ll re-enter provider settings. (To keep them, set WREN_SECRET to the original instance’s key first.)',
         );
         if (!go) return;
         r = await uploadRestore(file, true);

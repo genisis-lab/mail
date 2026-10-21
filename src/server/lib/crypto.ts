@@ -2,13 +2,15 @@ import crypto from 'node:crypto';
 import { config } from '../config.js';
 
 // Keys are derived lazily: on Workers the secret is only known once the env is available.
-let keys: { secret: string; enc: Buffer; sign: Buffer } | null = null;
+let keys: { secret: string; enc: Buffer; sign: Buffer; blob: Buffer; blobName: Buffer } | null = null;
 function derived() {
   if (!keys || keys.secret !== config.secret) {
     keys = {
       secret: config.secret,
       enc: Buffer.from(crypto.hkdfSync('sha256', config.secret, 'wren', 'config-encryption-v1', 32)),
       sign: Buffer.from(crypto.hkdfSync('sha256', config.secret, 'wren', 'signing-v1', 32)),
+      blob: Buffer.from(crypto.hkdfSync('sha256', config.secret, 'wren', 'blob-encryption-v1', 32)),
+      blobName: Buffer.from(crypto.hkdfSync('sha256', config.secret, 'wren', 'blob-name-v1', 32)),
     };
   }
   return keys;
@@ -34,6 +36,49 @@ export function decrypt(payload: string): string {
   const decipher = crypto.createDecipheriv('aes-256-gcm', derived().enc, Buffer.from(iv, 'base64url'));
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8');
+}
+
+// ── Stored files (R2 / blob storage) ────────────────────────────────────────
+
+const BLOB_MAGIC = Buffer.from('WRENENC\x01', 'latin1');
+const BLOB_HEADER = BLOB_MAGIC.length + 12 + 16; // magic, iv, tag
+const BLOB_STEP = 1024 * 1024; // en/decrypt in steps so a big file isn't held in memory a third time
+
+/** A stored file's name: a keyed hash of its contents, so copies share a name without revealing what's inside. */
+export function blobName(data: Uint8Array): string {
+  return crypto.createHmac('sha256', derived().blobName).update(data).digest('hex');
+}
+
+export function isEncryptedBlob(data: Uint8Array): boolean {
+  return data.length >= BLOB_HEADER && BLOB_MAGIC.equals(data.subarray(0, BLOB_MAGIC.length));
+}
+
+/** AES-256-GCM for stored files: magic, iv, tag, then the ciphertext. */
+export function encryptBlob(data: Uint8Array): Buffer {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', derived().blob, iv);
+  const out = Buffer.allocUnsafe(BLOB_HEADER + data.length);
+  BLOB_MAGIC.copy(out);
+  iv.copy(out, BLOB_MAGIC.length);
+  let at = BLOB_HEADER;
+  for (let i = 0; i < data.length; i += BLOB_STEP) at += cipher.update(data.subarray(i, i + BLOB_STEP)).copy(out, at);
+  at += cipher.final().copy(out, at);
+  if (at !== out.length) throw new Error('Unexpected ciphertext length');
+  cipher.getAuthTag().copy(out, BLOB_MAGIC.length + 12);
+  return out;
+}
+
+/** Decrypt a file from encryptBlob. Throws if it was encrypted with another key or has been altered. */
+export function decryptBlob(data: Uint8Array): Buffer {
+  const d = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', derived().blob, d.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + 12));
+  decipher.setAuthTag(d.subarray(BLOB_MAGIC.length + 12, BLOB_HEADER));
+  const out = Buffer.allocUnsafe(d.length - BLOB_HEADER);
+  let at = 0;
+  for (let i = BLOB_HEADER; i < d.length; i += BLOB_STEP) at += decipher.update(d.subarray(i, i + BLOB_STEP)).copy(out, at);
+  at += decipher.final().copy(out, at); // checks the tag
+  if (at !== out.length) throw new Error('Unexpected plaintext length');
+  return out;
 }
 
 export function encryptJson(value: unknown): string {

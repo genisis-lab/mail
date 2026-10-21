@@ -57,6 +57,14 @@ instance name, your first domain, how to send mail (**Cloudflare Email Service**
 Provider credentials and two-factor secrets are encrypted at rest. On first start Wren
 generates the key and stores it inside the Durable Object, so there's nothing to set up.
 
+Mail files in R2 are encrypted too: raw messages, attachments, very large bodies,
+avatars, automatic backups and mail exports (AES-256-GCM, with a key derived from
+`WREN_SECRET` or the generated key). They're named by a keyed hash, so the bucket alone
+shows neither what a file says nor whether a known file is in it. Message bodies kept in
+the database stay as they are, because search needs them; Cloudflare already encrypts
+Durable Object storage at rest. After an upgrade, files stored earlier are encrypted in
+the background (**Admin → System** shows how many are left).
+
 If you'd rather keep the key separate from the data, set it as a Worker secret **before
 the first start**:
 
@@ -64,8 +72,10 @@ the first start**:
 openssl rand -base64 32 | npx wrangler secret put WREN_SECRET
 ```
 
-Changing the key later makes existing credentials unreadable. Wren then shows a warning
-in the admin panel, and you re-enter the provider settings.
+Losing or changing the key makes stored mail files and credentials unreadable, so keep
+it safe. If it changes, Wren shows a warning in the admin panel: put the original key back
+to read them again (credentials can also be re-entered; mail files can't be recovered
+without the key).
 
 ### Custom hostname
 
@@ -175,7 +185,10 @@ recovery only works once deployed.
 - **Restore from export.** Replaces all data with an export, then signs everyone out.
   If the restore fails part-way, the database is rolled back automatically.
 
-Message files stay in R2 in every case.
+Message files stay in R2 in every case. Backups and exports stored in R2 are encrypted
+like mail files and download as normal, readable files. A stored backup can only be
+restored with the `WREN_SECRET` it was made with; with another key the restore stops
+before changing anything.
 
 ## What needs a Cloudflare deployment
 

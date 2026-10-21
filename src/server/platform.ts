@@ -14,12 +14,13 @@ export interface SqlDriver {
 }
 
 export interface BlobStore {
-  put(key: string, data: Uint8Array): Promise<void>;
+  /** Store a blob. One that already exists under that key is kept, unless `replace` is set. */
+  put(key: string, data: Uint8Array, replace?: boolean): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
   /** Delete a batch of blobs (R2 accepts up to 1,000 keys per call). */
   delete(keys: string[]): Promise<void>;
-  /** Iterate all stored blobs (used by garbage collection and size stats). */
-  list(): AsyncIterable<{ key: string; size: number; uploaded: number }>;
+  /** Iterate stored blobs in key order, optionally only those after a key (garbage collection, size stats, encrypting old blobs). */
+  list(after?: string): AsyncIterable<{ key: string; size: number; uploaded: number }>;
 }
 
 export interface DnsResolver {
