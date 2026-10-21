@@ -192,6 +192,8 @@ export async function createUser(input: {
 export function deleteUser(id: number, handTo?: UserRow | null): number {
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   const moved = tx(() => {
+    // The inbound log has no user id and is kept 90 days: blank what it says about their mail.
+    run(`UPDATE inbound_log SET subject = '', mail_from = '' WHERE rcpt_to COLLATE NOCASE IN (SELECT address FROM addresses WHERE user_id = ?)`, [id]);
     const n = handTo ? run(`UPDATE addresses SET user_id = ?, kind = 'alias', name = ?, created_by = NULL WHERE user_id = ?`, [handTo.id, handTo.name, id]).changes : 0;
     if (handTo) run('UPDATE domains SET catch_all_user_id = ? WHERE catch_all_user_id = ?', [handTo.id, id]);
     run('DELETE FROM users WHERE id = ?', [id]);

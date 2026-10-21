@@ -84,6 +84,9 @@ describe('deleting your own account', () => {
     await h.call('POST', '/api/filters', { criteria: { from: 'pat@example.org' }, actions: { star: true } });
     await h.call('POST', '/api/account/api-keys', { name: 'Script' });
     expect(all('SELECT 1 FROM sessions WHERE user_id = ?', [ids.ivy])).toHaveLength(2);
+    // A logged arrival at an alias, in other letter case.
+    run(`INSERT INTO inbound_log (source, mail_from, rcpt_to, subject, status, created_at) VALUES ('smtp', 'pat@example.org', 'Ivy.Shop@wren.test', 'Another secret', 'accepted', ?)`, [Date.now()]);
+    expect(all(`SELECT 1 FROM inbound_log WHERE subject LIKE '%secret%' AND mail_from = 'pat@example.org'`)).toHaveLength(2);
 
     const r = await del('ivy password 123');
     expect(r.body).toEqual({ ok: true, remaining: 0 });
@@ -104,6 +107,11 @@ describe('deleting your own account', () => {
     const entry = get<any>(`SELECT * FROM audit_log WHERE action = 'account.deleted' AND target = 'ivy@wren.test'`);
     expect(entry).toMatchObject({ user_id: null, details: null });
     expect(JSON.stringify(all(`SELECT * FROM audit_log WHERE target LIKE '%ivy%'`))).not.toContain('secret plan');
+    // The inbound log keeps that mail arrived, but not what it was about or who sent it.
+    expect(all(`SELECT subject, mail_from FROM inbound_log WHERE rcpt_to LIKE 'ivy%'`)).toEqual([
+      { subject: '', mail_from: '' },
+      { subject: '', mail_from: '' },
+    ]);
   });
 
   it('carries on with the next account signed in on this browser', async () => {
