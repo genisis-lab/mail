@@ -78,11 +78,16 @@ export function sqlBlobStore(storage: DurableObjectStorage): BlobStore {
     async delete(keys) {
       for (const key of keys) sql.exec('DELETE FROM _blobs WHERE key = ?', key).toArray();
     },
+    // A page of 1,000 keys at a time, like R2, so a batch doesn't read every remaining key.
     async *list(after = '') {
-      const rows = sql
-        .exec<{ key: string; size: number; uploaded: number }>('SELECT key, SUM(size) AS size, MIN(uploaded) AS uploaded FROM _blobs WHERE key > ? GROUP BY key ORDER BY key', after)
-        .toArray();
-      for (const r of rows) yield { key: r.key, size: Number(r.size), uploaded: Number(r.uploaded) };
+      for (;;) {
+        const rows = sql
+          .exec<{ key: string; size: number; uploaded: number }>('SELECT key, SUM(size) AS size, MIN(uploaded) AS uploaded FROM _blobs WHERE key > ? GROUP BY key ORDER BY key LIMIT 1000', after)
+          .toArray();
+        for (const r of rows) yield { key: r.key, size: Number(r.size), uploaded: Number(r.uploaded) };
+        if (rows.length < 1000) return;
+        after = rows[rows.length - 1].key;
+      }
     },
   };
 }
