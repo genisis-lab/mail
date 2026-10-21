@@ -2,14 +2,14 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { APP_NAME, APP_VERSION } from '../../shared/brand.js';
 import { get, insert, now, run } from '../db/index.js';
-import { decrypt, hashPassword, randomToken, sha256, verifyPassword, verifyTotp } from '../lib/crypto.js';
+import { hashPassword, randomToken, sha256, verifyPassword } from '../lib/crypto.js';
 import { badRequest, conflict, forbidden, unauthorized } from '../lib/http.js';
 import { normalizeEmail } from '../lib/addr.js';
 import { getSettings, setSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { createProvider } from '../services/providers.js';
 import { platform } from '../platform.js';
-import { createUser, getUserByEmail, sessionUser, getUser, parsePrefs, validatePassword } from '../services/users.js';
+import { checkTwoStepCode, createUser, getUserByEmail, sessionUser, getUser, parsePrefs, validatePassword } from '../services/users.js';
 import { markRecoveryVerified, sendPasswordReset, welcomeUser } from '../services/account-links.js';
 import { consumeToken, peekToken } from '../services/tokens.js';
 import {
@@ -123,18 +123,7 @@ authRoutes.post('/mfa', async (c) => {
   if (!pending) throw unauthorized('Your sign-in expired. Please start again.');
   rateLimit(`mfa:${pending.user.id}`, 8, 15 * 60_000);
   const { user, session } = pending;
-  let ok = false;
-  if (user.totp_secret) ok = verifyTotp(decrypt(user.totp_secret), code);
-  if (!ok && user.recovery_codes) {
-    const codes: string[] = JSON.parse(user.recovery_codes);
-    const h = sha256(code.replace(/[\s-]/g, '').toLowerCase());
-    if (codes.includes(h)) {
-      ok = true;
-      run('UPDATE users SET recovery_codes = ? WHERE id = ?', [JSON.stringify(codes.filter((x) => x !== h)), user.id]);
-      audit(user.id, 'auth.recovery_code_used', user.email, undefined, clientIp(c));
-    }
-  }
-  if (!ok) throw unauthorized('That code is not valid');
+  if (!checkTwoStepCode(user, code, clientIp(c))) throw unauthorized('That code is not valid');
   clearRateLimit(`mfa:${user.id}`);
   createSession(c, user.id);
   run('DELETE FROM sessions WHERE id = ?', [session.id]);

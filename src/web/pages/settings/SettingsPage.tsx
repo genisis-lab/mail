@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Bell, Copy, Download, Fingerprint, KeyRound, Laptop, LifeBuoy, Pencil, Plus, ShieldCheck, Tag, Trash2 } from 'lucide-react';
 import type { FilterActions, FilterCriteria, Label, SwipeAction, UserPrefs } from '../../../shared/types';
-import { useAccounts } from '../../lib/accounts';
+import { accountDeleted, useAccounts } from '../../lib/accounts';
 import { api } from '../../lib/api';
 import { longDate, relativeTime } from '../../lib/format';
 import { useLabels, useSession } from '../../lib/session';
@@ -1328,6 +1328,8 @@ function SecurityTab() {
         )}
       </Card>
 
+      <DeleteAccountCard />
+
       <Modal open={setup2fa} onClose={() => setSetup2fa(false)} title="Turn on 2-step verification" width="max-w-xl">
         <div className="pb-4">
           <TwoFactorSetup
@@ -1371,6 +1373,96 @@ function SecurityTab() {
         </Field>
       </Modal>
     </div>
+  );
+}
+
+/** Delete this account and everything in it, with a chance to download the mail first. */
+function DeleteAccountCard() {
+  const { user } = useSession();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const status = useQuery({ queryKey: ['account', 'delete'], queryFn: () => api.get<{ blocked: string | null }>('/api/account/delete') });
+  const empty = { password: '', code: '', typed: '' };
+  const [form, setForm] = useState<typeof empty | null>(null);
+  const [busy, setBusy] = useState(false);
+  const ready = !!form?.password && (!user.totpEnabled || !!form.code.trim()) && form.typed.trim().toLowerCase() === user.email.toLowerCase();
+  return (
+    <Card title="Delete your account" description="Permanently delete this account and everything in it. This can’t be undone.">
+      <p className="text-sm text-muted">
+        All your mail goes, with your contacts, labels, filters, saved replies, keys, passkeys and app passwords, and you’re signed out everywhere. Your addresses stop receiving mail and are freed, just as when an administrator deletes an account.
+      </p>
+      {status.data?.blocked && <p className="mt-3 rounded-xl bg-panel2 px-3 py-2 text-[13px]">{status.data.blocked}</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          icon={<Download className="size-4" />}
+          onClick={async () => {
+            try {
+              await api.post('/api/me/export');
+              toast('Preparing your export…');
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            }
+            qc.invalidateQueries({ queryKey: ['me', 'jobs'] });
+            navigate('/settings/import');
+          }}
+        >
+          Download your mail first
+        </Button>
+        {status.data && !status.data.blocked && (
+          <Button variant="danger" icon={<Trash2 className="size-4" />} onClick={() => setForm(empty)}>
+            Delete account
+          </Button>
+        )}
+      </div>
+      <Modal
+        open={!!form}
+        onClose={() => setForm(null)}
+        title="Delete your account?"
+        width="max-w-md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setForm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              loading={busy}
+              disabled={!ready}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await api.post<{ remaining: number }>('/api/account/delete', { password: form!.password, code: form!.code.trim() || undefined });
+                  accountDeleted(r.remaining);
+                } catch (err) {
+                  toast({ message: (err as Error).message, tone: 'error' });
+                  setBusy(false);
+                }
+              }}
+            >
+              Delete permanently
+            </Button>
+          </>
+        }
+      >
+        {form && (
+          <div className="grid gap-4">
+            <p className="text-sm">This deletes {user.email} and all of its mail right away.</p>
+            <Field label="Your password">
+              <Input type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoFocus />
+            </Field>
+            {user.totpEnabled && (
+              <Field label="2-step verification code" help="From your authenticator app, or one of your recovery codes.">
+                <Input inputMode="numeric" autoComplete="one-time-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="123456" />
+              </Field>
+            )}
+            <Field label={`Type ${user.email} to confirm`}>
+              <Input value={form.typed} onChange={(e) => setForm({ ...form, typed: e.target.value })} spellCheck={false} autoComplete="off" />
+            </Field>
+          </div>
+        )}
+      </Modal>
+    </Card>
   );
 }
 

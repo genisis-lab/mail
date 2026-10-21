@@ -40,6 +40,8 @@ export const DEFAULT_SETTINGS = {
   'mail.systemReplyTo': '',
 
   'users.welcomeMessage': true,
+  /** Let people delete their own account (Settings → Security). */
+  'users.selfDelete': true,
   'aliases.selfService': false,
   'aliases.maxPerUser': 5,
   /** Let people (not just admins) make throwaway sign-up aliases. */

@@ -94,3 +94,11 @@ export async function signOut(everyone = false): Promise<void> {
   forgetMailbox(who);
   window.location.assign(r.remaining ? '/inbox' : '/login');
 }
+
+/** This tab's account was deleted (and signed out here): carry on as after signing out. */
+export function accountDeleted(remaining: number) {
+  const self = getApiAccount() ?? undefined;
+  clearOutbox(self);
+  forgetMailbox(self);
+  window.location.assign(remaining ? '/inbox' : '/login?deleted=1');
+}

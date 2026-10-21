@@ -50,6 +50,7 @@ export function LoginPage({ instance, mfaPending, next, mode = 'signin' }: { ins
   const [busy, setBusy] = useState(false);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
 
   const done = async (user?: SessionUser) => {
     // A tab that belongs to an account opens the one just signed in at its own address.
@@ -90,6 +91,11 @@ export function LoginPage({ instance, mfaPending, next, mode = 'signin' }: { ins
                   : `to continue to ${instance.name}`}
             </p>
           </div>
+          {params.has('deleted') && (
+            <div role="status" className="rounded-xl bg-panel2 px-4 py-3 text-sm text-fg">
+              Your account was deleted.
+            </div>
+          )}
           {instance.loginMessage && <div className="rounded-xl bg-accent-softer px-4 py-3 text-sm text-fg">{instance.loginMessage}</div>}
           <Field label="Email address">
             <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus={!last} required />
