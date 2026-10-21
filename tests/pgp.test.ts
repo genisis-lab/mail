@@ -105,7 +105,8 @@ describe('PGP in the browser', () => {
 describe('PGP keys on the server', () => {
   it('reads a public key’s fingerprint and addresses, and refuses anything else', async () => {
     const info = readPublicKey(bob.publicKey);
-    expect(info).toEqual({ fingerprint: (await openpgp.readKey({ armoredKey: bob.publicKey })).getFingerprint().toUpperCase(), name: 'Bob Builder', emails: ['bob@example.org'] });
+    expect(info).toEqual({ fingerprint: (await openpgp.readKey({ armoredKey: bob.publicKey })).getFingerprint().toUpperCase(), name: 'Bob Builder', emails: ['bob@example.org'], armored: bob.publicKey.trim() });
+    expect(readPublicKey(`Here's my key:\n${bob.publicKey}\nThanks`).armored).toBe(bob.publicKey.trim());
     // Armor headers and the old checksum line are fine.
     const withHeaders = bob.publicKey.replace('-----BEGIN PGP PUBLIC KEY BLOCK-----\n', '-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: hi\n');
     expect(readPublicKey(withHeaders).fingerprint).toBe(info.fingerprint);

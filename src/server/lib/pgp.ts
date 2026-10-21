@@ -13,6 +13,8 @@ export interface PublicKeyInfo {
   name: string;
   /** Lower-cased addresses from the user IDs. */
   emails: string[];
+  /** Just the key block, without anything pasted around it. */
+  armored: string;
 }
 
 const ARMOR = /-----BEGIN PGP PUBLIC KEY BLOCK-----\r?\n([\s\S]*?)-----END PGP PUBLIC KEY BLOCK-----/;
@@ -38,7 +40,7 @@ export function readPublicKey(armored: string): PublicKeyInfo {
 
   const emails = [...new Set(userIds.map((u) => (/<([^<>\s]+@[^<>\s]+)>/.exec(u)?.[1] ?? (/^\S+@\S+$/.test(u.trim()) ? u.trim() : '')).toLowerCase()).filter(Boolean))];
   const name = userIds[0].replace(/<[^>]*>/, '').replace(/\([^)]*\)/, '').trim();
-  return { fingerprint: fingerprint(packets[0].body), name: name.slice(0, 200), emails };
+  return { fingerprint: fingerprint(packets[0].body), name: name.slice(0, 200), emails, armored: m[0] };
 }
 
 /** v4: SHA-1 of the key packet; v5 and v6: SHA-256 with a 4-byte length. */

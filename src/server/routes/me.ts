@@ -431,7 +431,7 @@ meRoutes.put('/pgp/published', async (c) => {
       key.fingerprint,
       key.name,
       JSON.stringify(key.emails),
-      armored.trim(),
+      key.armored,
       now(),
     ]);
   });
@@ -457,7 +457,7 @@ meRoutes.post('/pgp/keys', async (c) => {
   run(
     `INSERT INTO pgp_keys (user_id, own, fingerprint, name, emails, armored, created_at) VALUES (?, 0, ?, ?, ?, ?, ?)
        ON CONFLICT (user_id, own, fingerprint) DO UPDATE SET name = excluded.name, emails = excluded.emails, armored = excluded.armored`,
-    [user.id, key.fingerprint, key.name, JSON.stringify(key.emails), armored.trim(), now()],
+    [user.id, key.fingerprint, key.name, JSON.stringify(key.emails), key.armored, now()],
   );
   return c.json({ key: keyDto(get('SELECT * FROM pgp_keys WHERE user_id = ? AND own = 0 AND fingerprint = ?', [user.id, key.fingerprint])), updated: !!exists });
 });
