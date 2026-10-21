@@ -26,7 +26,9 @@ const REDIRECTS: [RegExp, RegExp, string[]][] = [
 
 const webUrl = (s: string): URL | null => {
   try {
-    const u = new URL(s.trim());
+    const t = s.trim();
+    // "//site/page" is a web link too: it takes the page's own scheme (browsers read \ as / here).
+    const u = new URL(/^[/\\]{2}/.test(t) ? `https:${t}` : t);
     return /^https?:$/.test(u.protocol) ? u : null;
   } catch {
     return null;
@@ -53,9 +55,11 @@ export function cleanLink(href: string): string | null {
   }
   // Filtered by hand so the parameters that stay keep their exact encoding.
   const query = url.search.slice(1).split('&');
+  // Marketo's unsubscribe and view-in-browser pages need mkt_tok to know who's asking.
+  const marketo = /unsubscribe|emailWebview/i.test(url.pathname + url.search);
   const kept = query.filter((part) => {
     const key = part.split('=', 1)[0];
-    return !/^utm_/i.test(key) && !TRACKING_PARAMS.has(key);
+    return !/^utm_/i.test(key) && (!TRACKING_PARAMS.has(key) || (key === 'mkt_tok' && marketo));
   });
   if (kept.length < query.length) {
     url.search = kept.join('&');
@@ -63,6 +67,9 @@ export function cleanLink(href: string): string | null {
   }
   return changed ? url.href : href;
 }
+
+/** Common file extensions, which make link text like "deck.pptx" look like a domain. */
+const FILE_NAME = /\.(pdf|docx?|xlsx?|pptx?|od[tsp]|rtf|csv|txt|md|js|ts|json|xml|html?|css|zip|rar|gz|png|jpe?g|gif|webp|heic|svg|ics|vcf|eml)$/i;
 
 /**
  * The site a link's text names when the text is a web address or domain and the
@@ -73,6 +80,8 @@ export function linkMismatch(text: string, href: string): string | null {
   const shown = text.replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, '').trim().replace(/[.,;:!?)]+$/, '');
   if (!/^(https?:\/\/)?([\p{L}\p{N}-]+\.)+\p{L}{2,}(:\d+)?([/?#]\S*)?$/iu.test(shown)) return null;
   const claimed = webUrl(/^https?:\/\//i.test(shown) ? shown : `http://${shown}`)?.hostname.replace(/^www\./, '');
+  // "invoice.pdf", "Node.js", "README.md": a file or product name, unless written as a web address.
+  if (claimed && !/^(https?:\/\/|www\.)/i.test(shown) && FILE_NAME.test(claimed)) return null;
   const real = webUrl(href)?.hostname.replace(/^www\./, '');
   if (!claimed || !real || real === claimed || real.endsWith(`.${claimed}`) || claimed.endsWith(`.${real}`)) return null;
   return claimed;
@@ -164,6 +173,13 @@ function keepDocumentStyles(html: string): string {
 }
 
 /**
+ * Tags dropped from received mail. Pictures and media that load outside <img>
+ * (SVG <image>/<feImage>, <picture><source srcset>, <video poster>, <audio>)
+ * would get past image blocking, so they go, as in Gmail.
+ */
+export const MAIL_FORBID_TAGS = ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base', 'image', 'feImage', 'source', 'video', 'audio'];
+
+/**
  * Sanitize message HTML for display:
  *  - keeps a full document's <style> blocks and body colours
  *  - strips scripts, forms, event handlers (DOMPurify)
@@ -220,7 +236,7 @@ export function renderMailHtml(
         if (claimed) el.setAttribute('data-wren-shows', claimed);
       }
     }
-    if (el.tagName === 'IMG' || el.tagName === 'IMAGE') {
+    if (el.tagName === 'IMG') {
       if (isTrackingPixel((name) => el.getAttribute(name))) {
         trackers++;
         el.remove();
@@ -259,7 +275,7 @@ export function renderMailHtml(
       WHOLE_DOCUMENT: false,
       // Otherwise leading <style> blocks are parsed into <head> and dropped.
       FORCE_BODY: true,
-      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base'],
+      FORBID_TAGS: MAIL_FORBID_TAGS,
       FORBID_ATTR: ['onerror', 'onload', 'onclick'],
       ALLOW_UNKNOWN_PROTOCOLS: false,
       ADD_ATTR: ['target'],

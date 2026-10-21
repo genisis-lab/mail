@@ -192,8 +192,9 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     cc,
     bcc,
     subject: d.subject,
-    // A plain-text draft (encrypted or signed) goes out as text/plain alone.
-    html: priv ? '<p></p>' : d.html_body || (d.text_body ? null : '<p></p>'),
+    // A plain-text draft (encrypted or signed) goes out as text/plain alone. The editor's own
+    // class names (quote, forward, signature) stay behind: they'd say which software wrote it.
+    html: priv ? '<p></p>' : d.html_body?.replace(/ class="wren-(?:quote|forward|signature)"/g, '') || (d.text_body ? null : '<p></p>'),
     text: priv ? '' : d.text_body,
     inReplyTo: d.in_reply_to,
     references: refs,

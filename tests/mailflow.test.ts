@@ -21,6 +21,9 @@ async function inbound(opts: Parameters<typeof buildMime>[0], rcpt: string[]) {
   return ingest(raw, { rcptTo: rcpt, source: 'test' });
 }
 
+/** A raw message with quoted-printable line breaks joined and the test domain (wren.test) taken out. */
+const withoutTestDomain = (raw: string) => raw.replace(/=\r\n/g, '').replace(/wren\.test/gi, '');
+
 beforeAll(async () => {
   openDb(withDurableObjectLimits(nodeSqlDriver(':memory:')));
   invalidateSettings();
@@ -101,9 +104,30 @@ describe('inbound pipeline', () => {
     expect(JSON.parse(fwd.recipients)).toEqual(['partner@example.com']);
     expect(fwd.mail_from).toBe('team@wren.test');
     // The copy counts its hops, and doesn't say which software (or version) sent it.
-    const head = (await getBlob(fwd.raw_blob)).toString('utf8').split('\r\n\r\n')[0];
+    const raw = (await getBlob(fwd.raw_blob)).toString('utf8');
+    const head = raw.split('\r\n\r\n')[0];
     expect(head).toMatch(/^X-Forwarded-By: team@wren\.test$/m);
     expect(head).not.toMatch(/^(X-Mailer|User-Agent|X-Originating-IP|X-Wren-[\w-]+):/im);
+    expect(withoutTestDomain(raw)).not.toMatch(/wren/i);
+  });
+
+  it('stops forwarding at the hop limit, counting the hops older versions recorded', async () => {
+    const forwards = () => all(`SELECT 1 FROM outbox WHERE kind = 'forward'`).length;
+    const before = forwards();
+    const looped = { from: { address: 'jordan@studio.example' }, to: [{ address: 'team@wren.test' }], text: 'x' };
+    await inbound({ ...looped, subject: 'Looping', headers: { 'X-Wren-Forwarded': 'a@one.example, b@two.example, c@three.example' } }, ['team@wren.test']);
+    expect(forwards()).toBe(before);
+    // Under the limit: the older version's header grows too, so it stops in time as well.
+    await inbound({ ...looped, subject: 'Forwarded once', headers: { 'X-Wren-Forwarded': 'a@one.example' } }, ['team@wren.test']);
+    expect(forwards()).toBe(before + 1);
+    const fwd = get<any>(`SELECT * FROM outbox WHERE kind = 'forward' ORDER BY id DESC LIMIT 1`);
+    const head = (await getBlob(fwd.raw_blob)).toString('utf8').split('\r\n\r\n')[0];
+    expect(head).toMatch(/^X-Forwarded-By: a@one\.example, team@wren\.test$/m);
+    expect(head).toMatch(/^X-Wren-Forwarded: a@one\.example, team@wren\.test$/m);
+    // Such a copy's hops are counted once, not once per header.
+    const both = 'a@one.example, b@two.example';
+    await inbound({ ...looped, subject: 'Forwarded twice', headers: { 'X-Forwarded-By': both, 'X-Wren-Forwarded': both } }, ['team@wren.test']);
+    expect(forwards()).toBe(before + 2);
   });
 
   it('sends a vacation auto-reply once per sender', async () => {
@@ -172,6 +196,26 @@ describe('sending', () => {
     const bounce = listThreads(alice, { view: 'inbox' }).threads.find((x) => x.subject === 'Nowhere');
     expect(bounce?.count).toBeGreaterThanOrEqual(1);
     run('UPDATE providers SET enabled = 1');
+  });
+
+  it("sends replies and forwards that don't say which software wrote them", async () => {
+    await inbound({ from: { address: 'sam@cafe.example', name: 'Sam' }, to: [{ address: 'alice@wren.test' }], subject: 'Lunch', html: '<p>Friday?</p>' }, ['alice@wren.test']);
+    const t = listThreads(alice, { view: 'inbox' }).threads.find((x) => x.subject === 'Lunch')!;
+    const original = (await getThread(alice, t.id))!.messages[0];
+    for (const mode of ['reply', 'forward'] as const) {
+      const tpl = await composeTemplate(alice, original.id, mode);
+      // As the editor saves it: what was written, the signature, then the quoted or forwarded mail.
+      const html = `<p>Sounds good</p><div class="wren-signature"><br>-- <br>Alice</div>${tpl.html}`;
+      const id = await saveDraft(alice, { ...tpl, to: 'ext@example.com', attachments: [], html });
+      await sendDraft(alice, id, { undoSeconds: 0 });
+      const sent = get<any>('SELECT raw_blob, html_body FROM messages WHERE id = ?', [id]);
+      const raw = withoutTestDomain((await getBlob(sent.raw_blob)).toString('utf8'));
+      expect(raw).not.toMatch(/wren/i);
+      expect(raw).toContain('Friday?');
+      // The quote still folds in mail apps; the Sent copy keeps the editor's markers.
+      if (mode === 'reply') expect(raw).toContain('<blockquote type=3D"cite"');
+      expect(sent.html_body).toContain('class="wren-signature"');
+    }
   });
 });
 
