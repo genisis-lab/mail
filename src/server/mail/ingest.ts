@@ -286,9 +286,9 @@ async function deliverToUser(
   return { stored: true, status: folder === 'spam' ? 'spam' : 'accepted', reason: reason || folder };
 }
 
-/** Hops so far, from the header each forward adds (named so it doesn't say which software forwarded). */
-function forwardHops(p: Parsed): number {
-  return (p.headers.get('x-forwarded-by') ?? []).flatMap((v) => v.split(',')).filter((v) => v.trim()).length;
+/** The addresses a hop header lists so far, across every copy of it. */
+function forwardHops(p: Parsed, key: string): string[] {
+  return (p.headers.get(key) ?? []).flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean);
 }
 
 /**
@@ -297,14 +297,19 @@ function forwardHops(p: Parsed): number {
  * to the original sender.
  */
 async function forwardCopy(p: Parsed, raw: Buffer, via: string, to: string[], userId: number | null) {
-  if (forwardHops(p) >= MAX_FORWARD_HOPS) {
+  // Each forward adds a hop to X-Forwarded-By (named so it doesn't say which software forwarded). Older
+  // versions wrote, and only read, X-Wren-Forwarded; both are kept alike below, so the longer has every hop.
+  const legacy = forwardHops(p, 'x-wren-forwarded');
+  const ours = forwardHops(p, 'x-forwarded-by');
+  const prior = ours.length >= legacy.length ? ours : legacy;
+  if (prior.length >= MAX_FORWARD_HOPS) {
     log.warn(`Not forwarding message ${p.messageId}: hop limit reached`);
     return;
   }
   const targets = to.map(normalizeEmail).filter((t) => t && t !== via.toLowerCase());
   if (!targets.length) return;
   const origName = p.from?.name || p.from?.address || 'Unknown sender';
-  const prior = getHeader(p, 'x-forwarded-by');
+  const hops = [...prior, via].join(', ');
   const { raw: fwdRaw } = await buildMime({
     from: { address: via, name: `${origName} via ${via}`.slice(0, 120) },
     to: p.to.length ? p.to : [{ address: via }],
@@ -317,7 +322,9 @@ async function forwardCopy(p: Parsed, raw: Buffer, via: string, to: string[], us
     references: p.references,
     attachments: p.attachments,
     headers: {
-      'X-Forwarded-By': prior ? `${prior}, ${via}` : via,
+      'X-Forwarded-By': hops,
+      // Mail that already carries the old header keeps it growing, or it could loop between an older version and this one.
+      ...(legacy.length ? { 'X-Wren-Forwarded': hops } : {}),
       'X-Original-From': p.from ? formatAddr(p.from) : '',
       ...(p.messageId ? { 'X-Original-Message-ID': `<${p.messageId}>` } : {}),
     },

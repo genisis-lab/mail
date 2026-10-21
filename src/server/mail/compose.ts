@@ -64,7 +64,8 @@ export function quoteHtml(opts: { html: string | null; text: string | null; from
   const when = new Date(opts.date).toUTCString();
   const who = opts.from.name ? `${escapeHtml(opts.from.name)} &lt;${escapeHtml(opts.from.address)}&gt;` : escapeHtml(opts.from.address);
   const body = opts.html ?? `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(opts.text ?? '')}</pre>`;
-  return `<br><div class="wren-quote"><div>On ${when}, ${who} wrote:</div><blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
+  // The class is for the editor only (sendDraft drops it); mail apps, this one included, fold a blockquote type="cite".
+  return `<br><div class="wren-quote"><div>On ${when}, ${who} wrote:</div><blockquote type="cite" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
 }
 
 export function escapeHtml(s: string): string {

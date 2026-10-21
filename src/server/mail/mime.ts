@@ -39,7 +39,7 @@ const enc = new TextEncoder();
 const isAscii = (s: string) => /^[\x00-\x7f]*$/.test(s);
 
 function boundary(): string {
-  return `----=_Wren_${crypto.randomBytes(12).toString('hex')}`;
+  return `----=_Part_${crypto.randomBytes(12).toString('hex')}`;
 }
 
 /** RFC 2047 encoded-word(s) for non-ASCII header text. */

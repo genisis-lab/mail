@@ -93,12 +93,18 @@ describe('dark mode for email bodies', async () => {
 });
 
 describe('links and trackers in received mail', async () => {
-  const { cleanLink, linkMismatch, isTrackingPixel, textToSafeHtml } = await import('../src/web/lib/sanitize');
+  const { cleanLink, linkMismatch, isTrackingPixel, textToSafeHtml, MAIL_FORBID_TAGS } = await import('../src/web/lib/sanitize');
   const img = (attrs: Record<string, string>) => isTrackingPixel((name) => attrs[name] ?? null);
 
   it('drops tracking parameters and keeps the rest exactly as written', () => {
     expect(cleanLink('https://shop.example/p?id=7&utm_source=news&UTM_Medium=email&fbclid=abc#top')).toBe('https://shop.example/p?id=7#top');
     expect(cleanLink('https://shop.example/?utm_campaign=x&gclid=1&mc_eid=2&_hsenc=3&mkt_tok=4')).toBe('https://shop.example/');
+    // Marketo's unsubscribe and view-in-browser pages need their token.
+    expect(cleanLink('https://go.shop.example/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=4&utm_source=x')).toBe('https://go.shop.example/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=4');
+    expect(cleanLink('https://go.shop.example/index.php/email/emailWebview?mkt_tok=4')).toBe('https://go.shop.example/index.php/email/emailWebview?mkt_tok=4');
+    // Protocol-relative links are web links too.
+    expect(cleanLink('//shop.example/p?id=7&utm_source=x')).toBe('https://shop.example/p?id=7');
+    expect(cleanLink('//shop.example/p')).toBe('//shop.example/p');
     // Untouched links come back byte for byte, odd encoding and all.
     expect(cleanLink('https://Example.com/a%2Fb?q=a+b&x=%7E')).toBe('https://Example.com/a%2Fb?q=a+b&x=%7E');
     expect(cleanLink('https://shop.example/?q=a+b&utm_source=x&path=%2Fc')).toBe('https://shop.example/?q=a+b&path=%2Fc');
@@ -128,6 +134,15 @@ describe('links and trackers in received mail', async () => {
     expect(linkMismatch('https://bank.example/login', 'https://bank-secure.example/')).toBe('bank.example');
     expect(linkMismatch(' PayPal.com. ', 'https://evil.example/')).toBe('paypal.com');
     expect(linkMismatch('pay\u200bpal.com', 'https://evil.example/')).toBe('paypal.com');
+    expect(linkMismatch('paypal.com', '//evil.example/login')).toBe('paypal.com');
+    expect(linkMismatch('paypal.com', '/\\evil.example/login')).toBe('paypal.com');
+    // A file or product name only looks like a domain; written as an address, it's checked.
+    for (const name of ['invoice.pdf', 'deck.pptx', 'Budget.XLSX', 'Node.js', 'README.md', 'index.html', 'photo.jpeg', 'files.zip']) {
+      expect(linkMismatch(name, 'https://drive.example/f/1')).toBeNull();
+    }
+    expect(linkMismatch('www.readme.md', 'https://evil.example/')).toBe('readme.md');
+    expect(linkMismatch('https://node.js', 'https://evil.example/')).toBe('node.js');
+    expect(linkMismatch('docs.example/invoice.pdf', 'https://evil.example/')).toBe('docs.example');
     // Same site, a subdomain of it, or text that isn't an address: fine.
     expect(linkMismatch('paypal.com', 'https://www.paypal.com/us/home')).toBeNull();
     expect(linkMismatch('example.com', 'https://go.example.com/x')).toBeNull();
@@ -157,6 +172,9 @@ describe('links and trackers in received mail', async () => {
     expect(img({ src: 'https://cdn.example/m.png', width: '320', style: 'display:none' })).toBe(false);
     expect(img({ src: 'cid:logo@x', width: '1', height: '1' })).toBe(false);
     expect(img({ src: 'data:image/gif;base64,R0lGOD', width: '1', height: '1' })).toBe(false);
+    // Pictures and media that load outside <img> are dropped, so blocking can't be skipped.
+    // shortcut: checks the list, not sanitized output, since tests run without a DOM; test the output once they have one.
+    expect(MAIL_FORBID_TAGS).toEqual(expect.arrayContaining(['image', 'feImage', 'source', 'video', 'audio']));
   });
 
   it('cleans links in plain-text mail without changing what it says', () => {
