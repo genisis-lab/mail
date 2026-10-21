@@ -734,6 +734,13 @@ export const migrations: string[] = [
   CREATE INDEX idx_messages_invite ON messages(user_id) WHERE invite <> '';
   CREATE INDEX idx_attachments_calendar ON attachments(user_id) WHERE content_type LIKE 'text/calendar%' OR content_type LIKE 'application/ics%' OR filename LIKE '%.ics';
   `,
+
+  // 18: mail apps see when a snoozed email wakes (the Email "snoozed" property), so moving a
+  //     snooze to another time is a change they're told about too.
+  `
+  DROP TRIGGER IF EXISTS jmap_message_update;
+  ${jmapMessageUpdate()}
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */
@@ -746,16 +753,37 @@ function jmapChange(user: string, type: string, obj: string, kind: string, threa
         FROM jmap_modseq q ${from ? from.replace(/^FROM/, ',') : ''} WHERE q.user_id = ${user} ${where.replace(/^WHERE/, 'AND')};`;
 }
 
+// JMAP ids (src/server/jmap/ids.ts). created_at keeps an id from coming back when SQLite reuses a
+// rowid; a new thread or a new draft revision is a new email, because JMAP emails are immutable.
+function jmapEmailId(r: string) {
+  return `'M' || ${r}.id || 'T' || ${r}.thread_id || 'C' || ${r}.created_at || CASE WHEN ${r}.jmap_rev > 0 THEN 'V' || ${r}.jmap_rev ELSE '' END`;
+}
+function jmapThreadOf(r: string) {
+  return `(SELECT 'T' || t.id || 'C' || t.created_at FROM threads t WHERE t.id = ${r}.thread_id)`;
+}
+// A mailbox being deleted takes its rows with it; record nothing for it.
+function jmapLive(u: string) {
+  return `EXISTS (SELECT 1 FROM users WHERE id = ${u})`;
+}
+
+/** An email changes for mail apps when its folder, flags, keywords or snooze (including its time) do. */
+function jmapMessageUpdate(): string {
+  return `
+  CREATE TRIGGER jmap_message_update AFTER UPDATE OF folder, is_read, is_starred, is_important, snoozed_until, keywords ON messages
+    WHEN (OLD.folder IS NOT NEW.folder OR OLD.is_read IS NOT NEW.is_read OR OLD.is_starred IS NOT NEW.is_starred
+          OR OLD.is_important IS NOT NEW.is_important OR OLD.snoozed_until IS NOT NEW.snoozed_until
+          OR OLD.keywords IS NOT NEW.keywords)
+     AND OLD.thread_id = NEW.thread_id AND OLD.jmap_rev = NEW.jmap_rev AND ${jmapLive('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Email', jmapEmailId('NEW'), 'u', jmapThreadOf('NEW'))}
+  END;`;
+}
+
 function jmapTriggers(): string {
-  // JMAP ids (src/server/jmap/ids.ts). created_at keeps an id from coming back when SQLite reuses a
-  // rowid; a new thread or a new draft revision is a new email, because JMAP emails are immutable.
-  const emailId = (r: string) =>
-    `'M' || ${r}.id || 'T' || ${r}.thread_id || 'C' || ${r}.created_at || CASE WHEN ${r}.jmap_rev > 0 THEN 'V' || ${r}.jmap_rev ELSE '' END`;
-  const threadOf = (r: string) => `(SELECT 'T' || t.id || 'C' || t.created_at FROM threads t WHERE t.id = ${r}.thread_id)`;
+  const emailId = jmapEmailId;
+  const threadOf = jmapThreadOf;
   const threadId = (r: string) => `'T' || ${r}.id || 'C' || ${r}.created_at`;
   const mailboxId = (r: string) => `'L' || ${r}.id || 'C' || ${r}.created_at`;
-  // A mailbox being deleted takes its rows with it; record nothing for it.
-  const live = (u: string) => `EXISTS (SELECT 1 FROM users WHERE id = ${u})`;
+  const live = jmapLive;
   const viaMessage = { from: 'FROM messages m', where: `WHERE m.id = NEW.message_id AND ${live('m.user_id')}` };
   const viaOldMessage = { from: 'FROM messages m', where: `WHERE m.id = OLD.message_id AND ${live('m.user_id')}` };
   return `
@@ -765,13 +793,7 @@ function jmapTriggers(): string {
   CREATE TRIGGER jmap_message_delete AFTER DELETE ON messages WHEN ${live('OLD.user_id')} BEGIN
     ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}
   END;
-  CREATE TRIGGER jmap_message_update AFTER UPDATE OF folder, is_read, is_starred, is_important, snoozed_until, keywords ON messages
-    WHEN (OLD.folder IS NOT NEW.folder OR OLD.is_read IS NOT NEW.is_read OR OLD.is_starred IS NOT NEW.is_starred
-          OR OLD.is_important IS NOT NEW.is_important OR (OLD.snoozed_until IS NULL) <> (NEW.snoozed_until IS NULL)
-          OR OLD.keywords IS NOT NEW.keywords)
-     AND OLD.thread_id = NEW.thread_id AND OLD.jmap_rev = NEW.jmap_rev AND ${live('NEW.user_id')} BEGIN
-    ${jmapChange('NEW.user_id', 'Email', emailId('NEW'), 'u', threadOf('NEW'))}
-  END;
+  ${jmapMessageUpdate()}
   CREATE TRIGGER jmap_message_replace AFTER UPDATE OF thread_id, jmap_rev ON messages
     WHEN (OLD.thread_id <> NEW.thread_id OR OLD.jmap_rev <> NEW.jmap_rev) AND ${live('NEW.user_id')} BEGIN
     ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}

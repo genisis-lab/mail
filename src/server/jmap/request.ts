@@ -3,6 +3,7 @@
  * result references ("#ids" pointing at an earlier call's result) and
  * creation ids ("#k1" standing for an object created earlier in the request).
  */
+import { all } from '../db/index.js';
 import { HttpError } from '../lib/http.js';
 import { logger } from '../lib/log.js';
 import type { UserRow } from '../services/users.js';
@@ -17,7 +18,15 @@ export const CAP = {
   submission: 'urn:ietf:params:jmap:submission',
   quota: 'urn:ietf:params:jmap:quota',
   vacation: 'urn:ietf:params:jmap:vacationresponse',
+  /**
+   * Fastmail's mail extension (Cyrus IMAP's JMAP_MAIL_EXTENSION, which lists "snoozed" among its
+   * "FM extensions"). Wren supports only its Email "snoozed" property; see email.ts.
+   */
+  snooze: 'https://cyrusimap.org/ns/jmap/mail',
 } as const;
+
+/** What a shared mailbox's account offers (it has no quota or vacation reply of its own here). */
+export const SHARED_CAPS: readonly string[] = [CAP.mail, CAP.submission, CAP.snooze];
 
 export const LIMITS = {
   maxSizeRequest: 10_000_000,
@@ -29,7 +38,14 @@ export const LIMITS = {
 };
 
 export interface JmapContext {
+  /** The mailbox this call acts on: the signed-in person's own, or a shared mailbox they belong to. */
   user: UserRow;
+  /** The person who is signed in (differs from `user` in a shared mailbox's account). */
+  actor: UserRow;
+  /** Whether the actor may send from `user` (members of a shared mailbox may not always). */
+  canSend: boolean;
+  /** The capabilities the request is using. */
+  using: Set<string>;
   keyId: number;
   accountId: string;
   /** Creation id → server id, for "#creationId" references. */
@@ -50,6 +66,26 @@ interface MethodDef {
 }
 
 const methods = new Map<string, MethodDef>();
+
+export interface Account {
+  box: UserRow;
+  canSend: boolean;
+}
+
+/** The active shared mailboxes a person belongs to, each one an account in their mail apps. */
+export function sharedAccounts(personId: number): Account[] {
+  return all<UserRow & { can_send: number }>(
+    `SELECT b.*, mm.can_send FROM mailbox_members mm JOIN users b ON b.id = mm.mailbox_id
+      WHERE mm.user_id = ? AND b.kind = 'shared' AND b.status = 'active' ORDER BY b.email`,
+    [personId],
+  ).map(({ can_send, ...box }) => ({ box, canSend: !!can_send }));
+}
+
+/** The mailbox an account id names, if this person may use it right now (asked on every call, so losing access is immediate). */
+export function accountFor(person: UserRow, id: unknown): Account | null {
+  if (id === accountId(person.id)) return { box: person, canSend: true };
+  return sharedAccounts(person.id).find((a) => accountId(a.box.id) === id) ?? null;
+}
 
 export function method(name: string, capability: string, handler: Handler, opts: { noAccount?: boolean } = {}) {
   methods.set(name, { capability, handler, noAccount: opts.noAccount });
@@ -128,6 +164,9 @@ export async function processRequest(body: unknown, user: UserRow, keyId: number
   const createdIds = new Map<string, string>(isObject(body.createdIds) ? Object.entries(body.createdIds).filter((e): e is [string, string] => typeof e[1] === 'string') : []);
   const ctx: JmapContext = {
     user,
+    actor: user,
+    canSend: true,
+    using,
     keyId,
     accountId: accountId(user.id),
     createdIds,
@@ -149,7 +188,12 @@ export async function processRequest(body: unknown, user: UserRow, keyId: number
       const def = methods.get(name);
       if (!def || !using.has(def.capability)) throw new MethodError('unknownMethod', `Unknown method ${name}`);
       const args = resolveReferences(rawArgs, responses);
-      if (!def.noAccount && args.accountId !== ctx.accountId) throw new MethodError('accountNotFound', 'No such account');
+      const account = def.noAccount ? { box: user, canSend: true } : accountFor(user, args.accountId);
+      if (!account) throw new MethodError('accountNotFound', 'No such account');
+      if (account.box.id !== user.id && !SHARED_CAPS.includes(def.capability)) throw new MethodError('accountNotSupportedByMethod', 'Shared mailboxes don’t have this');
+      ctx.user = account.box;
+      ctx.canSend = account.canSend;
+      ctx.accountId = accountId(account.box.id);
       const result = await def.handler(args, ctx);
       responses.push([name, result, callId]);
       for (const [n, r] of ctx.extra) responses.push([n, r, callId]);
