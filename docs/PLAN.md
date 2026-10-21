@@ -209,8 +209,9 @@ sessions, appearance, and personal API keys.
   app passwords (API keys with the `mail` scope), off until an admin turns it on.
   Triggers write every visible change to `jmap_changes`; state strings carry a random
   tag so a restore invalidates them. Push goes to verified PushSubscriptions (RFC 8291)
-  or EventSource streams.
+  or EventSource streams. Shared mailboxes are more accounts, checked on every call;
+  FUTURERELEASE holds use the scheduled-send queue, and snooze is a Snoozed mailbox plus
+  Fastmail's `snoozed` Email property.
 
 ## Later
-Shared mailboxes over JMAP, calendar and contacts sync over HTTP (JMAP or
-CalDAV/CardDAV), and multi-tenant billing.
+Calendar and contacts sync over HTTP (JMAP or CalDAV/CardDAV), and multi-tenant billing.

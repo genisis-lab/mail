@@ -60,7 +60,9 @@ function labelsOf(messageIds: number[]): Map<number, LabelRef[]> {
   return map;
 }
 
-const folderOf = (row: { folder: Folder; snoozed_until: number | null }) => (row.folder === 'inbox' && row.snoozed_until !== null ? 'archive' : folderMailbox(row.folder));
+// Matches MAILBOX_OF_ROW.
+const folderOf = (row: { folder: Folder; snoozed_until: number | null }) =>
+  row.snoozed_until !== null && (row.folder === 'inbox' || row.folder === 'archive') ? 'snoozed' : folderMailbox(row.folder);
 
 function mailboxIds(row: any, labels: LabelRef[]): Record<string, true> {
   const out: Record<string, true> = { [folderOf(row)]: true };
@@ -91,6 +93,29 @@ function keywords(row: any): Record<string, true> {
 }
 
 const utcDate = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * Fastmail's Email "snoozed" property (CAP.snooze), as Cyrus IMAP implements it: { until,
+ * moveToMailboxId, setKeywords }, set together with the Snoozed mailbox. Wren's snooze
+ * (messages.snoozed_until) always wakes mail into the Inbox, unread, so moveToMailboxId is
+ * always "inbox" and setKeywords isn't taken. (Cyrus has no "setByMailboxId"; it's refused
+ * like any other unknown field.)
+ */
+const snoozedOf = (row: any) => (folderOf(row) === 'snoozed' ? { until: utcDate(row.snoozed_until), moveToMailboxId: 'inbox' } : null);
+
+/** When a "snoozed" value asks the email to wake, or null for not snoozed. */
+function snoozeUntil(value: unknown): number | null {
+  if (value === null) return null;
+  const bad = (why: string) => new SetError('invalidProperties', why, { properties: ['snoozed'] });
+  if (!isObject(value)) throw bad('snoozed is an object or null');
+  const unknown = Object.keys(value).filter((k) => k !== 'until' && k !== 'moveToMailboxId');
+  if (unknown.length) throw bad(`Can’t set snoozed/${unknown[0]}`);
+  if (value.moveToMailboxId !== undefined && value.moveToMailboxId !== null && value.moveToMailboxId !== 'inbox') throw bad('Snoozed mail always comes back to the Inbox');
+  const until = typeof value.until === 'string' ? Date.parse(value.until) : NaN;
+  if (Number.isNaN(until)) throw bad('snoozed/until must be a UTCDate');
+  return until;
+}
+
 const addrs = (json: string): { name: string | null; email: string }[] | null => {
   const list = (JSON.parse(json || '[]') as Addr[]).map((a) => ({ name: a.name || null, email: a.address }));
   return list.length ? list : null;
@@ -200,6 +225,7 @@ async function toEmail(row: any, labels: LabelRef[], props: Set<string>, args: R
   set('subject', () => row.subject ?? '');
   set('hasAttachment', () => !!row.has_attachments);
   set('preview', () => row.snippet ?? '');
+  set('snoozed', () => snoozedOf(row));
 
   if ([...props].some((p) => BODY_NEEDS.has(p))) {
     await loadBody(row);
@@ -239,7 +265,7 @@ async function toEmail(row: any, labels: LabelRef[], props: Set<string>, args: R
 
 method('Email/get', CAP.mail, async (args, ctx) => {
   const wanted = getIds(args, ctx, false)!;
-  const props = getProperties(args, ALL_PROPS, DEFAULT_PROPS);
+  const props = getProperties(args, ctx.using.has(CAP.snooze) ? [...ALL_PROPS, 'snoozed'] : ALL_PROPS, DEFAULT_PROPS);
   for (const p of props) if (p.startsWith('header:') && !parseHeaderProperty(p)) throw new MethodError('invalidArguments', `Bad header property ${p}`);
   const state = currentState(ctx.user.id);
   const rows = loadRows(ctx.user.id, wanted);
@@ -555,25 +581,27 @@ function keywordSet(value: unknown, what = 'keywords'): Set<string> {
   return out;
 }
 
-/** Split JMAP mailbox ids into the one folder and the labels. */
-function placement(userId: number, ctx: JmapContext, value: unknown): { folder: Folder | null; labels: number[] } {
+/** Split JMAP mailbox ids into the one folder (or Snoozed) and the labels. */
+function placement(userId: number, ctx: JmapContext, value: unknown): { folder: Folder | null; labels: number[]; snoozed: boolean } {
   if (!isObject(value)) throw new SetError('invalidProperties', 'mailboxIds must be an object', { properties: ['mailboxIds'] });
   const folders: Folder[] = [];
   const labels: number[] = [];
+  let snoozed = false;
   for (const [rawId, v] of Object.entries(value)) {
     if (v !== true) throw new SetError('invalidProperties', 'mailboxIds values must be true', { properties: ['mailboxIds'] });
     const id = String(resolveId(ctx, rawId));
     const folder = mailboxFolder(id);
     if (folder) folders.push(folder);
+    else if (id === 'snoozed') snoozed = true;
     else {
       const label = labelFor(userId, id);
       if (!label) throw new SetError('invalidProperties', `No mailbox ${id}`, { properties: ['mailboxIds'] });
       labels.push(label.id);
     }
   }
-  if (!folders.length && !labels.length) throw new SetError('invalidProperties', 'An email must be in at least one mailbox', { properties: ['mailboxIds'] });
-  if (folders.length > 1) throw new SetError('invalidProperties', 'An email can be in only one of Inbox, Archive, Drafts, Sent, Spam and Trash', { properties: ['mailboxIds'] });
-  return { folder: folders[0] ?? null, labels };
+  if (!folders.length && !labels.length && !snoozed) throw new SetError('invalidProperties', 'An email must be in at least one mailbox', { properties: ['mailboxIds'] });
+  if (folders.length + Number(snoozed) > 1) throw new SetError('invalidProperties', 'An email can be in only one of Inbox, Archive, Drafts, Sent, Spam, Trash and Snoozed', { properties: ['mailboxIds'] });
+  return { folder: folders[0] ?? null, labels, snoozed };
 }
 
 function writeKeywords(row: any, kw: Set<string>) {
@@ -609,19 +637,29 @@ function setLabels(row: any, current: LabelRef[], wanted: number[]) {
 
 function updateEmail(ctx: JmapContext, row: any, labels: LabelRef[], patch: Record<string, unknown>) {
   const props = new Set(Object.keys(patch).map((k) => k.split('/')[0]));
-  const bad = [...props].filter((p) => p !== 'keywords' && p !== 'mailboxIds');
-  if (bad.length) throw new SetError('invalidProperties', 'Only keywords and mailboxIds can change', { properties: bad });
+  const snooze = ctx.using.has(CAP.snooze);
+  const bad = [...props].filter((p) => p !== 'keywords' && p !== 'mailboxIds' && !(snooze && p === 'snoozed'));
+  if (bad.length) throw new SetError('invalidProperties', snooze ? 'Only keywords, mailboxIds and snoozed can change' : 'Only keywords and mailboxIds can change', { properties: bad });
   let next: Record<string, any>;
   try {
-    next = applyPatch({ keywords: keywords(row), mailboxIds: mailboxIds(row, labels) }, patch);
+    next = applyPatch({ keywords: keywords(row), mailboxIds: mailboxIds(row, labels), snoozed: snoozedOf(row) }, patch);
   } catch (err) {
     throw new SetError('invalidPatch', (err as Error).message);
   }
   tx(() => {
-    if (props.has('mailboxIds')) {
+    if (props.has('mailboxIds') || props.has('snoozed')) {
       const where = placement(ctx.user.id, ctx, next.mailboxIds);
-      // Taking an email out of its folder (into labels only) archives it, like Gmail's "remove from Inbox".
-      moveTo(row, where.folder ?? (row.folder === 'drafts' ? 'drafts' : 'archive'));
+      // As in Cyrus: "snoozed" and the Snoozed mailbox are set together, and taking an email out of Snoozed un-snoozes it.
+      const until = props.has('snoozed') ? snoozeUntil(next.snoozed) : where.snoozed ? row.snoozed_until : null;
+      if (where.snoozed !== (until !== null)) throw new SetError('invalidProperties', 'A snoozed email is in Snoozed, and only a snoozed one', { properties: ['mailboxIds', 'snoozed'] });
+      if (until === null) {
+        // Taking an email out of its folder (into labels only) archives it, like Gmail's "remove from Inbox".
+        moveTo(row, where.folder ?? (row.folder === 'drafts' ? 'drafts' : 'archive'));
+      } else {
+        // Snoozed mail waits in Inbox or Archive and wakes into the Inbox (wakeSnoozed), as from the web app.
+        if (row.folder !== 'inbox' && row.folder !== 'archive') moveTo(row, 'archive');
+        run('UPDATE messages SET snoozed_until = ? WHERE id = ?', [until, row.id]);
+      }
       setLabels(row, labels, where.labels);
     }
     if (props.has('keywords')) writeKeywords(row, keywordSet(next.keywords));
@@ -806,6 +844,7 @@ method('Email/import', CAP.mail, async (args, ctx) => {
       if (!blob) throw new SetError('blobNotFound', 'No such blob', { notFound: [e.blobId] });
       const where = placement(userId, ctx, e.mailboxIds);
       if (where.folder === 'drafts') throw new SetError('invalidProperties', 'Create drafts with Email/set', { properties: ['mailboxIds'] });
+      if (where.snoozed) throw new SetError('invalidProperties', 'Import the email, then snooze it', { properties: ['mailboxIds'] });
       const kw = e.keywords === undefined ? new Set<string>() : keywordSet(e.keywords);
       const receivedAt = typeof e.receivedAt === 'string' && !Number.isNaN(Date.parse(e.receivedAt)) ? Date.parse(e.receivedAt) : null;
       let result;

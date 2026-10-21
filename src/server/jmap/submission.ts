@@ -1,8 +1,11 @@
 /**
  * Identity/* and EmailSubmission/* (RFC 8621 sections 6 and 7). Identities are
- * the addresses a person may send from; a submission sends a draft through
- * Wren's normal path (identity checks, daily limits, the outbound queue,
- * providers and suppressions) and is shown from its outbox row.
+ * the addresses a person (or a shared mailbox) may send from; a submission
+ * sends a draft through Wren's normal path (identity checks, daily limits, the
+ * outbound queue, providers and suppressions) and is shown from its outbox row.
+ * A send held with FUTURERELEASE (HOLDUNTIL/HOLDFOR) is a scheduled send, the
+ * same as the web app's: it shows in Scheduled there and can be cancelled from
+ * either side, which turns it back into a draft.
  */
 import { all, get, IN_LIST, listParam, now, run } from '../db/index.js';
 import { sha256 } from '../lib/crypto.js';
@@ -90,6 +93,33 @@ interface OutboxRow {
 }
 
 const utcDate = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * The longest an app may hold a send (maxDelayedSend, in seconds). The web app's Schedule send
+ * has no upper limit, but JMAP needs a number, so it's a year.
+ */
+export const MAX_DELAYED_SEND = 365 * 86_400;
+
+const RFC3339 = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/i;
+
+/** When FUTURERELEASE (RFC 4865) asks to release the message: HOLDUNTIL or HOLDFOR on the envelope's mailFrom, or null to send now. */
+function holdUntil(envelope: unknown): number | null {
+  const params = isObject(envelope) && isObject(envelope.mailFrom) && isObject(envelope.mailFrom.parameters) ? envelope.mailFrom.parameters : {};
+  // SMTP parameter names are case-insensitive.
+  const param = (name: string) => Object.entries(params).find(([k]) => k.toUpperCase() === name)?.[1];
+  const holdFor = param('HOLDFOR');
+  const until = param('HOLDUNTIL');
+  if (holdFor === undefined && until === undefined) return null;
+  const bad = (why: string) => new SetError('invalidProperties', why, { properties: ['envelope'] });
+  if (holdFor !== undefined && until !== undefined) throw bad('Use HOLDFOR or HOLDUNTIL, not both');
+  const at =
+    holdFor !== undefined
+      ? typeof holdFor === 'string' && /^\d{1,10}$/.test(holdFor) ? now() + Number(holdFor) * 1000 : NaN
+      : typeof until === 'string' && RFC3339.test(until) ? Date.parse(until) : NaN;
+  if (Number.isNaN(at)) throw bad('HOLDFOR is a number of seconds, and HOLDUNTIL a date and time');
+  if (at > now() + MAX_DELAYED_SEND * 1000) throw bad('Mail can be scheduled up to a year ahead');
+  return at;
+}
 
 function submissionRows(userId: number, where = '', params: unknown[] = []): SubmissionRow[] {
   const rows = all<any>(
@@ -197,13 +227,16 @@ function sendError(err: unknown): SetError {
 async function createSubmission(ctx: JmapContext, obj: Record<string, any>): Promise<{ id: string; emailId: string; undoStatus: string; sendAt: string }> {
   const userId = ctx.user.id;
   if (!isObject(obj)) throw new SetError('invalidProperties', 'Not an object');
+  // As in the web app, members of a shared mailbox without send permission can read and draft but not send.
+  if (!ctx.canSend) throw new SetError('forbiddenToSend', 'You can read this shared mailbox, but not send from it');
   const identity = identityList(userId).find((i) => i.id === resolveId(ctx, obj.identityId));
   if (!identity) throw new SetError('invalidProperties', 'No such identity', { properties: ['identityId'] });
   const eid = String(resolveId(ctx, obj.emailId));
   const row = loadRows(userId, [eid]).get(eid);
   if (!row) throw new SetError('invalidProperties', 'No such email', { properties: ['emailId'] });
   if (row.folder !== 'drafts') throw new SetError('invalidEmail', 'Only drafts can be sent', { properties: ['emailId'] });
-  if (obj.sendAt !== undefined && obj.sendAt !== null) throw new SetError('invalidProperties', 'Delayed sending isn’t supported', { properties: ['sendAt'] });
+  if (obj.sendAt !== undefined && obj.sendAt !== null) throw new SetError('invalidProperties', 'The server sets sendAt; hold the message with HOLDUNTIL or HOLDFOR', { properties: ['sendAt'] });
+  const hold = holdUntil(obj.envelope);
 
   if (isObject(obj.envelope)) {
     const env = obj.envelope as { mailFrom?: { email?: string }; rcptTo?: { email?: string }[] };
@@ -221,14 +254,16 @@ async function createSubmission(ctx: JmapContext, obj: Record<string, any>): Pro
     }
   }
 
+  let res: { sendAt: number };
   try {
-    await sendDraft(userId, row.id, { undoSeconds: 0, kind: 'user', sentBy: userId });
+    // Over 30 seconds away it's a scheduled send; a shorter hold waits like undo send does.
+    res = await sendDraft(userId, row.id, { sendAt: hold, undoSeconds: hold ? Math.ceil(Math.max(0, hold - now()) / 1000) : 0, kind: 'user', sentBy: ctx.actor.id });
   } catch (err) {
     throw sendError(err);
   }
   const o = get<{ id: number }>('SELECT id FROM outbox WHERE message_id = ? ORDER BY id DESC LIMIT 1', [row.id])!;
   const sent = get<{ id: number; thread_id: number; created_at: number; jmap_rev: number }>('SELECT id, thread_id, created_at, jmap_rev FROM messages WHERE id = ?', [row.id])!;
-  return { id: `S${o.id}`, emailId: emailId(sent), undoStatus: 'final', sendAt: utcDate(now()) };
+  return { id: `S${o.id}`, emailId: emailId(sent), undoStatus: res.sendAt > now() ? 'pending' : 'final', sendAt: utcDate(res.sendAt) };
 }
 
 method('EmailSubmission/set', CAP.submission, async (args, ctx) => {

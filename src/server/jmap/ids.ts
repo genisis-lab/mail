@@ -3,7 +3,7 @@
  *
  *   Email    M{message id}T{thread id}C{created_at}[V{draft revision}]
  *   Thread   T{thread id}C{created_at}
- *   Mailbox  inbox, archive, sent, drafts, junk, trash (folders) or L{label id}C{created_at}
+ *   Mailbox  inbox, archive, sent, drafts, junk, trash (folders), snoozed or L{label id}C{created_at}
  *   Blob     R{message}C{created_at}[V{rev}] (the raw message), A{attachment id},
  *            P{message}C{created_at}[V{rev}]t|h (the text or HTML body)
  *   Account  u{user id}
@@ -37,14 +37,19 @@ export function parseThreadId(id: unknown): { id: number; createdAt: number } | 
   return m ? { id: Number(m[1]), createdAt: Number(m[2]) } : null;
 }
 
-/** The six folders, as JMAP mailboxes with roles. Wren's "spam" folder is JMAP's "junk". */
-export const FOLDER_MAILBOXES: { id: string; folder: Folder; role: string; name: string; sortOrder: number }[] = [
+/**
+ * The six folders, as JMAP mailboxes with roles (Wren's "spam" folder is JMAP's "junk"), and
+ * Snoozed, where snoozed mail waits whichever of Inbox or Archive it's in (role "snoozed", as
+ * Fastmail and the IETF snooze draft name it).
+ */
+export const FOLDER_MAILBOXES: { id: string; folder: Folder | null; role: string; name: string; sortOrder: number }[] = [
   { id: 'inbox', folder: 'inbox', role: 'inbox', name: 'Inbox', sortOrder: 1 },
   { id: 'archive', folder: 'archive', role: 'archive', name: 'Archive', sortOrder: 2 },
   { id: 'drafts', folder: 'drafts', role: 'drafts', name: 'Drafts', sortOrder: 3 },
   { id: 'sent', folder: 'sent', role: 'sent', name: 'Sent', sortOrder: 4 },
   { id: 'junk', folder: 'spam', role: 'junk', name: 'Spam', sortOrder: 5 },
   { id: 'trash', folder: 'trash', role: 'trash', name: 'Trash', sortOrder: 6 },
+  { id: 'snoozed', folder: null, role: 'snoozed', name: 'Snoozed', sortOrder: 7 },
 ];
 
 export const folderMailbox = (folder: Folder) => FOLDER_MAILBOXES.find((f) => f.folder === folder)!.id;
