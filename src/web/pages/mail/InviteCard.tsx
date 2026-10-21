@@ -35,7 +35,8 @@ const STATUS_TEXT: Record<string, string> = { ACCEPTED: 'accepted', TENTATIVE: '
 
 const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-function when(inv: Invite): { line: string; other: string | null } {
+/** When an event is, in words (the Calendar page uses it too). */
+export function when(inv: Pick<Invite, 'start' | 'end' | 'allDay'> & { timeZone?: string | null }): { line: string; other: string | null } {
   if (!inv.start) return { line: 'Time not given', other: null };
   if (inv.allDay) {
     const fmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });

@@ -10,7 +10,7 @@ import { applyThreadAction, counters, getMessage, getThread, listThreads, VIEWS,
 import { retryOutbox } from '../mail/outbound.js';
 import { purgeMessages } from '../mail/store.js';
 import { unsubscribe } from '../services/unsubscribe.js';
-import { inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
+import { icsDownload, inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
 import type { Rsvp } from '../../shared/ics.js';
 import { body, browserSessions, clientIp, intParam, requestedAccount, type AppEnv } from '../http/context.js';
 import { audit } from '../services/audit.js';
@@ -254,8 +254,7 @@ mailRoutes.post('/messages/:id/invite/reply', async (c) => {
 mailRoutes.get('/messages/:id/invite.ics', async (c) => {
   const f = await inviteFile(c.get('user').id, intParam(c, 'id'));
   if (!f) throw notFound('This message has no invitation');
-  const name = (f.summary || 'event').replace(/[^\w .-]+/g, '').trim().slice(0, 60) || 'event';
-  return new Response(f.ics, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.ics"` } });
+  return icsDownload(f.ics, f.summary);
 });
 
 // ── Private links (mail/private.ts): the sender's view ─────────────────────

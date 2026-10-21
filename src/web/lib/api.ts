@@ -11,7 +11,7 @@ export class ApiError extends Error {
 type Json = Record<string, unknown> | unknown[];
 
 /** Requests under these paths act on the shared mailbox being viewed, if any. */
-const MAILBOX_SCOPED = /^\/api\/(mail|compose|attachments|labels)(\/|\?|$)/;
+const MAILBOX_SCOPED = /^\/api\/(mail|compose|attachments|labels|calendar)(\/|\?|$)/;
 let currentMailbox: number | null = null;
 /**
  * The account this tab acts as. One browser can be signed in to several, so

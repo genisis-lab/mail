@@ -714,6 +714,26 @@ export const migrations: string[] = [
   );
   CREATE INDEX idx_private_links_expiry ON private_links(expires_at);
   `,
+
+  // 17: the Calendar page: events people add themselves, and what each invitation in mail says.
+  //     messages.invite: NULL: not read yet (the calendar reads it on its next load); '': none; JSON: the event.
+  `
+  CREATE TABLE calendar_events (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL,
+    all_day    INTEGER NOT NULL DEFAULT 0,
+    start_at   INTEGER NOT NULL,
+    end_at     INTEGER NOT NULL,
+    location   TEXT NOT NULL DEFAULT '',
+    notes      TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_calendar_events_user ON calendar_events(user_id, start_at);
+  ALTER TABLE messages ADD COLUMN invite TEXT;
+  CREATE INDEX idx_messages_invite ON messages(user_id) WHERE invite <> '';
+  CREATE INDEX idx_attachments_calendar ON attachments(user_id) WHERE content_type LIKE 'text/calendar%' OR content_type LIKE 'application/ics%' OR filename LIKE '%.ics';
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

@@ -204,6 +204,10 @@ sessions, appearance, and personal API keys.
 - **Invitations** (`shared/ics.ts`, `services/calendar.ts`): the first VEVENT of a
   text/calendar part, times converted with `Intl` (IANA and Windows zone names); replies
   are iTIP REPLY parts sent through the normal send path.
+- **Calendar page** (`routes/calendar.ts`): own events in `calendar_events`; each
+  invitation is read once into `messages.invite` (JSON) the first time the calendar
+  loads after it arrives, and shown one per UID as its newest email says. `/api/calendar`
+  acts on a shared mailbox like the mail routes.
 
 - **Mail apps over JMAP** (`src/server/jmap/`, [jmap.md](jmap.md)): RFC 8620/8621 on
   app passwords (API keys with the `mail` scope), off until an admin turns it on.

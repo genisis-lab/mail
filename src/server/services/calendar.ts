@@ -1,15 +1,19 @@
 /**
  * Meeting invitations in mail: read the iCalendar part of a message, show it
  * as an event, and answer it (Yes / Maybe / No) with an iTIP REPLY to the
- * organizer, the way Gmail and Outlook do.
+ * organizer, the way Gmail and Outlook do. The Calendar page puts them on a
+ * month next to the events people add themselves.
  */
-import { buildIcsFile, buildReply, parseIcs, type CalendarEvent, type Rsvp } from '../../shared/ics.js';
+import { buildIcsFile, buildReply, escapeText, icsStamp, parseIcs, parseLine, type CalendarEvent, type Rsvp } from '../../shared/ics.js';
+import type { CalendarItem } from '../../shared/types.js';
 import { all, get, run } from '../db/index.js';
+import { logger } from '../lib/log.js';
 import { escapeHtml } from '../mail/compose.js';
 import { getBlob } from '../mail/blobs.js';
 import { saveDraft, sendDraft } from '../mail/send.js';
 import { getUser, identities, userAddresses } from './users.js';
 
+const log = logger('calendar');
 const MAX_ICS = 512 * 1024;
 
 export const isCalendarType = (contentType: string, filename = '') => /^(text\/calendar|application\/ics)\b/i.test(contentType) || /\.ics$/i.test(filename);
@@ -116,4 +120,156 @@ export async function replyToInvite(userId: number, messageId: number, status: R
 export async function inviteFile(userId: number, messageId: number): Promise<{ ics: string; summary: string } | null> {
   const loaded = await loadEvent(userId, messageId);
   return loaded ? { ics: buildIcsFile(loaded.ev), summary: loaded.ev.summary } : null;
+}
+
+/** The download response for a .ics file, named after the event. */
+export function icsDownload(ics: string, summary: string): Response {
+  const name = (summary || 'event').replace(/[^\w .-]+/g, '').trim().slice(0, 60) || 'event';
+  return new Response(ics, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.ics"` } });
+}
+
+// ── The Calendar page ───────────────────────────────────────────────────────
+
+/** What one invitation email says, for the calendar (JSON in messages.invite; '' when it has none). */
+interface InviteFacts {
+  /** The event's UID, plus which occurrence when the email is about one occurrence of a repeating event. */
+  key: string;
+  summary: string;
+  location: string;
+  start: number;
+  end: number;
+  allDay: boolean;
+  cancelled: boolean;
+  sequence: number;
+  recurring: boolean;
+  /** The answer the invitation itself records for this person (one given in another app). */
+  me: string | null;
+}
+
+/** Invitations, announcements and cancellations go on the calendar; replies don't. */
+const ON_CALENDAR = new Set(['REQUEST', 'PUBLISH', 'CANCEL']);
+const ANSWERS = new Set<string>(['ACCEPTED', 'TENTATIVE', 'DECLINED']);
+/** isCalendarType in SQL (idx_attachments_calendar covers it). */
+const CALENDAR_PART = `(a.content_type LIKE 'text/calendar%' OR a.content_type LIKE 'application/ics%' OR a.filename LIKE '%.ics')`;
+const READ_BATCH = 100;
+
+async function inviteColumn(userId: number, messageId: number): Promise<string> {
+  const loaded = await loadEvent(userId, messageId).catch((err) => {
+    log.warn(`Couldn't read the invitation in message ${messageId}`, err);
+    return null;
+  });
+  const ev = loaded?.ev;
+  if (!loaded || !ev || ev.start === null || loaded.msg.direction !== 'in' || !ON_CALENDAR.has(ev.method)) return '';
+  const occurrence = ev.props.find((p) => p.name === 'RECURRENCE-ID')?.value.trim();
+  const facts: InviteFacts = {
+    key: `${ev.uid || `message:${messageId}`}${occurrence ? `|${occurrence}` : ''}`,
+    summary: ev.summary.slice(0, 300),
+    location: ev.location.slice(0, 300),
+    start: ev.start,
+    end: Math.max(ev.end ?? ev.start, ev.start),
+    allDay: ev.allDay,
+    cancelled: ev.method === 'CANCEL' || ev.status === 'CANCELLED',
+    sequence: ev.sequence,
+    recurring: ev.recurring,
+    me: myAttendee(userId, ev, loaded.msg.delivered_to)?.status ?? null,
+  };
+  return JSON.stringify(facts);
+}
+
+/**
+ * Read invitations the calendar hasn't seen yet into messages.invite, newest
+ * first, for up to `budgetMs`. True while more remain (a mailbox's first visit
+ * to the calendar, or a big import), so the page asks again.
+ */
+async function readNewInvites(userId: number, budgetMs = 2000): Promise<boolean> {
+  const started = Date.now();
+  const rows = all<{ id: number }>(
+    `SELECT DISTINCT m.id, m.date FROM attachments a JOIN messages m ON m.id = a.message_id
+      WHERE a.user_id = ? AND ${CALENDAR_PART} AND m.invite IS NULL ORDER BY m.date DESC LIMIT ?`,
+    [userId, READ_BATCH],
+  );
+  for (const r of rows) {
+    if (Date.now() - started > budgetMs) return true;
+    run('UPDATE messages SET invite = ? WHERE id = ?', [await inviteColumn(userId, r.id), r.id]);
+  }
+  return rows.length === READ_BATCH;
+}
+
+export interface CalendarEventRow {
+  id: number;
+  user_id: number;
+  title: string;
+  all_day: number;
+  start_at: number;
+  end_at: number;
+  location: string;
+  notes: string;
+  created_at: number;
+}
+
+/** Whether an event touches [from, to); one with no length still counts at its start. */
+const overlaps = (start: number, end: number, from: number, to: number) => start < to && Math.max(end, start + 1) > from;
+
+/**
+ * Everything on the calendar between `from` and `to`: the person's own events,
+ * and the invitations in their mail (outside Spam and Trash), one per event as
+ * its newest email has it, with the answer they last gave.
+ */
+export async function calendarEvents(userId: number, from: number, to: number): Promise<{ events: CalendarItem[]; more: boolean }> {
+  const more = await readNewInvites(userId);
+  const own = all<CalendarEventRow>('SELECT * FROM calendar_events WHERE user_id = ? AND start_at < ? AND MAX(end_at, start_at + 1) > ?', [userId, to, from]).map(
+    (r): CalendarItem => ({ id: r.id, title: r.title, start: r.start_at, end: r.end_at, allDay: !!r.all_day, location: r.location, notes: r.notes, invite: null }),
+  );
+  // shortcut: reads every invitation in the mailbox on each load; keep start/end in their own columns if mailboxes collect many thousands.
+  const rows = all<{ id: number; thread_id: number; invite: string; rsvp: string | null }>(
+    `SELECT id, thread_id, invite, rsvp FROM messages WHERE user_id = ? AND invite <> '' AND folder NOT IN ('spam','trash','drafts') ORDER BY date, id`,
+    [userId],
+  );
+  const latest = new Map<string, { row: (typeof rows)[number]; facts: InviteFacts; answer: string | null }>();
+  for (const row of rows) {
+    let facts: InviteFacts;
+    try {
+      facts = JSON.parse(row.invite) as InviteFacts;
+    } catch {
+      continue;
+    }
+    const seen = latest.get(facts.key);
+    const answer = row.rsvp ?? seen?.answer ?? null;
+    // A later email updates the event, unless it's an older version of it.
+    if (!seen || facts.sequence >= seen.facts.sequence) latest.set(facts.key, { row, facts, answer });
+    else seen.answer = answer;
+  }
+  const invites: CalendarItem[] = [];
+  for (const { row, facts: f, answer } of latest.values()) {
+    // shortcut: a repeating invitation shows its first occurrence only; expand its RRULE here if people need the rest.
+    if (!overlaps(f.start, f.end, from, to)) continue;
+    const given = answer ?? f.me;
+    invites.push({
+      id: null,
+      title: f.summary,
+      start: f.start,
+      end: f.end,
+      allDay: f.allDay,
+      location: f.location,
+      notes: '',
+      invite: { messageId: row.id, threadId: row.thread_id, answer: given && ANSWERS.has(given) ? (given as Rsvp) : null, cancelled: f.cancelled, recurring: f.recurring },
+    });
+  }
+  return { events: [...own, ...invites].sort((a, b) => a.start - b.start), more };
+}
+
+/** An event the person added, as a .ics file. */
+export function eventFile(row: CalendarEventRow, domain: string): string {
+  const day = (ts: number) => new Date(ts).toISOString().slice(0, 10).replace(/-/g, '');
+  const text = (v: string) => escapeText(v.replace(/\r\n?/g, '\n'));
+  const lines = [
+    `UID:event-${row.id}-${row.created_at}@${domain}`,
+    `DTSTAMP:${icsStamp(Date.now())}`,
+    row.all_day ? `DTSTART;VALUE=DATE:${day(row.start_at)}` : `DTSTART:${icsStamp(row.start_at)}`,
+    row.all_day ? `DTEND;VALUE=DATE:${day(row.end_at)}` : `DTEND:${icsStamp(row.end_at)}`,
+    `SUMMARY:${text(row.title)}`,
+    ...(row.location ? [`LOCATION:${text(row.location)}`] : []),
+    ...(row.notes ? [`DESCRIPTION:${text(row.notes)}`] : []),
+  ];
+  return buildIcsFile({ props: lines.map((l) => parseLine(l)!) });
 }
