@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { all, get, getMeta, run, setMeta, tx } from '../db/index.js';
-import { blobName, decryptBlob, encryptBlob, isEncryptedBlob } from '../lib/crypto.js';
+import { blobName, decryptBlob, encryptBlob, isEncryptedBlob, sha256 } from '../lib/crypto.js';
 import { logger } from '../lib/log.js';
 import { platform } from '../platform.js';
 
@@ -13,9 +13,11 @@ const log = logger('blobs');
  * WREN_SECRET and named by a keyed hash of its contents, so the bucket alone
  * shows neither what a file says nor whether a known file is there.
  * Backups and exports pass their own (random) name.
+ * While WREN_SECRET differs from the data's key, files are stored as they are,
+ * so they read whichever key ends up in place (the encryption pass gets them later).
  */
 export async function putBlob(data: Uint8Array, name = blobName(data)): Promise<string> {
-  await platform().blobs.put(name, encryptBlob(data));
+  await platform().blobs.put(name, config.keyMismatch ? data : encryptBlob(data));
   return name;
 }
 
@@ -111,16 +113,28 @@ export function blobStoreSize(): number {
 
 // ── Encrypting files stored before encryption ───────────────────────────────
 
-/** Where the pass is: the last name looked at (names are visited in order) and how many files were left to look at. */
+/**
+ * Where the pass is: the last name looked at (names are visited in order), how
+ * many files were left to look at, the file being encrypted right now (still
+ * set on the next run when that attempt never finished) and how many files
+ * were left as they were.
+ */
 interface EncryptionPass {
   after: string;
   left: number;
+  trying?: string;
+  skipped?: number;
+  done?: boolean;
 }
 
-const passState = (): EncryptionPass | 'done' | null => {
+const passState = (): EncryptionPass | null => {
   const v = getMeta('blob_encryption');
-  return v === 'done' ? v : v ? (JSON.parse(v) as EncryptionPass) : null;
+  return v === 'done' ? { after: '', left: 0, done: true } : v ? (JSON.parse(v) as EncryptionPass) : null;
 };
+const savePass = (s: EncryptionPass) => setMeta('blob_encryption', JSON.stringify(s));
+
+/** Look at every stored file again, e.g. after files were stored unencrypted while WREN_SECRET was changed. */
+export const restartBlobEncryption = () => run(`DELETE FROM _meta WHERE key = 'blob_encryption'`);
 
 let encrypting = false;
 let retryAt = 0;
@@ -130,19 +144,25 @@ let retryAt = 0;
  * changed WREN_SECRET: files would be encrypted with a key the owner may still
  * replace with the original.
  */
-export const blobEncryptionDue = () => passState() !== 'done' && !config.keyMismatch && Date.now() >= retryAt;
+export const blobEncryptionDue = () => !passState()?.done && !config.keyMismatch && Date.now() >= retryAt;
 
-/** For Admin → System: null once every stored file is encrypted, else how many are left (null count while still counting). */
-export function blobEncryptionStatus(): { left: number | null } | null {
+/**
+ * For Admin → System: null once every stored file is encrypted, else how many
+ * are left (null while still counting) and how many were left unencrypted.
+ */
+export function blobEncryptionStatus(): { left: number | null; skipped: number; done: boolean } | null {
   const s = passState();
-  return s === 'done' ? null : { left: s?.left ?? null };
+  if (s?.done && !s.skipped) return null;
+  return { left: s?.left ?? null, skipped: s?.skipped ?? 0, done: !!s?.done };
 }
 
 /**
  * Encrypt files stored before encryption, in place under the same name so
  * every reference stays valid. A batch per run of the background work,
  * resuming after the last name it looked at; true while more remains.
- * Safe to interrupt and run again: encrypted files are skipped.
+ * Safe to interrupt and run again: encrypted files are skipped. A file whose
+ * attempt failed or never finished (say it didn't fit in memory) is left as
+ * it was on the next run, so one file can't hold up the pass.
  */
 export async function continueBlobEncryption(limit = 50, budgetMs = 5000): Promise<boolean> {
   if (encrypting || !blobEncryptionDue()) return false;
@@ -150,23 +170,33 @@ export async function continueBlobEncryption(limit = 50, budgetMs = 5000): Promi
   try {
     const store = platform().blobs;
     const state = passState();
-    if (state === 'done') return false;
+    if (state?.done) return false;
     if (!state) {
       // First run: count the files, for the progress shown to admins.
       let left = 0;
       for await (const _ of store.list()) left++;
-      setMeta('blob_encryption', JSON.stringify({ after: '', left } satisfies EncryptionPass));
+      savePass({ after: '', left });
       return true;
     }
     const started = Date.now();
+    let { after, left, skipped = 0 } = state;
     let n = 0;
     for await (const b of store.list(state.after)) {
       if (n++ >= limit || Date.now() - started > budgetMs) return true;
-      await encryptInPlace(b.key);
-      setMeta('blob_encryption', JSON.stringify({ after: b.key, left: Math.max(0, state.left - n) } satisfies EncryptionPass));
+      if (b.key === state.trying) {
+        log.warn(`Left stored file ${b.key.slice(0, 12)}… unencrypted: encrypting it failed or didn’t finish last time`);
+        skipped++;
+      } else {
+        // Saved first: if this attempt brings the whole object down, the next run moves past the file.
+        savePass({ after, left, skipped, trying: b.key });
+        await encryptInPlace(b.key);
+      }
+      after = b.key;
+      left = Math.max(0, left - 1);
+      savePass({ after, left, skipped });
     }
-    setMeta('blob_encryption', 'done');
-    log.info('Every stored mail file is encrypted');
+    savePass({ after, left: 0, skipped, done: true });
+    log.info(skipped ? `Every stored mail file is encrypted, except ${skipped} left as they were` : 'Every stored mail file is encrypted');
     return false;
   } catch (err) {
     // Don't spin on a storage outage: try again in a few minutes.
@@ -178,20 +208,20 @@ export async function continueBlobEncryption(limit = 50, budgetMs = 5000): Promi
 }
 
 /**
- * Overwrite a plaintext file with its encrypted copy, only once that copy is
- * known to decrypt to the original, and check the stored copy is that copy.
- * shortcut: holds a file about three times over while doing so; fine for
- * mail-sized files (25 MB attachments), stream it if files get much bigger.
+ * Overwrite a plaintext file with its encrypted copy, then check the stored
+ * copy is that copy, putting the original back if not. Holds the file twice
+ * at most (a raw message with a 25 MB attachment is about 34 MB).
  */
 async function encryptInPlace(key: string) {
   const store = platform().blobs;
   const plain = await store.get(key);
   if (!plain || isEncryptedBlob(plain)) return; // deleted meanwhile, or already encrypted
-  const sealed = encryptBlob(plain);
-  if (!decryptBlob(sealed).equals(plain)) throw new Error('Encrypting a stored file failed its check');
+  let sealed: Buffer | null = encryptBlob(plain);
+  const digest = sha256(sealed);
   await store.put(key, sealed, true);
+  sealed = null; // let go of it before reading the stored copy back
   const stored = await store.get(key);
-  if (stored && !sealed.equals(stored)) {
+  if (stored && sha256(stored) !== digest) {
     await store.put(key, plain, true);
     throw new Error(`Stored file ${key.slice(0, 12)}… didn’t read back correctly after encrypting, so it was left as it was`);
   }

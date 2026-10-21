@@ -93,7 +93,7 @@ export function randomToken(bytes = 32): string {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
-export function sha256(data: string | Buffer): string {
+export function sha256(data: string | Uint8Array): string {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 

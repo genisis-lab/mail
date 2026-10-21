@@ -2,10 +2,10 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { APP_VERSION } from '../../shared/brand.js';
 import { config } from '../config.js';
-import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
+import { all, get, getMeta, IN_LIST, insert, listParam, now, run, setMeta, tx } from '../db/index.js';
 import { platform } from '../platform.js';
-import { encryptJson, hashPassword, randomToken, sha256 } from '../lib/crypto.js';
-import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
+import { encryptJson, hashPassword, randomToken, secretFingerprint, sha256, verifyPassword } from '../lib/crypto.js';
+import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/http.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
 import { audit } from '../services/audit.js';
@@ -14,7 +14,7 @@ import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
+import { checkTwoStepCode, createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -22,7 +22,7 @@ import { ProviderError } from '../providers/types.js';
 import { blobEncryptionStatus, blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
-import { body, clientIp, intParam, type AppEnv } from '../http/context.js';
+import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 import { systemSender } from '../services/system-mail.js';
 import { closeStreams, closeUserStreams } from '../jmap/push.js';
 
@@ -82,8 +82,8 @@ adminRoutes.get('/overview', async (c) => {
   if (config.keyMismatch)
     warnings.push({
       level: 'warn',
-      message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials, two-factor secrets and stored mail files (attachments, original messages) cannot be read. Restore the previous key, or re-enter provider settings and reset 2FA for affected users.',
-      link: '/admin/providers',
+      message: 'WREN_SECRET differs from the key this data was encrypted with, so provider credentials, two-factor secrets and stored mail files (attachments, original messages) cannot be read. Restore the previous key, or keep this one with “Use the current key” in System & backup, then re-enter provider settings and reset 2FA for affected users.',
+      link: '/admin/system',
     });
   if (config.publicUrl.includes('localhost')) warnings.push({ level: 'info', message: 'PUBLIC_URL is localhost — inbound webhook URLs will not be reachable by providers.' });
 
@@ -113,6 +113,44 @@ adminRoutes.get('/system', async (c) =>
     ...platform().systemInfo(),
   }),
 );
+
+/** The owner only, entering their password again (and a 2-step code when asked for and that's on). */
+async function confirmOwner(c: Context<AppEnv>, what: string, twoStep = false) {
+  const user = c.get('user');
+  if (user.role !== 'owner') throw forbidden(`Only the owner can ${what}`);
+  const input = await body(c, z.object({ password: z.string().min(1).max(256), code: z.string().max(32).optional() }));
+  rateLimit(`owner-confirm:${user.id}`, 5, 15 * 60_000);
+  if (!(await verifyPassword(input.password, user.password_hash))) throw unauthorized('Password is incorrect');
+  if (twoStep && user.totp_enabled) {
+    if (!input.code) throw badRequest('Enter the code from your authenticator app');
+    if (!checkTwoStepCode(user, input.code, clientIp(c))) throw unauthorized('That code is not valid');
+  }
+}
+
+/**
+ * The generated encryption key, which otherwise exists only inside the
+ * database: needed as WREN_SECRET to move the instance or restore it elsewhere.
+ */
+adminRoutes.post('/encryption-key', async (c) => {
+  await confirmOwner(c, 'see the encryption key', true);
+  if (getMeta('secret') !== config.secret) throw badRequest('The encryption key comes from WREN_SECRET, which you set yourself, so it isn’t shown here');
+  act(c, 'admin.encryption_key_viewed', 'encryption key');
+  c.header('Cache-Control', 'no-store');
+  return c.json({ key: config.secret });
+});
+
+/**
+ * Keep the current WREN_SECRET after it changed: data saved with the old key
+ * (provider credentials, 2FA secrets, mail files) stays unreadable.
+ */
+adminRoutes.post('/encryption-key/use-current', async (c) => {
+  await confirmOwner(c, 'change the encryption key');
+  if (!config.keyMismatch) throw badRequest('The encryption key already matches this data');
+  setMeta('key_fingerprint', secretFingerprint());
+  config.keyMismatch = false;
+  act(c, 'admin.encryption_key_adopted', 'encryption key');
+  return c.json({ ok: true });
+});
 
 // ── Users ───────────────────────────────────────────────────────────────────
 

@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { config } from '../src/server/config';
-import { all, get, run } from '../src/server/db/index';
-import { blobName, isEncryptedBlob, sha256 } from '../src/server/lib/crypto';
-import { blobEncryptionDue, blobEncryptionStatus, collectGarbage, continueBlobEncryption, getBlob, putBlob } from '../src/server/mail/blobs';
+import { all, get, getMeta, run, setMeta } from '../src/server/db/index';
+import { blobName, encrypt, isEncryptedBlob, secretFingerprint, sha256, totpCode } from '../src/server/lib/crypto';
+import { blobEncryptionDue, blobEncryptionStatus, collectGarbage, continueBlobEncryption, getBlob, putBlob, restartBlobEncryption } from '../src/server/mail/blobs';
 import { buildMime } from '../src/server/mail/compose';
 import { ingest } from '../src/server/mail/ingest';
 import { platform, setPlatform } from '../src/server/platform';
@@ -86,7 +86,8 @@ describe('encrypted mail files', () => {
       }
       const fresh = await putBlob(enc('new message'));
       restartPass();
-      expect(blobEncryptionStatus()).toEqual({ left: null });
+      const counting = { left: null, skipped: 0, done: false };
+      expect(blobEncryptionStatus()).toEqual(counting);
 
       // Paused while WREN_SECRET differs from the data's key.
       config.keyMismatch = true;
@@ -96,12 +97,12 @@ describe('encrypted mail files', () => {
       } finally {
         config.keyMismatch = false;
       }
-      expect(blobEncryptionStatus()).toEqual({ left: null });
+      expect(blobEncryptionStatus()).toEqual(counting);
 
       expect(await continueBlobEncryption(3)).toBe(true); // counts the files first
-      expect(blobEncryptionStatus()).toEqual({ left: 8 });
+      expect(blobEncryptionStatus()).toEqual({ left: 8, skipped: 0, done: false });
       expect(await continueBlobEncryption(3)).toBe(true);
-      expect(blobEncryptionStatus()).toEqual({ left: 5 });
+      expect(blobEncryptionStatus()).toEqual({ left: 5, skipped: 0, done: false });
       // Stopped part-way, every file still reads.
       for (const [key, data] of legacy) expect((await getBlob(key)).equals(data)).toBe(true);
 
@@ -123,6 +124,41 @@ describe('encrypted mail files', () => {
       restartPass();
       while (await continueBlobEncryption(3));
       expect(await snapshot()).toEqual(before);
+    } finally {
+      setPlatform(original);
+    }
+  });
+
+  it('stores files unencrypted while WREN_SECRET is changed, so either key reads them, and encrypts them once that’s sorted out', async () => {
+    const original = platform();
+    setPlatform({ ...original, blobs: memoryBlobStore() });
+    try {
+      while (await continueBlobEncryption());
+      expect(blobEncryptionStatus()).toBeNull();
+      config.keyMismatch = true;
+      let name: string;
+      try {
+        name = await putBlob(enc('saved while the key was changed'));
+        expect(isEncryptedBlob(await stored(name))).toBe(false);
+        // What startup does on finding the changed key.
+        restartBlobEncryption();
+        expect(await continueBlobEncryption()).toBe(false);
+      } finally {
+        config.keyMismatch = false;
+      }
+      const secret = config.secret;
+      config.secret = OTHER_SECRET;
+      try {
+        expect((await getBlob(name)).toString()).toBe('saved while the key was changed');
+      } finally {
+        config.secret = secret;
+      }
+
+      // The key is back: the pass looks at every file again and encrypts this one.
+      while (await continueBlobEncryption());
+      expect(blobEncryptionStatus()).toBeNull();
+      expect(isEncryptedBlob(await stored(name))).toBe(true);
+      expect((await getBlob(name)).toString()).toBe('saved while the key was changed');
     } finally {
       setPlatform(original);
     }
@@ -184,11 +220,20 @@ describe('encrypted mail files', () => {
     expect(marked.has(raw)).toBe(false);
   });
 
-  it('stores exact bytes in the Durable Object fallback store, including Buffer views', async () => {
+  it('stores exact bytes in the Durable Object fallback store, including Buffer views, and lists it a page at a time', async () => {
     const db = new DatabaseSync(':memory:');
     const toSql = (p: unknown) => (p instanceof ArrayBuffer ? new Uint8Array(p) : p);
+    let mostRows = 0;
     const storage = {
-      sql: { exec: (q: string, ...params: unknown[]) => ({ toArray: () => db.prepare(q).all(...(params.map(toSql) as never[])) }) },
+      sql: {
+        exec: (q: string, ...params: unknown[]) => ({
+          toArray: () => {
+            const rows = db.prepare(q).all(...(params.map(toSql) as never[]));
+            mostRows = Math.max(mostRows, rows.length);
+            return rows;
+          },
+        }),
+      },
       transactionSync: <T>(fn: () => T) => {
         db.exec('BEGIN');
         try {
@@ -219,35 +264,118 @@ describe('encrypted mail files', () => {
     };
     expect(await keys()).toEqual(['a', 'b']);
     expect(await keys('a')).toEqual(['b']);
+
+    const many = Array.from({ length: 2500 }, (_, i) => `k${String(i).padStart(4, '0')}`);
+    for (const k of many) await store.put(k, Buffer.from(k));
+    mostRows = 0;
+    expect(await keys()).toEqual(['a', 'b', ...many]);
+    expect(await keys('k0999')).toEqual(many.slice(1000));
+    expect(mostRows).toBe(1000);
   });
 
   // Last: a failure makes the pass wait ten minutes.
-  it('never loses a file when encrypting it goes wrong, and tries again later', async () => {
+  it('never loses a file when encrypting it goes wrong, and moves past it next time so one file can’t stall the pass', async () => {
     const original = platform();
     const store = memoryBlobStore();
-    const data = Buffer.from('precious old file');
-    const key = sha256(data);
-    await store.put(key, data);
-    let mangle = true;
-    // Storage that cuts the encrypted copy short.
-    setPlatform({ ...original, blobs: { ...store, put: (k, d, replace) => store.put(k, mangle && isEncryptedBlob(d) ? d.subarray(0, d.length - 1) : d, replace) } });
+    const files = new Map(['precious old file', 'another old file'].map((t) => [sha256(Buffer.from(t)), Buffer.from(t)]));
+    for (const [key, data] of files) await store.put(key, data);
+    const [bad, good] = [...files.keys()].sort();
+    let tryingWhileStoring: string | undefined;
+    // Storage that cuts the encrypted copy of the first file short.
+    const put: typeof store.put = (k, d, replace) => {
+      if (isEncryptedBlob(d)) tryingWhileStoring ??= JSON.parse(getMeta('blob_encryption')!).trying;
+      return store.put(k, k === bad && isEncryptedBlob(d) ? d.subarray(0, d.length - 1) : d, replace);
+    };
+    setPlatform({ ...original, blobs: { ...store, put } });
     try {
       restartPass();
       expect(await continueBlobEncryption()).toBe(true);
       await expect(continueBlobEncryption()).rejects.toThrow(/didn’t read back correctly/);
-      expect(Buffer.from((await store.get(key))!).equals(data)).toBe(true);
-      expect(blobEncryptionStatus()).toEqual({ left: 1 });
+      expect(Buffer.from((await store.get(bad))!).equals(files.get(bad)!)).toBe(true);
+      // Noted before the file was touched, so a run that dies part-way (say, out of memory) moves past it too.
+      expect(tryingWhileStoring).toBe(bad);
+      expect(blobEncryptionStatus()).toEqual({ left: 2, skipped: 0, done: false });
       expect(blobEncryptionDue()).toBe(false);
 
-      mangle = false;
       vi.useFakeTimers({ now: Date.now() + 11 * 60_000, toFake: ['Date'] });
       expect(blobEncryptionDue()).toBe(true);
       expect(await continueBlobEncryption()).toBe(false);
-      expect(blobEncryptionStatus()).toBeNull();
-      expect((await getBlob(key)).equals(data)).toBe(true);
-      expect(isEncryptedBlob((await store.get(key))!)).toBe(true);
+      expect(blobEncryptionStatus()).toEqual({ left: 0, skipped: 1, done: true });
+      expect(blobEncryptionDue()).toBe(false);
+      expect(isEncryptedBlob((await store.get(bad))!)).toBe(false);
+      expect((await getBlob(bad)).equals(files.get(bad)!)).toBe(true);
+      expect(isEncryptedBlob((await store.get(good))!)).toBe(true);
+      expect((await getBlob(good)).equals(files.get(good)!)).toBe(true);
     } finally {
       setPlatform(original);
+    }
+  });
+});
+
+describe('the encryption key in Admin → System', () => {
+  const PW = 'a very long password';
+  const owner = () => get<{ id: number }>(`SELECT id FROM users WHERE email = 'admin@wren.test'`)!.id;
+  const freshAttempts = () => run(`DELETE FROM login_attempts WHERE key LIKE 'owner-confirm:%'`);
+  const audited = (action: string) => all('SELECT target FROM audit_log WHERE action = ?', [action]);
+
+  beforeAll(async () => {
+    h.as('admin');
+    await h.call('POST', '/api/admin/users', { email: 'deputy@wren.test', name: 'Deputy', password: PW, role: 'admin' });
+    await h.login('deputy@wren.test', PW, 'deputy');
+    h.as('admin');
+  });
+
+  it('shows the generated key only to the owner, after their password and 2-step code', async () => {
+    freshAttempts();
+    const show = (body: object) => h.call('POST', '/api/admin/encryption-key', body);
+    h.as('deputy');
+    expect((await show({ password: PW })).status).toBe(403);
+    h.as('admin');
+    expect((await show({ password: 'not the password' })).status).toBe(401);
+    // A key from WREN_SECRET was set by the owner and isn't shown.
+    expect((await show({ password: PW })).status).toBe(400);
+
+    setMeta('secret', config.secret); // as when Wren generated the key
+    try {
+      const r = await show({ password: PW });
+      expect(r.status).toBe(200);
+      expect(r.body.key).toBe(config.secret);
+      expect(r.headers.get('Cache-Control')).toBe('no-store');
+      expect(audited('admin.encryption_key_viewed')).toHaveLength(1);
+      expect(JSON.stringify(all('SELECT * FROM audit_log'))).not.toContain(config.secret);
+      expect(await (await h.request('/api/admin/export')).text()).not.toContain(config.secret);
+
+      freshAttempts();
+      run('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?', [encrypt('JBSWY3DPEHPK3PXP'), owner()]);
+      expect((await show({ password: PW })).status).toBe(400);
+      expect((await show({ password: PW, code: '000000' })).status).toBe(401);
+      expect((await show({ password: PW, code: totpCode('JBSWY3DPEHPK3PXP', Math.floor(Date.now() / 30_000)) })).body.key).toBe(config.secret);
+    } finally {
+      run('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?', [owner()]);
+      run(`DELETE FROM _meta WHERE key = 'secret'`);
+    }
+  });
+
+  it('lets the owner keep a changed key, after their password', async () => {
+    freshAttempts();
+    const use = (body: object) => h.call('POST', '/api/admin/encryption-key/use-current', body);
+    expect((await use({ password: PW })).status).toBe(400); // nothing to do
+    setMeta('key_fingerprint', 'from-the-old-key');
+    config.keyMismatch = true;
+    try {
+      h.as('deputy');
+      expect((await use({ password: PW })).status).toBe(403);
+      h.as('admin');
+      expect((await use({ password: 'not the password' })).status).toBe(401);
+      expect(config.keyMismatch).toBe(true);
+      expect((await use({ password: PW })).status).toBe(200);
+      expect(config.keyMismatch).toBe(false);
+      expect(getMeta('key_fingerprint')).toBe(secretFingerprint());
+      expect(audited('admin.encryption_key_adopted')).toHaveLength(1);
+      expect((await h.call('GET', '/api/admin/system')).body.keyMismatch).toBe(false);
+    } finally {
+      config.keyMismatch = false;
+      setMeta('key_fingerprint', secretFingerprint());
     }
   });
 });

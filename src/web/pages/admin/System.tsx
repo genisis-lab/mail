@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { DatabaseBackup, Download, History, Megaphone, Trash2, Upload } from 'lucide-react';
+import { DatabaseBackup, Download, History, KeyRound, Megaphone, Trash2, Upload } from 'lucide-react';
 import { api, ApiError, linkUrl } from '../../lib/api';
+import { download } from '../../lib/csv';
 import { fileSize, longDate, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, Field, IconButton, Input, Select, Spinner, Switch, Textarea } from '../../components/ui';
+import { Badge, Button, Card, Field, IconButton, Input, Modal, Select, Spinner, Switch, Textarea } from '../../components/ui';
 import { useSession } from '../../lib/session';
-import { PageHeader, Table } from './common';
+import { CopyField, PageHeader, Table } from './common';
 
 export function AuditPage() {
   const q = useQuery({ queryKey: ['admin', 'audit'], queryFn: () => api.get<{ items: any[] }>('/api/admin/audit').then((r) => r.items) });
@@ -49,9 +50,12 @@ export function SystemPage() {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
+  const [keyDialog, setKeyDialog] = useState<'show' | 'use' | null>(null);
   if (q.isLoading || !q.data) return <Spinner />;
   const s = q.data;
   const selfHosted = !!s.selfHosted;
+  const isOwner = user.role === 'owner';
+  const files = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'file' : 'files'}`;
   const rows: [string, React.ReactNode][] = [
     ['Version', `Wren ${s.version}`],
     ['Runtime', s.platform],
@@ -60,10 +64,15 @@ export function SystemPage() {
       'Mail files',
       !s.encryptingFiles ? (
         <Badge tone="ok">encrypted</Badge>
+      ) : s.encryptingFiles.done ? (
+        <span className="text-muted">Encrypted, except {files(s.encryptingFiles.skipped)} that couldn’t be. They were left as they were and still open.</span>
       ) : s.keyMismatch ? (
         <span className="text-muted">Encrypting existing mail files is paused until the original WREN_SECRET is back</span>
       ) : (
-        <span className="text-muted">Encrypting existing mail files{s.encryptingFiles.left === null ? '…' : `: ${s.encryptingFiles.left.toLocaleString()} left`}</span>
+        <span className="text-muted">
+          Encrypting existing mail files{s.encryptingFiles.left === null ? '…' : `: ${s.encryptingFiles.left.toLocaleString()} left`}
+          {s.encryptingFiles.skipped > 0 && ` (${files(s.encryptingFiles.skipped)} couldn’t be encrypted and were left as they were)`}
+        </span>
       ),
     ],
     ['Incoming mail', selfHosted ? 'Provider webhooks (for example Resend inbound)' : 'Cloudflare Email Routing → this Worker, plus any provider webhooks'],
@@ -82,11 +91,25 @@ export function SystemPage() {
     [
       'Encryption key',
       s.keyMismatch ? (
-        <Badge tone="danger">WREN_SECRET changed — mail files and encrypted settings can’t be read</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="danger">WREN_SECRET changed — mail files and encrypted settings can’t be read</Badge>
+          {isOwner && (
+            <Button size="sm" variant="ghost" onClick={() => setKeyDialog('use')}>
+              Use the current key…
+            </Button>
+          )}
+        </div>
       ) : s.secretFromEnv ? (
         <Badge tone="ok">from WREN_SECRET</Badge>
       ) : (
-        <span className="text-muted">Generated automatically, stored with the database</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-muted">Generated automatically, stored with the database</span>
+          {isOwner && (
+            <Button size="sm" variant="ghost" icon={<KeyRound className="size-4" />} onClick={() => setKeyDialog('show')}>
+              Show key…
+            </Button>
+          )}
+        </div>
       ),
     ],
     ['Database size', fileSize(s.storage.database)],
@@ -105,7 +128,9 @@ export function SystemPage() {
           ))}
         </dl>
       </Card>
-      <AutoBackupCard isOwner={user.role === 'owner'} />
+      <ShowKeyModal open={keyDialog === 'show'} onClose={() => setKeyDialog(null)} />
+      <UseCurrentKeyModal open={keyDialog === 'use'} onClose={() => setKeyDialog(null)} />
+      <AutoBackupCard isOwner={isOwner} />
       <BackupCard selfHosted={selfHosted} pointInTime={s.backup.pointInTime} rebuilding={s.backup.searchRebuilding} />
       <Card title="Announcement" description="Email every active user, e.g. about planned maintenance.">
         <div className="grid max-w-xl gap-3">
@@ -148,6 +173,142 @@ export function SystemPage() {
   );
 }
 
+/** The generated encryption key, to keep somewhere safe. The owner enters their password (and 2-step code) to see it. */
+function ShowKeyModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { user } = useSession();
+  const toast = useToast();
+  const empty = { password: '', code: '' };
+  const [form, setForm] = useState(empty);
+  const [key, setKey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const close = () => {
+    setForm(empty);
+    setKey(null);
+    onClose();
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title="Encryption key"
+      width="max-w-md"
+      footer={
+        key ? (
+          <Button variant="primary" onClick={close}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={close}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={busy}
+              disabled={!form.password || (user.totpEnabled && !form.code.trim())}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await api.post<{ key: string }>('/api/admin/encryption-key', { password: form.password, code: form.code.trim() || undefined });
+                  setForm(empty);
+                  setKey(r.key);
+                } catch (err) {
+                  toast({ message: (err as Error).message, tone: 'error' });
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Show key
+            </Button>
+          </>
+        )
+      }
+    >
+      {key ? (
+        <div className="grid gap-3">
+          <CopyField value={key} label="encryption key" onCopy={() => toast('Copied')} />
+          <p className="text-sm text-muted">Keep it somewhere safe, such as a password manager. When you move Wren or restore a backup on another deployment, set it as WREN_SECRET there first, or mail files and backups can’t be read.</p>
+          <div>
+            <Button icon={<Download className="size-4" />} onClick={() => download('wren-encryption-key.txt', key, 'text/plain')}>
+              Download
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          <p className="text-sm">Wren generated this key and keeps it only in the database. Mail files and stored backups can’t be read without it, so keep a copy somewhere safe. Enter your password to see it.</p>
+          <Field label="Your password">
+            <Input type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoFocus />
+          </Field>
+          {user.totpEnabled && (
+            <Field label="2-step verification code" help="From your authenticator app, or one of your recovery codes.">
+              <Input inputMode="numeric" autoComplete="one-time-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="123456" />
+            </Field>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** Keep a changed WREN_SECRET for good, giving up on what the old key protected. */
+function UseCurrentKeyModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const close = () => {
+    setPassword('');
+    onClose();
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title="Use the current key?"
+      width="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={close}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            loading={busy}
+            disabled={!password}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api.post('/api/admin/encryption-key/use-current', { password });
+                toast('Wren now uses the current key');
+                qc.invalidateQueries({ queryKey: ['admin'] });
+                close();
+              } catch (err) {
+                toast({ message: (err as Error).message, tone: 'error' });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Use the current key
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <p className="text-sm">Wren will treat the current WREN_SECRET as this data’s key from now on, stop warning about it, and encrypt new mail files with it.</p>
+        <p className="text-sm text-muted">
+          Anything saved with the old key stays unreadable for good: provider credentials (re-enter them under Providers), two-factor secrets (reset 2-step verification for those users) and mail files stored with it. If you still have the old key, put it back as WREN_SECRET instead.
+        </p>
+        <Field label="Your password">
+          <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
 async function uploadRestore(file: File, allowKeyMismatch: boolean) {
   const res = await fetch(linkUrl(`/api/admin/restore${allowKeyMismatch ? '?allowKeyMismatch=1' : ''}`), {
     method: 'POST',
@@ -181,7 +342,7 @@ function BackupCard({ selfHosted, pointInTime, rebuilding }: { selfHosted: boole
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'key_mismatch')) throw err;
         const go = window.confirm(
-          'This export was made with a different encryption key (WREN_SECRET). Provider credentials and two-factor secrets in it can’t be read here, and neither can mail files (attachments, original messages) stored with that key.\n\nRestore anyway? Two-factor sign-in will be turned off for all users and you’ll re-enter provider settings. (To keep them, set WREN_SECRET to the original instance’s key first.)',
+          'This export was made with a different encryption key (WREN_SECRET). Provider credentials and two-factor secrets in it can’t be read here, and neither can mail files (attachments, original messages) stored with that key.\n\nRestore anyway? Two-factor sign-in will be turned off for all users and you’ll re-enter provider settings. (To keep them, set WREN_SECRET to the original instance’s key first. Its System & backup page shows the key if Wren generated it.)',
         );
         if (!go) return;
         r = await uploadRestore(file, true);

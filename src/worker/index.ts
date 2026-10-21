@@ -22,6 +22,7 @@ import { dohResolver } from '../server/lib/doh.js';
 import { logger } from '../server/lib/log.js';
 import { nextWakeAt, runDueWork } from '../server/jobs.js';
 import { recoverQueue } from '../server/mail/outbound.js';
+import { restartBlobEncryption } from '../server/mail/blobs.js';
 import { ingest } from '../server/mail/ingest.js';
 import { pushChanges } from '../server/jmap/push.js';
 import type { AppEnv } from '../server/http/context.js';
@@ -123,6 +124,8 @@ export class WrenDurableObject extends DurableObject<Env> {
         openDb(doSqlDriver(ctx.storage));
         initConfig(env, { secret: (env.WREN_SECRET as string | undefined) || storedSecret() });
         config.keyMismatch = !verifyEncryptionKey();
+        // Files saved meanwhile are stored unencrypted: look at every file again once the key is sorted out.
+        if (config.keyMismatch) restartBlobEncryption();
         recoverQueue();
         this.app = createApp();
       } catch (err) {
