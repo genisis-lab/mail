@@ -7,6 +7,7 @@ import { authRoutes, setupRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRoutes, mailRoutes } from './routes/mail.js';
 import { apiV1Routes, composeRoutes } from './routes/compose.js';
+import { calendarRoutes } from './routes/calendar.js';
 import { adminRoutes, runtimeInfo } from './routes/admin.js';
 import { adminOpsRoutes } from './routes/admin-ops.js';
 import { meRoutes } from './routes/me.js';
@@ -110,12 +111,12 @@ export function createApp() {
   app.use('/api/account/*', requireUser);
   app.route('/api/account', accountRoutes);
 
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
   app.use('/api/admin/*', requireAdmin);
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar']) {
     app.use(`${prefix}/*`, actAsMailbox);
     app.use(prefix, actAsMailbox);
   }
@@ -124,6 +125,7 @@ export function createApp() {
   app.route('/api/compose', composeRoutes);
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/labels', labelRoutes);
+  app.route('/api/calendar', calendarRoutes);
   app.route('/api/contacts', contactRoutes);
   app.route('/api/filters', filterRoutes);
   app.route('/api/blocked', blockedRoutes);

@@ -299,7 +299,7 @@ export function fold(line: string): string {
   return out.join('\r\n ');
 }
 
-const icsStamp = (ts: number) => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+export const icsStamp = (ts: number) => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 
 export type Rsvp = 'ACCEPTED' | 'TENTATIVE' | 'DECLINED';
 
@@ -320,7 +320,7 @@ export function buildReply(ev: CalendarEvent, attendee: { email: string; name: s
 }
 
 /** A one-event .ics file for "Add to calendar". */
-export function buildIcsFile(ev: CalendarEvent): string {
+export function buildIcsFile(ev: Pick<CalendarEvent, 'props'>): string {
   const lines = ['BEGIN:VCALENDAR', 'PRODID:-//Wren//Mail//EN', 'VERSION:2.0', 'METHOD:PUBLISH', 'BEGIN:VEVENT'];
   for (const p of ev.props) if (!['ATTENDEE', 'METHOD'].includes(p.name)) lines.push(p.raw);
   lines.push('END:VEVENT', 'END:VCALENDAR');
