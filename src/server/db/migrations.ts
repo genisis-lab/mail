@@ -741,6 +741,24 @@ export const migrations: string[] = [
   DROP TRIGGER IF EXISTS jmap_message_update;
   ${jmapMessageUpdate()}
   `,
+
+  // 19: PGP public keys (private keys never reach the server). own = 1: the person's own key,
+  //     published to everyone on this server (one each); own = 0: someone else's key they saved.
+  //     emails: JSON array of the addresses in the key's user IDs.
+  `
+  CREATE TABLE pgp_keys (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    own         INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    emails      TEXT NOT NULL DEFAULT '[]',
+    armored     TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (user_id, own, fingerprint)
+  );
+  CREATE UNIQUE INDEX idx_pgp_keys_own ON pgp_keys(user_id) WHERE own = 1;
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

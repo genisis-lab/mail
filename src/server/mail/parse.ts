@@ -122,6 +122,8 @@ export async function parseMail(raw: Uint8Array): Promise<Parsed> {
 export function makeSnippet(text: string | null, html: string | null, max = 180): string {
   let src = text || '';
   if (!src && html) src = htmlToText(html);
+  // PGP: ciphertext says nothing; the reader decrypts it in the browser.
+  if (/^\s*-----BEGIN PGP MESSAGE-----/.test(src)) return 'Encrypted message';
   return src
     .replace(/^>.*$/gm, '')
     .replace(/\s+/g, ' ')

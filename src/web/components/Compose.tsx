@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { CalendarClock, ChevronDown, FileText, Lock, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
+import { CalendarClock, ChevronDown, FileText, Lock, LockKeyhole, Maximize2, Minimize2, Minus, Paperclip, Signature, Trash2, Type, X, Loader2, Image as ImageIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { Addr, AttachmentInfo, MessageDetail, UserPrefs } from '../../shared/types';
 import { apiFor, getApiMailbox } from '../lib/api';
@@ -12,6 +12,8 @@ import { fileSize } from '../lib/format';
 import { sanitizeEditorHtml } from '../lib/sanitize';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
+import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, signText, storedKey, usableKeys } from '../lib/pgp';
+import { bytesOf, lookupKeys, useKeyLookup, useUnlock } from './Pgp';
 import { RecipientInput } from './RecipientInput';
 import { RichEditor, type RichEditorHandle } from './RichEditor';
 import { useToast } from './toast';
@@ -33,6 +35,12 @@ export interface ComposeInit {
   mailbox?: number | null;
   /** Send as a private link that stops working after this many days (null: a normal message). */
   privateDays?: number | null;
+  /** Start with PGP encryption on (a reply to encrypted mail). */
+  encrypt?: boolean;
+  /** Start with PGP signing on. */
+  sign?: boolean;
+  /** A draft saved encrypted: its body, locked until it's decrypted here. */
+  encryptedBody?: string;
 }
 
 interface Window_ extends ComposeInit {
@@ -103,6 +111,26 @@ function urlToCid(html: string, atts: AttachmentInfo[]) {
   return out;
 }
 
+/** Reopen a saved draft (or a send that was undone). A PGP-encrypted one stays locked until it's decrypted here. */
+function draftInit(d: MessageDetail, mailbox: number | null): ComposeInit {
+  const encrypted = !d.html && isPgpMessage(d.text);
+  const signed = !d.html && d.text ? cleartextOf(d.text) : null;
+  return {
+    mailbox,
+    draftId: d.id,
+    from: d.identity ?? d.from.address,
+    to: d.to,
+    cc: d.cc,
+    bcc: d.bcc,
+    subject: d.subject,
+    html: d.html ? cidToUrl(d.html, d.attachments) : encrypted ? '' : plainToHtml(signed ?? d.text ?? ''),
+    attachments: d.attachments,
+    privateDays: d.privateLink?.days ?? null,
+    ...(encrypted && { encryptedBody: d.text! }),
+    ...(signed !== null && { sign: true }),
+  };
+}
+
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [windows, setWindows] = useState<Window_[]>([]);
   const seq = useRef(0);
@@ -130,18 +158,7 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
     async (draftId: number) => {
       const mailbox = getApiMailbox();
       const d = await apiFor(mailbox).get<MessageDetail>(`/api/compose/drafts/${draftId}`);
-      open({
-        mailbox,
-        draftId: d.id,
-        from: d.identity ?? d.from.address,
-        to: d.to,
-        cc: d.cc,
-        bcc: d.bcc,
-        subject: d.subject,
-        html: cidToUrl(d.html ?? '', d.attachments),
-        attachments: d.attachments,
-        privateDays: d.privateLink?.days ?? null,
-      });
+      open(draftInit(d, mailbox));
     },
     [open],
   );
@@ -282,6 +299,18 @@ export function ComposeForm({
   const imageInput = useRef<HTMLInputElement>(null);
   const closed = useRef(false);
 
+  // PGP. With Encrypt on, the body reaches the server only as ciphertext (drafts: readable by you alone),
+  // and files attached meanwhile stay on this device until Send encrypts them.
+  const hasKey = !!storedKey(user.id);
+  const [encrypt, setEncrypt] = useState(!!init.encryptedBody || (!!init.encrypt && hasKey));
+  const [sign, setSign] = useState(!!init.sign && hasKey);
+  const [locked, setLocked] = useState<string | null>(init.encryptedBody ?? null);
+  const [localFiles, setLocalFiles] = useState<File[]>([]);
+  const { unlock, dialog } = useUnlock();
+  const recipients = useMemo(() => [...new Set([...to, ...cc, ...bcc].map((a) => a.address.toLowerCase()))], [to, cc, bcc]);
+  const known = useKeyLookup(recipients, hasKey);
+  const missing = known.data ? recipients.filter((a) => !known.data[a]?.length) : [];
+
   const payload = useCallback(
     () => ({
       from,
@@ -298,12 +327,21 @@ export function ComposeForm({
     [from, to, cc, bcc, subject, attachments, init.replyToId, init.forwardOfId, privateDays],
   );
 
+  /** What a draft saves. Encrypting: the body only as ciphertext for your own key (still locked: as it was). */
+  const draftPayload = useCallback(async () => {
+    const p = payload();
+    if (!encrypt) return p;
+    const own = storedKey(user.id);
+    if (!locked && !own) throw new Error('Your PGP key isn’t in this browser any more, so this encrypted draft can’t be saved');
+    return { ...p, html: undefined, text: locked ?? (await encryptText(plainText(html.current), [await publicKeyOf(own!)])) };
+  }, [payload, encrypt, locked, user.id]);
+
   const save = useCallback(async (): Promise<number | null> => {
     if (saving.current) await saving.current;
-    const p = payload();
     setSaveState('saving');
     const run = (async () => {
       try {
+        const p = await draftPayload();
         const r = draftId
           ? await api.put<{ id: number; attachments: AttachmentInfo[] }>(`/api/compose/drafts/${draftId}`, p)
           : await api.post<{ id: number; attachments: AttachmentInfo[] }>('/api/compose/drafts', p);
@@ -328,7 +366,10 @@ export function ComposeForm({
     })();
     saving.current = run;
     return run;
-  }, [payload, draftId, attachments, qc, toast]);
+  }, [draftPayload, draftId, attachments, qc, toast]);
+  // Closing saves with what's on screen then, not what it was when the form opened.
+  const saveRef = useRef(save);
+  saveRef.current = save;
 
   // Autosave after a pause in typing.
   const markDirty = () => {
@@ -345,7 +386,8 @@ export function ComposeForm({
 
   useEffect(() => onSubjectChange?.(subject), [subject, onSubjectChange]);
 
-  const upload = async (files: File[], inline = false) => {
+  const upload = (files: File[], inline = false) => (encrypt ? setLocalFiles((list) => [...list, ...files]) : uploadNow(files, inline));
+  const uploadNow = async (files: File[], inline = false) => {
     if (!files.length) return;
     setUploading((n) => n + files.length);
     try {
@@ -381,7 +423,11 @@ export function ComposeForm({
       return;
     }
     if (!subject.trim() && !window.confirm('Send this message without a subject?')) return;
-    if (!attachments.length && !uploading) {
+    if (locked) {
+      toast('Decrypt this draft before sending it');
+      return;
+    }
+    if (!attachments.length && !localFiles.length && !uploading) {
       const said = mentionsAttachment(subject, ownText(editor.current?.getHtml() ?? html.current));
       if (said && !window.confirm(`Did you mean to attach files?\n\nYou wrote “${said}”, but there are no files attached. Send anyway?`)) return;
     }
@@ -389,18 +435,30 @@ export function ComposeForm({
       toast('Wait for attachments to finish uploading');
       return;
     }
+    setSending(true);
+    let message: Record<string, unknown> | null;
+    try {
+      message = await sealed();
+    } catch (err) {
+      setSending(false);
+      toast({ message: isNetworkError(err) ? 'You’re offline. Encrypted attachments can be sent once you’re back online.' : (err as Error).message, tone: 'error' });
+      return;
+    }
+    if (!message) return setSending(false);
     // Offline: keep it on this device and send it when the connection is back.
     const queueIt = () => {
-      queueSend({ userId: user.id, mailbox: mailboxId, subject, payload: { ...payload(), draftId, sendAt } });
+      queueSend({ userId: user.id, mailbox: mailboxId, subject, payload: { ...message, draftId, sendAt } });
       closed.current = true;
       onClose();
       toast('You’re offline. It’ll be sent as soon as you’re back online.');
     };
-    if (!navigator.onLine) return queueIt();
-    setSending(true);
+    if (!navigator.onLine) {
+      setSending(false);
+      return queueIt();
+    }
     try {
       if (saving.current) await saving.current.catch(() => {});
-      const r = await api.post<{ id: number; sendAt: number; undoUntil: number | null }>('/api/compose/send', { ...payload(), draftId, sendAt });
+      const r = await api.post<{ id: number; sendAt: number; undoUntil: number | null }>('/api/compose/send', { ...message, draftId, sendAt });
       closed.current = true;
       onClose();
       qc.invalidateQueries({ queryKey: ['threads'] });
@@ -412,19 +470,7 @@ export function ComposeForm({
           qc.invalidateQueries({ queryKey: ['threads'] });
           qc.invalidateQueries({ queryKey: ['counters'] });
           const d = await api.get<MessageDetail>(`/api/compose/drafts/${res.draftId}`);
-          const reopen: ComposeInit = {
-            mailbox: mailboxId,
-            draftId: d.id,
-            from: d.identity ?? d.from.address,
-            to: d.to,
-            cc: d.cc,
-            bcc: d.bcc,
-            subject: d.subject,
-            html: cidToUrl(d.html ?? '', d.attachments),
-            attachments: d.attachments,
-            privateDays: d.privateLink?.days ?? null,
-          };
-          if (onReopen) onReopen(reopen);
+          if (onReopen) onReopen(draftInit(d, mailboxId));
           toast(sendAt ? 'Scheduled send cancelled' : 'Sending undone');
         } catch (err) {
           toast({ message: (err as Error).message, tone: 'error' });
@@ -455,6 +501,88 @@ export function ComposeForm({
     }
   };
 
+  /**
+   * The message as it goes to the server (and the offline outbox, undo send and scheduled send after it):
+   * with Encrypt or Sign on, only ever the PGP text. null: the passphrase prompt was cancelled.
+   */
+  const sealed = async (): Promise<Record<string, unknown> | null> => {
+    const p = payload();
+    if (!encrypt && !sign) return p;
+    const signer = sign ? ((await unlock()) ?? null) : undefined;
+    if (signer === null) return null;
+    const text = plainText(html.current);
+    if (!encrypt) return { ...p, html: undefined, text: await signText(text, signer!) };
+
+    const keys = [await publicKeyOf(storedKey(user.id)!)];
+    const found = await lookupKeys(qc, recipients);
+    const lacking = recipients.filter((a) => !found[a]?.length);
+    if (lacking.length) throw new Error(`There’s no PGP key for ${lacking.join(', ')}. Remove them or turn off encryption.`);
+    for (const a of recipients) {
+      const usable = await usableKeys(found[a].map((k) => k.armored));
+      if (!usable.length) throw new Error(`The PGP key for ${a} has expired or was revoked. Ask them for a new one, or turn off encryption.`);
+      keys.push(...usable);
+    }
+    // Each file goes as name.pgp. One that already is (a send that was undone) stays as it is.
+    // shortcut: such a file isn't re-encrypted for recipients added since; attach it again if that matters.
+    const done = attachments.filter((a) => /\.pgp$/i.test(a.filename));
+    const files = await Promise.all([
+      ...localFiles.map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })),
+      ...attachments.filter((a) => !done.includes(a)).map(async (a) => ({ name: a.filename, data: await bytesOf(`/api/attachments/${a.id}`) })),
+    ]);
+    let uploaded: AttachmentInfo[] = [];
+    if (files.length) {
+      const form = new FormData();
+      for (const f of files) form.append('file', new Blob([(await encryptFile(f.data, f.name, keys, signer)) as BlobPart], { type: 'application/octet-stream' }), `${f.name}.pgp`);
+      uploaded = (await api.post<{ attachments: AttachmentInfo[] }>('/api/compose/uploads', form)).attachments;
+    }
+    return { ...p, html: undefined, text: await encryptText(text, keys, signer), attachments: [...done, ...uploaded].map((a) => a.id) };
+  };
+
+  const toggleEncrypt = () => {
+    if (encrypt) {
+      if (locked) return toast('Decrypt this draft first');
+      if (init.encrypt && !window.confirm('Turn off encryption? This message, including the text it quotes, will be saved and sent unencrypted.')) return;
+      setEncrypt(false);
+      // Files kept on this device go up as they are now.
+      void uploadNow(localFiles);
+      setLocalFiles([]);
+    } else {
+      if (!hasKey) {
+        toast({ message: 'To send encrypted mail, set up your PGP key first', action: { label: 'Settings', onClick: () => navigate('/settings/encryption') } });
+        return;
+      }
+      if (privateDays !== null) return toast('Turn off the private link first: PGP mail can’t be sent as a link');
+      if (missing.length) {
+        toast({ message: `Encryption needs a PGP key for everyone you write to. There’s none for ${missing.join(', ')}.`, tone: 'error' });
+        return;
+      }
+      setEncrypt(true);
+    }
+    markDirty();
+  };
+
+  const toggleSign = () => {
+    if (!sign && !hasKey) {
+      toast({ message: 'To sign mail, set up your PGP key first', action: { label: 'Settings', onClick: () => navigate('/settings/encryption') } });
+      return;
+    }
+    if (!sign && privateDays !== null) return toast('Turn off the private link first: PGP mail can’t be sent as a link');
+    setSign((v) => !v);
+  };
+
+  const openLocked = async () => {
+    const key = await unlock();
+    if (!key || !locked) return;
+    try {
+      const body = plainToHtml((await decryptText(locked, key, [])).text);
+      editor.current?.setHtml(body);
+      html.current = body;
+      setLocked(null);
+    } catch (err) {
+      toast({ message: `Couldn’t decrypt this draft: ${(err as Error).message}`, tone: 'error' });
+    }
+  };
+
   const discard = async () => {
     closed.current = true;
     if (saving.current) await saving.current;
@@ -470,7 +598,7 @@ export function ComposeForm({
   // Save on close if there's anything worth keeping.
   useEffect(
     () => () => {
-      if (!closed.current && dirty.current) void save();
+      if (!closed.current && dirty.current) void saveRef.current();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -593,6 +721,15 @@ export function ComposeForm({
       </div>
 
       <div className={cx('flex min-h-0 flex-1 flex-col', variant === 'window' ? 'px-3' : '')}>
+        {locked && (
+          <div className="my-3 flex flex-wrap items-center gap-3 rounded-xl bg-accent-softer px-4 py-3 text-[13px]">
+            <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
+            <span className="min-w-0 flex-1">This draft is encrypted.</span>
+            <Button size="sm" variant="primary" onClick={() => void openLocked()}>
+              Decrypt to edit
+            </Button>
+          </div>
+        )}
         <RichEditor
           ref={editor}
           initialHtml={init.html ?? ''}
@@ -604,9 +741,20 @@ export function ComposeForm({
             html.current = h;
             markDirty();
           }}
-          className="flex-1"
+          className={cx('flex-1', locked && 'hidden')}
         />
-        {(attachments.filter((a) => !a.inline).length > 0 || uploading > 0) && (
+        {(encrypt || sign) && (
+          <p className="flex items-start gap-2 py-1.5 text-xs text-muted">
+            {encrypt ? <Lock className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden /> : <Signature className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden />}
+            <span>
+              {encrypt ? 'Encrypted with PGP for your recipients and you. ' : 'Signed with your PGP key. '}
+              It’s sent as plain text, so formatting and pictures in the text are left out.
+              {encrypt && ' The subject isn’t encrypted.'}
+              {encrypt && missing.length > 0 && <b className="text-danger"> No PGP key for {missing.join(', ')}: remove them or turn off encryption.</b>}
+            </span>
+          </p>
+        )}
+        {(attachments.filter((a) => !a.inline).length > 0 || localFiles.length > 0 || uploading > 0) && (
           <div className="flex flex-wrap gap-2 py-2">
             {attachments
               .filter((a) => !a.inline)
@@ -628,6 +776,21 @@ export function ComposeForm({
                   </button>
                 </span>
               ))}
+            {localFiles.map((f, i) => (
+              <span key={`local-${i}`} className="inline-flex max-w-60 items-center gap-2 rounded-lg border border-line bg-panel2 py-1 pr-1 pl-2.5 text-[13px]" title="Encrypted on this device when you send">
+                <Lock className="size-3.5 shrink-0 text-muted" aria-hidden />
+                <span className="truncate font-medium">{f.name}</span>
+                <span className="shrink-0 text-xs text-muted">{fileSize(f.size)}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${f.name}`}
+                  className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
+                  onClick={() => setLocalFiles((list) => list.filter((x) => x !== f))}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            ))}
             {uploading > 0 && (
               <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-line-strong px-2.5 py-1 text-[13px] text-muted">
                 <Loader2 className="size-3.5 animate-spin" /> Uploading {uploading}…
@@ -707,11 +870,18 @@ export function ComposeForm({
           active={privateDays !== null}
           aria-pressed={privateDays !== null}
           onClick={() => {
+            if (privateDays === null && (encrypt || sign)) return toast('A private link can’t be encrypted or signed with PGP. Turn off Encrypt and Sign first.');
             setPrivateDays((d) => (d === null ? 7 : null));
             markDirty();
           }}
         >
           <Lock className="size-4" />
+        </IconButton>
+        <IconButton size="sm" label={encrypt ? 'Turn off encryption' : 'Encrypt (PGP)'} aria-pressed={encrypt} active={encrypt} onClick={toggleEncrypt} className={cx(encrypt && 'text-accent-ink')}>
+          <LockKeyhole className="size-4" />
+        </IconButton>
+        <IconButton size="sm" label={sign ? 'Turn off signing' : 'Sign (PGP)'} aria-pressed={sign} active={sign} onClick={toggleSign} className={cx(sign && 'text-accent-ink')}>
+          <Signature className="size-4" />
         </IconButton>
         <SavedRepliesMenu
           onInsert={(h) => {
@@ -739,6 +909,7 @@ export function ComposeForm({
           void send(t);
         }}
       />
+      {dialog}
     </div>
   );
 }
