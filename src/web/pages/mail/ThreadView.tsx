@@ -51,12 +51,15 @@ import { useMailbox } from '../../lib/mailbox';
 import { TABS } from './ThreadList';
 import { InviteCard } from './InviteCard';
 import { ParcelCard } from './ParcelCard';
+import { PrivateLinkCard } from './PrivateLinkCard';
 import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
 import { useToast } from '../../components/toast';
 import { CodeChip } from '../../components/CodeChip';
+import { PgpMessage, withDecryptedQuote } from '../../components/Pgp';
+import { pgpKind, storedKey } from '../../lib/pgp';
 import { Badge, Button, cx, Empty, IconButton, Menu, Spinner, type MenuItem } from '../../components/ui';
 import { LabelDialog } from '../MailLayout';
 import { getListContext, listBase } from './listContext';
@@ -133,7 +136,9 @@ export function ThreadView() {
   const startReply = async (m: MessageDetail, mode: 'reply' | 'replyAll' | 'forward') => {
     try {
       const t = await compose.openTemplate(m.id, mode);
-      setReply({ ...t, key: Date.now(), mode });
+      // Answering encrypted mail: the reply starts encrypted too, quoting what the message said.
+      const encrypt = !!pgpKind(m)?.startsWith('encrypted') && !!storedKey(user.id);
+      setReply({ ...t, ...(encrypt && { encrypt, html: withDecryptedQuote(t.html ?? '', m.id) }), key: Date.now(), mode });
       setTimeout(() => document.getElementById('wren-reply')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
     } catch (err) {
       toast({ message: (err as Error).message, tone: 'error' });
@@ -627,7 +632,8 @@ function MessageCard({
     }
   };
   const [preview, setPreview] = useState<number | null>(null);
-  const visibleAttachments = m.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`));
+  // PGP/MIME's "Version: 1" part is just a marker.
+  const visibleAttachments = m.attachments.filter((a) => (!a.inline || !m.html?.includes(`cid:${a.contentId}`)) && a.contentType !== 'application/pgp-encrypted');
   const scheduled = m.status === 'queued' && m.sendAt && m.sendAt > Date.now() + 30_000;
   // Mail that failed the checks proving who sent it doesn't get the sender's picture or logo.
   const trustedSender = !m.spoofWarning && m.authResults?.dmarc !== 'fail';
@@ -921,8 +927,14 @@ function MessageCard({
         )}
 
         {m.hasInvite && <InviteCard messageId={m.id} canAnswer={canAnswer} />}
-        {!alwaysShowImages && !showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
-        <MessageBody html={m.html} text={m.text} attachments={m.attachments} allowRemote={alwaysShowImages || showImages} images={m.images} onBlockedImages={setBlocked} />
+        {m.privateLink && <PrivateLinkCard messageId={m.id} link={m.privateLink} />}
+        {!showImages && <BlockedImagesBanner count={blocked} onShow={() => setShowImages(true)} onAlways={onAlwaysShowImages} />}
+        <PgpMessage m={m}>
+          {/* Decrypted mail loads remote pictures only when asked for each time: they'd tell the sender it was read. */}
+          {(body) => (
+            <MessageBody html={body.html} text={body.text} attachments={m.attachments} allowRemote={showImages || (alwaysShowImages && !body.decrypted)} images={m.images} onBlockedImages={setBlocked} />
+          )}
+        </PgpMessage>
 
         {visibleAttachments.length > 0 && (
           <div className="mt-5 border-t border-line pt-4">

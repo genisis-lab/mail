@@ -1,7 +1,8 @@
 /**
  * Mailbox/* (RFC 8621 section 2). Wren's six folders are mailboxes with roles,
  * and its labels are mailboxes without one. An email is always in exactly one
- * folder and in any number of labels, the way Gmail works.
+ * folder and in any number of labels, the way Gmail works. Snoozed mail shows
+ * in a Snoozed mailbox instead of its folder until it wakes.
  */
 import { all, get, insert, now, run, tx } from '../db/index.js';
 import { changesSince, checkState, currentState, hasChangesSince } from './changes.js';
@@ -12,8 +13,8 @@ import { CAP, checkSetSize, getIds, getProperties, isObject, method, pick, resol
 const PROPS = ['name', 'parentId', 'role', 'sortOrder', 'totalEmails', 'unreadEmails', 'totalThreads', 'unreadThreads', 'myRights', 'isSubscribed'] as const;
 const COUNTS = ['totalEmails', 'unreadEmails', 'totalThreads', 'unreadThreads'];
 
-/** The folder mailbox an email shows in: a snoozed inbox email waits in Archive until it wakes. */
-export const MAILBOX_OF_ROW = `CASE WHEN m.folder = 'inbox' AND m.snoozed_until IS NOT NULL THEN 'archive' WHEN m.folder = 'spam' THEN 'junk' ELSE m.folder END`;
+/** The folder mailbox an email shows in: a snoozed email waits in Snoozed until it wakes. */
+export const MAILBOX_OF_ROW = `CASE WHEN m.snoozed_until IS NOT NULL AND m.folder IN ('inbox','archive') THEN 'snoozed' WHEN m.folder = 'spam' THEN 'junk' ELSE m.folder END`;
 
 interface Counts {
   total: number;

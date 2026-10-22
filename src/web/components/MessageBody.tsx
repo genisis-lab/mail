@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ImageOff, Moon, MoreHorizontal, Sun } from 'lucide-react';
+import { ImageOff, Moon, MoreHorizontal, ShieldCheck, Sun } from 'lucide-react';
 import type { AttachmentInfo } from '../../shared/types';
 import { adaptForDark, looksDesigned } from '../lib/dark-mail';
 import { renderMailHtml, textToSafeHtml } from '../lib/sanitize';
-import { cx } from './ui';
+import { Button, cx, Modal } from './ui';
 
 /** Body colours on the dark background (match the app's dark theme). */
 const DARK = { text: '#e6e8ec', muted: '#a1a7b3', link: '#8ab4f8' };
@@ -13,6 +13,7 @@ const QUOTE_SELECTORS = ['.gmail_quote', 'blockquote[type="cite"]', '.wren-quote
 /**
  * Renders an email body inside a sandboxed iframe (no scripts) that sizes
  * itself to its content. Quoted history is collapsed behind a "…" toggle.
+ * A link whose text names another site asks before it opens.
  */
 export function MessageBody({
   html,
@@ -21,6 +22,7 @@ export function MessageBody({
   allowRemote,
   images,
   onBlockedImages,
+  attachmentUrl,
 }: {
   html: string | null;
   text: string | null;
@@ -29,17 +31,20 @@ export function MessageBody({
   /** Pictures the server signed for its image proxy ({url: sig}). */
   images?: Record<string, string>;
   onBlockedImages?: (n: number) => void;
+  /** Where an inline picture (cid:) loads from, when not /api/attachments/<id> (private links). */
+  attachmentUrl?: (id: number) => string;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(60);
   const [hasQuote, setHasQuote] = useState(false);
   const [showQuote, setShowQuote] = useState(false);
+  const [suspect, setSuspect] = useState<{ shows: string; href: string } | null>(null);
   const isHtml = !!html;
 
   const rendered = useMemo(() => {
-    if (html) return renderMailHtml(html, { attachments, allowRemote, proxy: images });
-    return { html: textToSafeHtml(text ?? ''), blockedImages: 0 };
-  }, [html, text, attachments, allowRemote, images]);
+    if (html) return renderMailHtml(html, { attachments, allowRemote, proxy: images, attachmentUrl });
+    return { html: textToSafeHtml(text ?? ''), blockedImages: 0, trackers: 0 };
+  }, [html, text, attachments, allowRemote, images, attachmentUrl]);
 
   useEffect(() => onBlockedImages?.(rendered.blockedImages), [rendered.blockedImages, onBlockedImages]);
 
@@ -95,6 +100,15 @@ export function MessageBody({
       setHasQuote(quotes.length > 0);
       if (darkText && isHtml) adaptForDark(doc, DARK);
       quotes.forEach((q) => q.classList.toggle('wren-hidden-quote', !showQuote));
+      // Clicks (and middle clicks) on a link marked by the sanitizer ask first.
+      const onLink = (e: MouseEvent) => {
+        const a = (e.target as Element | null)?.closest?.('a[data-wren-shows]');
+        if (!a || e.button > 1) return;
+        e.preventDefault();
+        setSuspect({ shows: a.getAttribute('data-wren-shows') ?? '', href: a.getAttribute('href') ?? '' });
+      };
+      doc.addEventListener('click', onLink);
+      doc.addEventListener('auxclick', onLink);
 
       let last = 0;
       let step = 0;
@@ -161,6 +175,8 @@ export function MessageBody({
       });
       void doc.fonts?.ready.then(again);
       unbind = () => {
+        doc.removeEventListener('click', onLink);
+        doc.removeEventListener('auxclick', onLink);
         ro.disconnect();
         win.removeEventListener('resize', again);
         imgs.forEach((img) => {
@@ -212,6 +228,11 @@ export function MessageBody({
 
   return (
     <div>
+      {rendered.trackers > 0 && (
+        <p className="mb-2 flex items-center gap-1 text-xs text-muted" title="Hidden pictures that tell the sender when you open their email. Wren removed them.">
+          <ShieldCheck className="size-3.5" aria-hidden /> {rendered.trackers} {rendered.trackers === 1 ? 'tracker' : 'trackers'} blocked
+        </p>
+      )}
       <div className={cx(isHtml && 'overflow-hidden rounded-lg', paper && dark && 'bg-white p-3')}>
         <iframe
           ref={frame}
@@ -246,6 +267,31 @@ export function MessageBody({
           )}
         </div>
       )}
+      <Modal
+        open={!!suspect}
+        onClose={() => setSuspect(null)}
+        title="Check this link"
+        width="max-w-md"
+        footer={
+          <>
+            <Button onClick={() => setSuspect(null)}>Cancel</Button>
+            <a
+              href={suspect?.href}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              onClick={() => setSuspect(null)}
+              className="inline-flex h-9 items-center rounded-full bg-accent px-4 text-sm font-medium text-accent-fg shadow-sm hover:brightness-110"
+            >
+              Open link
+            </a>
+          </>
+        }
+      >
+        <p className="text-sm">
+          This link says <b>{suspect?.shows}</b>, but it goes somewhere else:
+        </p>
+        <p className="mt-2 rounded-lg bg-panel2 px-3 py-2 font-mono text-[13px] break-all">{suspect?.href}</p>
+      </Modal>
     </div>
   );
 }

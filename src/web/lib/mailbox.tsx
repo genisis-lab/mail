@@ -27,7 +27,7 @@ interface MailboxValue {
 const KEY = 'wren.mailbox';
 const keyFor = (account: number) => `${KEY}.${account}`;
 /** Cached queries whose content depends on the mailbox. */
-const MAIL_QUERIES = new Set(['threads', 'thread', 'counters', 'labels']);
+const MAIL_QUERIES = new Set(['threads', 'thread', 'counters', 'labels', 'calendar']);
 
 const Ctx = createContext<MailboxValue>({ current: null, mailboxes: [], switchTo: () => {} });
 

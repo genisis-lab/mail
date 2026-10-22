@@ -3,6 +3,7 @@ import { all, get, run } from '../src/server/db/index';
 import { ingest } from '../src/server/mail/ingest';
 import { buildMime } from '../src/server/mail/compose';
 import { purgeMessages } from '../src/server/mail/store';
+import { wakeSnoozed } from '../src/server/mail/threads';
 import { createUser, getPrefs } from '../src/server/services/users';
 import { sha256 } from '../src/server/lib/crypto';
 import { closeStreams, flushPush, validPushUrl } from '../src/server/jmap/push';
@@ -12,6 +13,8 @@ import { harness, outbox } from './harness';
 
 const h = harness();
 const USING = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission', 'urn:ietf:params:jmap:vacationresponse', 'urn:ietf:params:jmap:quota'];
+/** Fastmail's (Cyrus's) mail extension, which has the Email "snoozed" property. */
+const SNOOZE = 'https://cyrusimap.org/ns/jmap/mail';
 let userId: number;
 let account: string;
 let appPassword: string;
@@ -141,7 +144,7 @@ describe('reading mail', () => {
   it('lists the folders as mailboxes, with counts', async () => {
     const { list } = await call('Mailbox/get', { ids: null });
     const byRole = Object.fromEntries(list.map((m: any) => [m.role, m]));
-    expect(Object.keys(byRole).sort()).toEqual(['archive', 'drafts', 'inbox', 'junk', 'sent', 'trash']);
+    expect(Object.keys(byRole).sort()).toEqual(['archive', 'drafts', 'inbox', 'junk', 'sent', 'snoozed', 'trash']);
     expect(byRole.inbox).toMatchObject({ id: 'inbox', name: 'Inbox', totalEmails: 2, unreadEmails: 2, totalThreads: 2, unreadThreads: 2 });
     expect(byRole.inbox.myRights).toMatchObject({ mayReadItems: true, mayAddItems: true });
     expect(byRole.junk.name).toBe('Spam');
@@ -568,6 +571,317 @@ describe('other people’s mail', () => {
     const [blob] = (await call('Email/get', { ids: [mine[0]], properties: ['blobId'] })).list.map((e: any) => e.blobId);
     expect((await h.app.request(`/jmap/download/u${bob}/${blob}/x.eml`, { headers: bobAuth })).status).toBe(404);
     expect((await h.app.request(`/jmap/download/${account}/${blob}/x.eml`, { headers: bobAuth })).status).toBe(404);
+  });
+});
+
+describe('shared mailboxes', () => {
+  let box: number;
+  let shared: string;
+  let bob: number;
+  const bobAuth = () => basic('bob@wren.test', 'wren_bobkey');
+  const bobJmap = async (methodCalls: unknown[]) =>
+    ((await (await h.app.request('/jmap/api', { method: 'POST', headers: { ...bobAuth(), 'Content-Type': 'application/json' }, body: JSON.stringify({ using: USING, methodCalls }) })).json()) as any)
+      .methodResponses as [string, any, string][];
+  const sessionOf = async (headers: Record<string, string>) => (await (await h.app.request('/jmap/session', { headers })).json()) as any;
+  const toSupport = async (subject: string) => {
+    const { raw } = await buildMime({ from: { address: 'client@example.org', name: 'Client' }, to: [{ address: 'support@wren.test' }], subject, text: 'Please help' });
+    await ingest(raw, { rcptTo: ['support@wren.test'], source: 'test' });
+  };
+  const setMembers = (members: { userId: number; canSend: boolean }[]) => {
+    h.as('admin');
+    return h.call('PUT', `/api/admin/shared-mailboxes/${box}`, { members });
+  };
+
+  beforeAll(async () => {
+    bob = get<{ id: number }>(`SELECT id FROM users WHERE email = 'bob@wren.test'`)!.id;
+    h.as('admin');
+    const created = await h.call('POST', '/api/admin/shared-mailboxes', { address: 'support@wren.test', name: 'Support', members: [{ userId, canSend: true }] });
+    box = created.body.mailbox.id;
+    shared = `u${box}`;
+    await toSupport('Where is my order?');
+  });
+
+  it('shows up as another account, only for its members', async () => {
+    const mine = await sessionOf(auth());
+    expect(mine.accounts[shared]).toMatchObject({ name: 'support@wren.test', isPersonal: false, isReadOnly: false });
+    expect(Object.keys(mine.accounts[shared].accountCapabilities).sort()).toEqual([SNOOZE, 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission']);
+    expect(mine.primaryAccounts['urn:ietf:params:jmap:mail']).toBe(account);
+    expect((await sessionOf(bobAuth())).accounts[shared]).toBeUndefined();
+
+    // Its mail is its own, apart from the person's.
+    const { ids } = await call('Email/query', { accountId: shared, filter: { inMailbox: 'inbox' } });
+    expect(ids).toHaveLength(1);
+    expect((await call('Email/get', { accountId: shared, ids, properties: ['subject', 'mailboxIds'] })).list[0]).toMatchObject({ subject: 'Where is my order?', mailboxIds: { inbox: true } });
+    expect((await call('Email/get', { ids, properties: ['subject'] })).notFound).toEqual(ids);
+    expect((await call('Mailbox/get', { accountId: shared, ids: ['inbox'] })).list[0]).toMatchObject({ totalEmails: 1, unreadEmails: 1 });
+    // No quota or vacation reply of its own.
+    const { responses } = await jmap([['Quota/get', { accountId: shared, ids: null }, 'q']]);
+    expect(responses[0][1].type).toBe('accountNotSupportedByMethod');
+  });
+
+  it('keeps everyone else out, whatever they ask for', async () => {
+    const [id] = (await call('Email/query', { accountId: shared })).ids;
+    const state = (await call('Email/get', { accountId: shared, ids: [] })).state;
+    const refused = await bobJmap([
+      ['Email/get', { accountId: shared, ids: [id] }, 'a'],
+      ['Email/set', { accountId: shared, update: { [id]: { 'keywords/$flagged': true } } }, 'b'],
+      ['Email/changes', { accountId: shared, sinceState: state }, 'c'],
+      ['Email/queryChanges', { accountId: shared, sinceQueryState: state }, 'd'],
+      ['Mailbox/get', { accountId: shared, ids: null }, 'e'],
+    ]);
+    expect(refused.map(([n, r]) => [n, r.type])).toEqual(Array(5).fill(['error', 'accountNotFound']));
+    expect(get<{ s: number }>('SELECT is_starred AS s FROM messages WHERE id = ?', [Number(/^M(\d+)/.exec(id)![1])])!.s).toBe(0);
+
+    const blob = (await call('Email/get', { accountId: shared, ids: [id], properties: ['blobId'] })).list[0].blobId;
+    expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: auth() })).status).toBe(200);
+    expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: auth() })).headers.get('Cache-Control')).toBe('no-store');
+    expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: bobAuth() })).status).toBe(404);
+    // Not through the member's own account either.
+    expect((await h.app.request(`/jmap/download/${account}/${blob}/x.eml`, { headers: auth() })).status).toBe(404);
+    expect((await h.app.request(`/jmap/upload/${shared}/`, { method: 'POST', headers: { ...bobAuth(), 'Content-Type': 'text/plain' }, body: 'x' })).status).toBe(404);
+  });
+
+  it('keeps its own change log, which the web app’s changes reach', async () => {
+    const state = (await call('Email/get', { accountId: shared, ids: [] })).state;
+    const own = (await call('Email/get', { ids: [] })).state;
+    await toSupport('Refund please');
+    const changes = await call('Email/changes', { accountId: shared, sinceState: state });
+    expect(changes.created).toHaveLength(1);
+    expect((await call('Email/get', { ids: [] })).state).toBe(own);
+
+    const threadId = get<{ thread_id: number }>(`SELECT thread_id FROM messages WHERE subject = 'Refund please'`)!.thread_id;
+    h.as('admin');
+    expect((await h.call('POST', '/api/mail/threads/actions', { threadIds: [threadId], action: { type: 'star' } }, { 'X-Wren-Mailbox': String(box) })).status).toBe(200);
+    expect((await call('Email/changes', { accountId: shared, sinceState: changes.newState })).updated).toEqual(changes.created);
+  });
+
+  it('sends from the shared mailbox’s own addresses, recording who sent it', async () => {
+    const identities = (await call('Identity/get', { accountId: shared, ids: null })).list;
+    expect(identities.map((i: any) => i.email)).toEqual(['support@wren.test']);
+    const { responses } = await jmap([
+      [
+        'Email/set',
+        {
+          accountId: shared,
+          create: { d: { mailboxIds: { drafts: true }, from: [{ email: 'support@wren.test' }], to: [{ email: 'client@example.org' }], subject: 'Your order', textBody: [{ partId: '1', type: 'text/plain' }], bodyValues: { '1': { value: 'It ships today.' } } } },
+        },
+        'd',
+      ],
+      ['EmailSubmission/set', { accountId: shared, create: { s: { identityId: identities[0].id, emailId: '#d' } } }, 's'],
+    ]);
+    expect(responses[1][1].created.s).toMatchObject({ undoStatus: 'final' });
+    expect(get<any>(`SELECT user_id, from_addr, sent_by FROM messages WHERE subject = 'Your order'`)).toEqual({ user_id: box, from_addr: 'support@wren.test', sent_by: userId });
+    expect((await outbox('user')).find((j) => j.subject === 'Your order')!.mail_from).toBe('support@wren.test');
+
+    // Not as the member's own address, nor with their own identity.
+    const asMe = await call('Email/set', { accountId: shared, create: { x: { mailboxIds: { drafts: true }, from: [{ email: 'admin@wren.test' }], subject: 'Hmm' } } });
+    expect(asMe.notCreated.x.description).toMatch(/can't send as/);
+    const mine = (await call('Identity/get', { ids: null })).list[0].id;
+    const draft = (await call('Email/set', { accountId: shared, create: { y: { mailboxIds: { drafts: true }, to: [{ email: 'client@example.org' }], subject: 'Hmm' } } })).created.y.id;
+    expect((await call('EmailSubmission/set', { accountId: shared, create: { s: { identityId: mine, emailId: draft } } })).notCreated.s.properties).toEqual(['identityId']);
+  });
+
+  it('lets members without send permission read and draft, but not send', async () => {
+    await setMembers([
+      { userId, canSend: true },
+      { userId: bob, canSend: false },
+    ]);
+    expect((await sessionOf(bobAuth())).accounts[shared]).toMatchObject({ isPersonal: false, isReadOnly: false });
+    const identity = (await call('Identity/get', { accountId: shared, ids: null })).list[0].id;
+    const res = await bobJmap([
+      ['Email/query', { accountId: shared, filter: { inMailbox: 'inbox' } }, 'q'],
+      ['Email/set', { accountId: shared, create: { d: { mailboxIds: { drafts: true }, to: [{ email: 'client@example.org' }], subject: 'From Bob' } } }, 'd'],
+      ['EmailSubmission/set', { accountId: shared, create: { s: { identityId: identity, emailId: '#d' } } }, 's'],
+    ]);
+    expect(res[0][1].ids.length).toBeGreaterThan(0);
+    expect(res[1][1].created.d.id).toMatch(/^M/);
+    expect(res[2][1].notCreated.s.type).toBe('forbiddenToSend');
+  });
+
+  it('stops everything, push included, the moment a member is removed', async () => {
+    const seen: { url: string; body: any }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      seen.push({ url, body: JSON.parse(new TextDecoder().decode(init.body as Uint8Array)) });
+      return new Response(null, { status: 201 });
+    });
+    run(
+      `INSERT INTO jmap_push (user_id, key_id, device_client_id, url, verification_code, verified, expires_at, created_at)
+       VALUES (?, (SELECT id FROM api_keys WHERE user_id = ?), 'bob-tablet', 'https://push.example.com/bob-shared', 'x', 1, ?, ?)`,
+      [bob, bob, Date.now() + 86_400_000, Date.now()],
+    );
+    await flushPush();
+    const reader = (await h.app.request('/jmap/eventsource?types=*&closeafter=no&ping=0', { headers: bobAuth() })).body!.getReader();
+    const first = JSON.parse(new TextDecoder().decode((await reader.read()).value).split('data: ')[1]);
+    expect(Object.keys(first.changed).sort()).toEqual([`u${bob}`, shared].sort());
+    seen.length = 0;
+    await toSupport('Still there?');
+    await flushPush();
+    expect(seen.map((s) => [s.url, Object.keys(s.body.changed)])).toEqual([['https://push.example.com/bob-shared', [shared]]]);
+    expect(Object.keys(JSON.parse(new TextDecoder().decode((await reader.read()).value).split('data: ')[1]).changed)).toEqual([shared]);
+
+    await setMembers([{ userId, canSend: true }]);
+    expect((await sessionOf(bobAuth())).accounts[shared]).toBeUndefined();
+    expect((await bobJmap([['Email/query', { accountId: shared }, 'q']]))[0][1].type).toBe('accountNotFound');
+    seen.length = 0;
+    await toSupport('Anyone?');
+    await flushPush();
+    expect(seen).toEqual([]);
+    const next = await Promise.race([reader.read().then(() => 'an event'), new Promise((done) => setTimeout(() => done('nothing'), 200))]);
+    expect(next).toBe('nothing');
+    await reader.cancel();
+    run(`DELETE FROM jmap_push WHERE device_client_id = 'bob-tablet'`);
+  });
+});
+
+describe('scheduled send', () => {
+  const draft = async (subject: string) =>
+    (await call('Email/set', { create: { d: { mailboxIds: { drafts: true }, from: [{ email: 'admin@wren.test' }], to: [{ email: 'grace@example.com' }], subject, textBody: [{ partId: '1', type: 'text/plain' }], bodyValues: { '1': { value: 'Later' } } } } }))
+      .created.d.id as string;
+  const submit = async (emailId: string, parameters: Record<string, string>) => {
+    const identityId = (await call('Identity/get', { ids: null })).list.find((i: any) => i.email === 'admin@wren.test').id;
+    return call('EmailSubmission/set', { create: { s: { identityId, emailId, envelope: { mailFrom: { email: 'admin@wren.test', parameters }, rcptTo: [{ email: 'grace@example.com' }] } } } });
+  };
+  const scheduled = async () => {
+    h.as('admin');
+    return (await h.call('GET', '/api/mail/threads?view=scheduled')).body.threads.map((t: any) => t.subject);
+  };
+
+  it('tells apps how far ahead they can schedule', async () => {
+    const s = (await (await h.app.request('/jmap/session', { headers: auth() })).json()) as any;
+    const sub = s.accounts[account].accountCapabilities['urn:ietf:params:jmap:submission'];
+    expect(sub.maxDelayedSend).toBe(365 * 86_400);
+    expect(sub.submissionExtensions.FUTURERELEASE).toEqual([String(365 * 86_400), expect.stringMatching(/Z$/)]);
+  });
+
+  it('holds a message until HOLDUNTIL, in the web app’s Scheduled folder, until it is cancelled', async () => {
+    const at = new Date(Date.now() + 2 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const id = await draft('See you tomorrow');
+    const sub = (await submit(id, { HOLDUNTIL: at })).created.s;
+    expect(sub).toMatchObject({ undoStatus: 'pending', sendAt: at });
+    expect(get<any>(`SELECT folder, status, is_scheduled, send_at FROM messages WHERE subject = 'See you tomorrow'`)).toEqual({ folder: 'sent', status: 'queued', is_scheduled: 1, send_at: Date.parse(at) });
+    expect(await scheduled()).toEqual(['See you tomorrow']);
+    expect((await call('EmailSubmission/get', { ids: [sub.id] })).list[0]).toMatchObject({ undoStatus: 'pending', sendAt: at });
+
+    expect((await call('EmailSubmission/set', { update: { [sub.id]: { undoStatus: 'canceled' } } })).updated).toEqual({ [sub.id]: null });
+    expect((await call('EmailSubmission/get', { ids: [sub.id] })).list[0].undoStatus).toBe('canceled');
+    expect((await call('Email/get', { ids: [id], properties: ['mailboxIds'] })).list[0].mailboxIds).toEqual({ drafts: true });
+    expect(await scheduled()).toEqual([]);
+    expect(get<{ status: string }>(`SELECT status FROM outbox WHERE subject = 'See you tomorrow'`)!.status).toBe('cancelled');
+  });
+
+  it('does not let a cancelled submission cancel a later send of the same draft', async () => {
+    const id = await draft('Rescheduled safely');
+    const first = (await submit(id, { HOLDFOR: '3600' })).created.s;
+    await call('EmailSubmission/set', { update: { [first.id]: { undoStatus: 'canceled' } } });
+    const second = (await submit(id, { HOLDFOR: '7200' })).created.s;
+    expect(second.id).not.toBe(first.id);
+    await call('EmailSubmission/set', { update: { [first.id]: { undoStatus: 'canceled' } } });
+    expect((await call('EmailSubmission/get', { ids: [second.id] })).list[0].undoStatus).toBe('pending');
+    expect(get<any>('SELECT status FROM outbox WHERE id = ?', [Number(second.id.slice(1))]).status).toBe('queued');
+    const current = (await call('Email/query', { filter: { text: 'Rescheduled safely' } })).ids[0];
+    const snooze = await jmap([['Email/set', { accountId: account, update: { [current]: { mailboxIds: { snoozed: true }, snoozed: { until: new Date(Date.now() + 3600_000).toISOString() } } } }, 's']], [...USING, SNOOZE]);
+    expect(snooze.responses[0][1].notUpdated[current].type).toBe('invalidProperties');
+    await call('EmailSubmission/set', { update: { [second.id]: { undoStatus: 'canceled' } } });
+  });
+
+  it('takes HOLDFOR, refuses holds it can’t keep, and still sends right away without one', async () => {
+    const id = await draft('In an hour');
+    const before = Date.now();
+    // Parameter names are case-insensitive, as in SMTP.
+    const sub = (await submit(id, { holdfor: '3600' })).created.s;
+    expect(sub.undoStatus).toBe('pending');
+    expect(Date.parse(sub.sendAt) - before).toBeGreaterThanOrEqual(3_599_000);
+    expect(Date.parse(sub.sendAt) - before).toBeLessThan(3_610_000);
+    expect(await scheduled()).toEqual(['In an hour']);
+    // Cancelled in the web app instead.
+    expect((await h.call('POST', `/api/compose/messages/${Number(/^M(\d+)/.exec(id)![1])}/cancel`)).status).toBe(200);
+    expect((await call('EmailSubmission/get', { ids: [sub.id] })).list[0].undoStatus).toBe('canceled');
+
+    for (const parameters of [{ HOLDFOR: String(366 * 86_400) }, { HOLDFOR: '60', HOLDUNTIL: new Date().toISOString() }, { HOLDUNTIL: 'tomorrow' }, { HOLDFOR: '-5' }] as Record<string, string>[]) {
+      expect((await submit(id, parameters)).notCreated.s).toMatchObject({ type: 'invalidProperties', properties: ['envelope'] });
+    }
+    expect((await submit(id, {})).created.s.undoStatus).toBe('final');
+  });
+});
+
+describe('snooze', () => {
+  const withSnooze = async (name: string, args: Record<string, unknown>) => {
+    const { responses } = await jmap([[name, { accountId: account, ...args }, 'c']], [...USING, SNOOZE]);
+    if (responses[0][0] === 'error') throw new Error(`${name}: ${JSON.stringify(responses[0][1])}`);
+    return responses[0][1];
+  };
+  const inHours = (n: number) => new Date(Date.now() + n * 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const counts = async () => Object.fromEntries((await call('Mailbox/get', { ids: ['inbox', 'snoozed'] })).list.map((b: any) => [b.id, b.totalEmails]));
+  let id: string;
+  let dbId: number;
+
+  beforeAll(async () => {
+    await deliver('Snooze me');
+    [id] = (await call('Email/query', { filter: { subject: 'Snooze me' } })).ids;
+    dbId = Number(/^M(\d+)/.exec(id)![1]);
+  });
+
+  it('snoozes, moves and wakes with Fastmail’s snoozed property, shown in the Snoozed mailbox', async () => {
+    const before = await counts();
+    // Only apps that use the extension have the property.
+    expect((await jmap([['Email/get', { accountId: account, ids: [id], properties: ['snoozed'] }, 'g']])).responses[0][1].type).toBe('invalidArguments');
+
+    const until = inHours(3);
+    expect((await withSnooze('Email/set', { update: { [id]: { 'mailboxIds/inbox': null, 'mailboxIds/snoozed': true, snoozed: { until } } } })).updated).toEqual({ [id]: null });
+    expect((await withSnooze('Email/get', { ids: [id], properties: ['mailboxIds', 'snoozed'] })).list[0]).toEqual({ id, mailboxIds: { snoozed: true }, snoozed: { until, moveToMailboxId: 'inbox' } });
+    expect(get<any>('SELECT folder, snoozed_until FROM messages WHERE id = ?', [dbId])).toEqual({ folder: 'inbox', snoozed_until: Date.parse(until) });
+    expect(await counts()).toEqual({ inbox: before.inbox - 1, snoozed: before.snoozed + 1 });
+    expect(await idsIn('snoozed')).toEqual([id]);
+    h.as('admin');
+    expect((await h.call('GET', '/api/mail/threads?view=snoozed')).body.threads.map((t: any) => t.subject)).toEqual(['Snooze me']);
+
+    // A new time is a change every app hears about.
+    const state = (await call('Email/get', { ids: [] })).state;
+    const later = inHours(5);
+    await withSnooze('Email/set', { update: { [id]: { 'snoozed/until': later } } });
+    expect((await call('Email/changes', { sinceState: state })).updated).toEqual([id]);
+    expect(get<{ t: number }>('SELECT snoozed_until AS t FROM messages WHERE id = ?', [dbId])!.t).toBe(Date.parse(later));
+
+    await withSnooze('Email/set', { update: { [id]: { snoozed: null, 'mailboxIds/snoozed': null, 'mailboxIds/inbox': true } } });
+    expect((await withSnooze('Email/get', { ids: [id], properties: ['mailboxIds', 'snoozed'] })).list[0]).toMatchObject({ mailboxIds: { inbox: true }, snoozed: null });
+    expect(await counts()).toEqual(before);
+  });
+
+  it('keeps the property and the Snoozed mailbox together, and only wakes into the Inbox', async () => {
+    const until = inHours(1);
+    for (const patch of [
+      { snoozed: { until } },
+      { 'mailboxIds/snoozed': true },
+      { mailboxIds: { snoozed: true, inbox: true }, snoozed: { until } },
+      { mailboxIds: { snoozed: true }, snoozed: { until, moveToMailboxId: 'archive' } },
+      { mailboxIds: { snoozed: true }, snoozed: { until, setByMailboxId: 'inbox' } },
+      { mailboxIds: { snoozed: true }, snoozed: { until: 'soon' } },
+    ]) {
+      expect((await withSnooze('Email/set', { update: { [id]: patch } })).notUpdated[id].type).toBe('invalidProperties');
+    }
+    expect(get<any>('SELECT folder, snoozed_until FROM messages WHERE id = ?', [dbId])).toEqual({ folder: 'inbox', snoozed_until: null });
+    // Apps without the extension can't snooze.
+    expect((await call('Email/set', { update: { [id]: { snoozed: { until } } } })).notUpdated[id].type).toBe('invalidProperties');
+  });
+
+  it('shows the web app’s snooze, wakes when any app moves it out, and wakes on time', async () => {
+    const threadId = get<{ thread_id: number }>('SELECT thread_id FROM messages WHERE id = ?', [dbId])!.thread_id;
+    const until = Date.now() + 3_600_000;
+    h.as('admin');
+    expect((await h.call('POST', '/api/mail/threads/actions', { threadIds: [threadId], action: { type: 'snooze', until } })).status).toBe(200);
+    const got = (await withSnooze('Email/get', { ids: [id], properties: ['mailboxIds', 'snoozed'] })).list[0];
+    expect(got.mailboxIds).toEqual({ snoozed: true });
+    expect(Date.parse(got.snoozed.until)).toBe(Math.floor(until / 1000) * 1000);
+
+    // An app that doesn't know about snooze wakes it by moving it.
+    await call('Email/set', { update: { [id]: { mailboxIds: { archive: true } } } });
+    expect(get<any>('SELECT folder, snoozed_until FROM messages WHERE id = ?', [dbId])).toEqual({ folder: 'archive', snoozed_until: null });
+
+    // Snoozed from an app, it comes back to the Inbox, unread, when its time comes (server-side, as always).
+    await withSnooze('Email/set', { update: { [id]: { mailboxIds: { snoozed: true }, snoozed: { until: inHours(1) }, 'keywords/$seen': true } } });
+    run('UPDATE messages SET snoozed_until = ? WHERE id = ?', [Date.now() - 1000, dbId]);
+    expect(wakeSnoozed()).toBe(1);
+    expect((await call('Email/get', { ids: [id], properties: ['mailboxIds', 'keywords'] })).list[0]).toMatchObject({ mailboxIds: { inbox: true }, keywords: {} });
   });
 });
 

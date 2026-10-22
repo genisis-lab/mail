@@ -17,7 +17,7 @@ import { all, get, insert, now, run } from '../db/index.js';
 import { decryptJson, encryptJson, sha256 } from '../lib/crypto.js';
 import { badRequest } from '../lib/http.js';
 import { platform } from '../platform.js';
-import { getBlob, putBlob } from '../mail/blobs.js';
+import { getBlob, loadBlob, putBlob } from '../mail/blobs.js';
 import { loadBody } from '../mail/body.js';
 import { buildMime } from '../mail/compose.js';
 import { ImapConnection, type ImapOptions, type Mailbox } from '../mail/imap-client.js';
@@ -402,11 +402,9 @@ registerJob('export', async (job: JobRow, state: ExportState) => {
   return { state, done, progress: { messages: state.messages, total: Math.max(total, state.messages), bytes: state.bytes, parts: state.parts.length }, delayMs: 100 };
 });
 
-async function writePart(text: string): Promise<string> {
-  const key = hexKey();
+function writePart(text: string): Promise<string> {
   // latin1 round-trips the original bytes exactly.
-  await platform().blobs.put(key, Uint8Array.from(text, (c) => c.charCodeAt(0) & 0xff));
-  return key;
+  return putBlob(Uint8Array.from(text, (c) => c.charCodeAt(0) & 0xff), hexKey());
 }
 
 /** Stream a finished export's parts as one mbox file. */
@@ -416,7 +414,7 @@ export function exportStream(job: JobRow): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (i >= parts.length) return controller.close();
-      const data = await platform().blobs.get(parts[i++]);
+      const data = await loadBlob(parts[i++]);
       if (!data) return controller.error(new Error('This export has expired. Start a new one.'));
       controller.enqueue(data);
     },

@@ -9,6 +9,7 @@ import { bodyColumns, loadBody } from './body.js';
 import { buildMime, quoteHtml, escapeHtml } from './compose.js';
 import { cancelOutbox, enqueue } from './outbound.js';
 import { htmlToText, makeSnippet } from './parse.js';
+import { isPrivate, linkMade, setPrivate } from './private.js';
 import { indexMessage, touchContacts } from './store.js';
 import { getMessage } from './threads.js';
 
@@ -20,10 +21,14 @@ export interface DraftInput {
   bcc?: string | Addr[];
   subject?: string;
   html?: string;
+  /** Plain text only, sent exactly as written (PGP-encrypted or signed text); `html` is ignored. */
+  text?: string;
   attachments?: number[];
   /** db id of the message being replied to / forwarded */
   replyToId?: number | null;
   forwardOfId?: number | null;
+  /** Send as a private link that works for this many days (null: a normal message). Web compose only. */
+  privateDays?: number | null;
 }
 
 function addrList(v: string | Addr[] | undefined): Addr[] {
@@ -73,8 +78,8 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
   const cc = addrList(input.cc);
   const bcc = addrList(input.bcc);
   const subject = (input.subject ?? '').slice(0, 998);
-  const html = input.html ?? '';
-  const text = htmlToText(html);
+  const html = input.text !== undefined ? '' : (input.html ?? '');
+  const text = input.text ?? htmlToText(html);
   const ts = now();
   const body = await bodyColumns(text, html);
 
@@ -87,7 +92,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
       run(
         `UPDATE messages SET from_addr = ?, from_name = ?, identity = ?, to_json = ?, cc_json = ?, bcc_json = ?, subject = ?,
            html_body = ?, text_body = ?, body_blob = ?, snippet = ?, date = ?, size = ?, jmap_rev = jmap_rev + 1 WHERE id = ?`,
-        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, html.length, draftId],
+        [from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, body.html_body, body.text_body, body.body_blob, makeSnippet(text, null), ts, (html || text).length, draftId],
       );
       // A new conversation takes its subject from the draft as it's finished, not as first autosaved.
       run('UPDATE threads SET subject = ? WHERE id = (SELECT thread_id FROM messages WHERE id = ?) AND (SELECT COUNT(*) FROM messages WHERE thread_id = threads.id) = 1', [
@@ -120,10 +125,11 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
         `INSERT INTO messages (user_id, thread_id, folder, direction, from_addr, from_name, identity, to_json, cc_json, bcc_json, subject, snippet,
            text_body, html_body, body_blob, date, size, is_read, status, in_reply_to, refs, created_at)
          VALUES (?, ?, 'drafts', 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?)`,
-        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), body.text_body, body.html_body, body.body_blob, ts, html.length, inReplyTo, refs, ts],
+        [userId, threadId, from.address, from.name, from.address, JSON.stringify(to), JSON.stringify(cc), JSON.stringify(bcc), subject, makeSnippet(text, null), body.text_body, body.html_body, body.body_blob, ts, (html || text).length, inReplyTo, refs, ts],
       );
     }
     if (input.attachments) linkAttachments(userId, draftId, input.attachments);
+    if (input.privateDays !== undefined) setPrivate(userId, draftId, input.privateDays);
     indexMessage(draftId);
     return draftId;
   });
@@ -176,6 +182,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   if (totalSize > s['limits.maxAttachmentMb'] * 1024 * 1024) throw badRequest(`Attachments exceed ${s['limits.maxAttachmentMb']} MB`);
 
   const refs: string[] = (d.refs || '').split(/\s+/).filter(Boolean);
+  // A private message's content never enters the outbox: it's replaced by the notice as it goes out (private.ts).
+  const priv = isPrivate(draftId);
   const { raw, messageId } = await buildMime({
     // Drafts made by a mail app (JMAP) already have their Message-ID.
     messageId: d.message_id || undefined,
@@ -184,13 +192,15 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     cc,
     bcc,
     subject: d.subject,
-    html: d.html_body || '<p></p>',
-    text: d.text_body,
+    // A plain-text draft (encrypted or signed) goes out as text/plain alone. The editor's own
+    // class names (quote, forward, signature) stay behind: they'd say which software wrote it.
+    html: priv ? '<p></p>' : d.html_body?.replace(/ class="wren-(?:quote|forward|signature)"/g, '') || (d.text_body ? null : '<p></p>'),
+    text: priv ? '' : d.text_body,
     inReplyTo: d.in_reply_to,
     references: refs,
     calendar: opts.calendar,
     attachments: await Promise.all(
-      atts.map(async (a: any) => ({
+      (priv ? [] : atts).map(async (a: any) => ({
         filename: a.filename,
         contentType: a.content_type,
         content: await getBlob(a.blob),
@@ -246,7 +256,8 @@ function addKeyword(userId: number, messageId: string, keyword: string) {
 export function cancelSend(userId: number, messageId: number): boolean {
   const m = get<{ id: number; status: string; size: number }>(`SELECT id, status, size FROM messages WHERE id = ? AND user_id = ? AND folder = 'sent'`, [messageId, userId]);
   if (!m || m.status !== 'queued') return false;
-  if (!cancelOutbox(messageId)) return false;
+  // A private message being retried already has its link (and someone may have it).
+  if (linkMade(messageId) || !cancelOutbox(messageId)) return false;
   run(
     `UPDATE messages SET folder = 'drafts', status = 'draft', send_at = NULL, is_scheduled = 0, raw_blob = NULL, message_id = NULL WHERE id = ?`,
     [messageId],

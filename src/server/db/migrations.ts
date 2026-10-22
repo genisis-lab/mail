@@ -692,6 +692,76 @@ export const migrations: string[] = [
   CREATE INDEX idx_push_user ON push_subscriptions(user_id);
   CREATE INDEX idx_push_endpoint ON push_subscriptions(endpoint);
   `,
+
+  // 16: private links: recipients get a link instead of the message, and it stops working
+  //     after a set time. The row is made when a draft is marked private; the token's hash,
+  //     the expiry and the content are filled in as the message goes out (mail/private.ts).
+  //     attachments: the message's attachment rows as JSON [{id, filename, content_type, size, content_id, inline, blob}].
+  //     Expired and withdrawn rows are deleted.
+  `
+  CREATE TABLE private_links (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+    days        INTEGER NOT NULL,
+    token_hash  TEXT UNIQUE,
+    expires_at  INTEGER,
+    html_body   TEXT,
+    text_body   TEXT,
+    body_blob   TEXT,
+    attachments TEXT NOT NULL DEFAULT '[]',
+    created_at  INTEGER NOT NULL
+  );
+  CREATE INDEX idx_private_links_expiry ON private_links(expires_at);
+  `,
+
+  // 17: the Calendar page: events people add themselves, and what each invitation in mail says.
+  //     messages.invite: NULL: not read yet (the calendar reads it on its next load); '': none; JSON: the event.
+  `
+  CREATE TABLE calendar_events (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL,
+    all_day    INTEGER NOT NULL DEFAULT 0,
+    start_at   INTEGER NOT NULL,
+    end_at     INTEGER NOT NULL,
+    location   TEXT NOT NULL DEFAULT '',
+    notes      TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_calendar_events_user ON calendar_events(user_id, start_at);
+  ALTER TABLE messages ADD COLUMN invite TEXT;
+  CREATE INDEX idx_messages_invite ON messages(user_id) WHERE invite <> '';
+  CREATE INDEX idx_attachments_calendar ON attachments(user_id) WHERE content_type LIKE 'text/calendar%' OR content_type LIKE 'application/ics%' OR filename LIKE '%.ics';
+  `,
+
+  // 18: mail apps see when a snoozed email wakes (the Email "snoozed" property), so moving a
+  //     snooze to another time is a change they're told about too.
+  `
+  DROP TRIGGER IF EXISTS jmap_message_update;
+  ${jmapMessageUpdate()}
+  `,
+
+  // 19: PGP public keys (private keys never reach the server). own = 1: the person's own key,
+  //     published to everyone on this server (one each); own = 0: someone else's key they saved.
+  //     emails: JSON array of the addresses in the key's user IDs.
+  `
+  CREATE TABLE pgp_keys (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    own         INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    emails      TEXT NOT NULL DEFAULT '[]',
+    armored     TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (user_id, own, fingerprint)
+  );
+  CREATE UNIQUE INDEX idx_pgp_keys_own ON pgp_keys(user_id) WHERE own = 1;
+  `,
+
+  // 20: Re-read cached invitations with organizer-scoped identities and date-less cancellations.
+  `UPDATE messages SET invite = NULL WHERE invite IS NOT NULL;`,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */
@@ -704,16 +774,37 @@ function jmapChange(user: string, type: string, obj: string, kind: string, threa
         FROM jmap_modseq q ${from ? from.replace(/^FROM/, ',') : ''} WHERE q.user_id = ${user} ${where.replace(/^WHERE/, 'AND')};`;
 }
 
+// JMAP ids (src/server/jmap/ids.ts). created_at keeps an id from coming back when SQLite reuses a
+// rowid; a new thread or a new draft revision is a new email, because JMAP emails are immutable.
+function jmapEmailId(r: string) {
+  return `'M' || ${r}.id || 'T' || ${r}.thread_id || 'C' || ${r}.created_at || CASE WHEN ${r}.jmap_rev > 0 THEN 'V' || ${r}.jmap_rev ELSE '' END`;
+}
+function jmapThreadOf(r: string) {
+  return `(SELECT 'T' || t.id || 'C' || t.created_at FROM threads t WHERE t.id = ${r}.thread_id)`;
+}
+// A mailbox being deleted takes its rows with it; record nothing for it.
+function jmapLive(u: string) {
+  return `EXISTS (SELECT 1 FROM users WHERE id = ${u})`;
+}
+
+/** An email changes for mail apps when its folder, flags, keywords or snooze (including its time) do. */
+function jmapMessageUpdate(): string {
+  return `
+  CREATE TRIGGER jmap_message_update AFTER UPDATE OF folder, is_read, is_starred, is_important, snoozed_until, keywords ON messages
+    WHEN (OLD.folder IS NOT NEW.folder OR OLD.is_read IS NOT NEW.is_read OR OLD.is_starred IS NOT NEW.is_starred
+          OR OLD.is_important IS NOT NEW.is_important OR OLD.snoozed_until IS NOT NEW.snoozed_until
+          OR OLD.keywords IS NOT NEW.keywords)
+     AND OLD.thread_id = NEW.thread_id AND OLD.jmap_rev = NEW.jmap_rev AND ${jmapLive('NEW.user_id')} BEGIN
+    ${jmapChange('NEW.user_id', 'Email', jmapEmailId('NEW'), 'u', jmapThreadOf('NEW'))}
+  END;`;
+}
+
 function jmapTriggers(): string {
-  // JMAP ids (src/server/jmap/ids.ts). created_at keeps an id from coming back when SQLite reuses a
-  // rowid; a new thread or a new draft revision is a new email, because JMAP emails are immutable.
-  const emailId = (r: string) =>
-    `'M' || ${r}.id || 'T' || ${r}.thread_id || 'C' || ${r}.created_at || CASE WHEN ${r}.jmap_rev > 0 THEN 'V' || ${r}.jmap_rev ELSE '' END`;
-  const threadOf = (r: string) => `(SELECT 'T' || t.id || 'C' || t.created_at FROM threads t WHERE t.id = ${r}.thread_id)`;
+  const emailId = jmapEmailId;
+  const threadOf = jmapThreadOf;
   const threadId = (r: string) => `'T' || ${r}.id || 'C' || ${r}.created_at`;
   const mailboxId = (r: string) => `'L' || ${r}.id || 'C' || ${r}.created_at`;
-  // A mailbox being deleted takes its rows with it; record nothing for it.
-  const live = (u: string) => `EXISTS (SELECT 1 FROM users WHERE id = ${u})`;
+  const live = jmapLive;
   const viaMessage = { from: 'FROM messages m', where: `WHERE m.id = NEW.message_id AND ${live('m.user_id')}` };
   const viaOldMessage = { from: 'FROM messages m', where: `WHERE m.id = OLD.message_id AND ${live('m.user_id')}` };
   return `
@@ -723,13 +814,7 @@ function jmapTriggers(): string {
   CREATE TRIGGER jmap_message_delete AFTER DELETE ON messages WHEN ${live('OLD.user_id')} BEGIN
     ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}
   END;
-  CREATE TRIGGER jmap_message_update AFTER UPDATE OF folder, is_read, is_starred, is_important, snoozed_until, keywords ON messages
-    WHEN (OLD.folder IS NOT NEW.folder OR OLD.is_read IS NOT NEW.is_read OR OLD.is_starred IS NOT NEW.is_starred
-          OR OLD.is_important IS NOT NEW.is_important OR (OLD.snoozed_until IS NULL) <> (NEW.snoozed_until IS NULL)
-          OR OLD.keywords IS NOT NEW.keywords)
-     AND OLD.thread_id = NEW.thread_id AND OLD.jmap_rev = NEW.jmap_rev AND ${live('NEW.user_id')} BEGIN
-    ${jmapChange('NEW.user_id', 'Email', emailId('NEW'), 'u', threadOf('NEW'))}
-  END;
+  ${jmapMessageUpdate()}
   CREATE TRIGGER jmap_message_replace AFTER UPDATE OF thread_id, jmap_rev ON messages
     WHEN (OLD.thread_id <> NEW.thread_id OR OLD.jmap_rev <> NEW.jmap_rev) AND ${live('NEW.user_id')} BEGIN
     ${jmapChange('OLD.user_id', 'Email', emailId('OLD'), 'd', threadOf('OLD'))}

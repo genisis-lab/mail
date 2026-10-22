@@ -58,10 +58,16 @@ database, message files, and the encryption key Wren generates on first start. B
 that directory. **Admin → System & backup** also downloads a portable export, which you
 can restore on a Cloudflare deployment if you move later.
 
-Provider credentials and 2FA secrets in an export can only be read by an install with the
-same `WREN_SECRET`. If you might move, choose your own `WREN_SECRET` from the start and use
-it on both. Otherwise, after a restore you re-enter provider settings and users set up 2FA
-again (Wren walks you through it).
+Message files (raw messages, attachments, very large bodies, avatars, stored backups and
+exports) are encrypted with AES-256-GCM, using a key derived from `WREN_SECRET`. Message
+bodies kept in the database aren't, because search needs them. Losing or changing
+`WREN_SECRET` makes stored mail files unreadable, so keep it safe. Set your own and keep it
+outside `DATA_DIR` if the files should stay protected when the directory is copied.
+
+Provider credentials and 2FA secrets in an export, and message files, can only be read by
+an install with the same `WREN_SECRET`. If you might move, choose your own `WREN_SECRET`
+from the start and use it on both. Otherwise, after a restore you re-enter provider
+settings and users set up 2FA again (Wren walks you through it).
 
 ## Environment variables
 

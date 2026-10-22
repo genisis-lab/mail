@@ -118,6 +118,12 @@ export function AdminSettingsPage() {
               description="Turn off to prevent data leaving via forwarding rules."
             />
             <Switch
+              checked={draft['users.selfDelete']}
+              onChange={(v) => set('users.selfDelete', v)}
+              label="People can delete their own account"
+              description="In Settings → Security, with their password (and 2-step code). Their mail goes and their addresses are freed, as when you delete someone. Turn off to have them ask an administrator."
+            />
+            <Switch
               checked={draft['jmap.enabled']}
               onChange={(v) => set('jmap.enabled', v)}
               label="Let people use mail apps (JMAP)"

@@ -20,7 +20,7 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, deleteUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
@@ -613,9 +613,7 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
         run('UPDATE users SET password_change_required_at = ? WHERE id = ?', [now(), id]);
         break;
       case 'delete':
-        purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
-        run('DELETE FROM users WHERE id = ?', [id]);
-        closeUserStreams(id);
+        deleteUser(id);
         break;
     }
     results.push({ id, email: u.email, ok: true });

@@ -56,6 +56,19 @@ instance name, your first domain, how to send mail (**Cloudflare Email Service**
 
 Provider credentials and two-factor secrets are encrypted at rest. On first start Wren
 generates the key and stores it inside the Durable Object, so there's nothing to set up.
+The owner can see that key under **Admin → System → Show key** (after entering their
+password, and a 2-step code if that's on). Copy or download it and keep it somewhere safe,
+such as a password manager: moving to another deployment, or restoring a stored backup
+there, needs it set as `WREN_SECRET`.
+
+Mail files in R2 are encrypted too: raw messages, attachments, very large bodies,
+avatars, automatic backups and mail exports (AES-256-GCM, with a key derived from
+`WREN_SECRET` or the generated key). They're named by a keyed hash, so the bucket alone
+shows neither what a file says nor whether a known file is in it. Message bodies kept in
+the database stay as they are, because search needs them; Cloudflare already encrypts
+Durable Object storage at rest. After an upgrade, files stored earlier are encrypted in
+the background (**Admin → System** shows how many are left, and any file that couldn't be
+encrypted, which is left as it was and still opens).
 
 If you'd rather keep the key separate from the data, set it as a Worker secret **before
 the first start**:
@@ -64,8 +77,14 @@ the first start**:
 openssl rand -base64 32 | npx wrangler secret put WREN_SECRET
 ```
 
-Changing the key later makes existing credentials unreadable. Wren then shows a warning
-in the admin panel, and you re-enter the provider settings.
+Losing or changing the key makes stored mail files and credentials unreadable, so keep
+it safe. If it changes, Wren shows a warning in the admin panel: put the original key back
+to read them again (credentials can also be re-entered; mail files can't be recovered
+without the key). Files saved while the warning shows are stored unencrypted, so they open
+with either key, and are encrypted once it's sorted out. To keep the new key instead, the
+owner chooses **Use the current key** in **Admin → System**: the warning goes away, but
+whatever the old key protected stays unreadable, so re-enter provider settings and reset
+2FA for the users who had it.
 
 ### Custom hostname
 
@@ -175,7 +194,11 @@ recovery only works once deployed.
 - **Restore from export.** Replaces all data with an export, then signs everyone out.
   If the restore fails part-way, the database is rolled back automatically.
 
-Message files stay in R2 in every case.
+Message files stay in R2 in every case. Backups and exports stored in R2 are encrypted
+like mail files and download as normal, readable files. A stored backup can only be
+restored with the `WREN_SECRET` it was made with (with a generated key, **Admin → System →
+Show key** on the original deployment shows it); with another key the restore stops
+before changing anything.
 
 ## What needs a Cloudflare deployment
 

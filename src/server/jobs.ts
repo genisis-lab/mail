@@ -1,9 +1,10 @@
 import { all, get, getMeta, now, run, setMeta } from './db/index.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
-import { collectGarbage } from './mail/blobs.js';
+import { blobEncryptionDue, collectGarbage, continueBlobEncryption } from './mail/blobs.js';
 import { processQueue } from './mail/outbound.js';
 import { purgeMessages } from './mail/store.js';
+import { pruneLinks } from './mail/private.js';
 import { dueFollowUps, wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
 import { pruneTokens } from './services/tokens.js';
@@ -37,6 +38,7 @@ export function runMaintenance() {
   run('DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?', [ts - DAY]);
   run('DELETE FROM autoreply_log WHERE sent_at < ?', [ts - 30 * DAY]);
   pruneTokens();
+  pruneLinks();
   run('DELETE FROM roundtrip_tests WHERE sent_at < ?', [ts - 30 * DAY]);
   pruneChanges();
   pruneSubscriptions();
@@ -45,7 +47,7 @@ export function runMaintenance() {
 
 /**
  * Run whatever background work is due: the outbound queue, snooze wake-ups,
- * hourly maintenance and daily blob GC. Called by the
+ * hourly maintenance, encrypting old blobs and daily blob GC. Called by the
  * Durable Object alarm on Workers.
  */
 export async function runDueWork(opts: { gc?: boolean } = {}) {
@@ -54,6 +56,7 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
   dueFollowUps();
   continueSearchRebuild();
   await continueParcelBackfill().catch((err) => log.warn('Package backfill failed', err));
+  await continueBlobEncryption().catch((err) => log.warn('Encrypting stored files failed', err));
   const ts = now();
   if (ts - lastRun('maintenance') > HOUR) {
     setMeta('last_maintenance', ts);
@@ -84,7 +87,7 @@ export function nextWakeAt(): number {
   const snooze = get<{ t: number | null }>(`SELECT MIN(snoozed_until) AS t FROM messages WHERE snoozed_until IS NOT NULL`)?.t ?? Infinity;
   const followUp = get<{ t: number | null }>(`SELECT MIN(follow_up_at) AS t FROM threads WHERE follow_up_at IS NOT NULL`)?.t ?? Infinity;
   const maintenance = (lastRun('maintenance') || ts) + HOUR;
-  const rebuild = searchRebuildPending() || parcelBackfillPending() ? ts : Infinity;
+  const rebuild = searchRebuildPending() || parcelBackfillPending() || blobEncryptionDue() ? ts : Infinity;
   const alerts = (lastRun('alerts') || ts) + 10 * 60_000;
   return Math.max(ts + 500, Math.min(queue, snooze, followUp, maintenance, rebuild, alerts, jobsDueAt(), nextBackupAt(ts)));
 }

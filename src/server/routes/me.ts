@@ -1,7 +1,7 @@
-/** Per-user features: saved replies, saved searches, self-service aliases, push, import and export. Mounted on /api/me. */
+/** Per-user features: saved replies, saved searches, self-service aliases, push, import and export, PGP keys. Mounted on /api/me. */
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { all, get, insert, now, run } from '../db/index.js';
+import { all, get, insert, now, run, tx } from '../db/index.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/http.js';
 import { domainOf, normalizeEmail } from '../lib/addr.js';
 import { getSettings } from '../settings.js';
@@ -13,6 +13,8 @@ import { deleteJob, exportStream, importMboxBatch, startExport, startImapImport 
 import { ImapError } from '../mail/imap-client.js';
 import { HttpError } from '../lib/http.js';
 import { parcelNote, parcelRowsOnce } from '../mail/parcel.js';
+import { readPublicKey } from '../lib/pgp.js';
+import { userAddresses } from '../services/users.js';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -398,4 +400,88 @@ meRoutes.get('/export/:id/download', (c) => {
       'Cache-Control': 'private, no-store',
     },
   });
+});
+
+// ── PGP keys ────────────────────────────────────────────────────────────────
+// Public keys only: private keys stay in the browser. Looking up someone's key (to encrypt to them or
+// check their signature) finds the keys a person saved, and the key published by whoever owns that
+// address on this server.
+
+const MAX_SAVED_KEYS = 500;
+const keySchema = z.object({ armored: z.string().min(1).max(100_000) });
+const keyDto = (r: any) => ({ id: r.id, fingerprint: r.fingerprint, name: r.name, emails: JSON.parse(r.emails) as string[], armored: r.armored, createdAt: r.created_at });
+
+meRoutes.get('/pgp', (c) => {
+  const rows = all<any>('SELECT * FROM pgp_keys WHERE user_id = ? ORDER BY name COLLATE NOCASE, id', [c.get('user').id]);
+  const own = rows.find((r) => r.own);
+  return c.json({ published: own ? keyDto(own) : null, keys: rows.filter((r) => !r.own).map(keyDto) });
+});
+
+/** Publish your own public key to everyone on this server (replacing the one published before). */
+meRoutes.put('/pgp/published', async (c) => {
+  const user = c.get('user');
+  const { armored } = await body(c, keySchema);
+  const key = readPublicKey(armored);
+  const mine = new Set([user.email.toLowerCase(), ...userAddresses(user.id)]);
+  if (!key.emails.some((e) => mine.has(e))) throw badRequest(`This key isn’t for ${user.email}`, 'pgp_not_yours');
+  const id = tx(() => {
+    run('DELETE FROM pgp_keys WHERE user_id = ? AND own = 1', [user.id]);
+    return insert('INSERT INTO pgp_keys (user_id, own, fingerprint, name, emails, armored, created_at) VALUES (?, 1, ?, ?, ?, ?, ?)', [
+      user.id,
+      key.fingerprint,
+      key.name,
+      JSON.stringify(key.emails),
+      key.armored,
+      now(),
+    ]);
+  });
+  audit(user.id, 'account.pgp_published', key.fingerprint, undefined, clientIp(c));
+  return c.json({ published: keyDto(get('SELECT * FROM pgp_keys WHERE id = ?', [id])) });
+});
+
+meRoutes.delete('/pgp/published', (c) => {
+  const user = c.get('user');
+  if (run('DELETE FROM pgp_keys WHERE user_id = ? AND own = 1', [user.id]).changes) audit(user.id, 'account.pgp_unpublished', undefined, undefined, clientIp(c));
+  return c.json({ ok: true });
+});
+
+/** Save someone's public key. Saving one again replaces it (a newer copy can carry new subkeys or expiry). */
+meRoutes.post('/pgp/keys', async (c) => {
+  const user = c.get('user');
+  const { armored } = await body(c, keySchema);
+  const key = readPublicKey(armored);
+  const exists = get('SELECT 1 FROM pgp_keys WHERE user_id = ? AND own = 0 AND fingerprint = ?', [user.id, key.fingerprint]);
+  if (!exists && (get<{ c: number }>('SELECT COUNT(*) AS c FROM pgp_keys WHERE user_id = ? AND own = 0', [user.id])?.c ?? 0) >= MAX_SAVED_KEYS) {
+    throw badRequest(`You can keep up to ${MAX_SAVED_KEYS} keys`);
+  }
+  run(
+    `INSERT INTO pgp_keys (user_id, own, fingerprint, name, emails, armored, created_at) VALUES (?, 0, ?, ?, ?, ?, ?)
+       ON CONFLICT (user_id, own, fingerprint) DO UPDATE SET name = excluded.name, emails = excluded.emails, armored = excluded.armored`,
+    [user.id, key.fingerprint, key.name, JSON.stringify(key.emails), key.armored, now()],
+  );
+  return c.json({ key: keyDto(get('SELECT * FROM pgp_keys WHERE user_id = ? AND own = 0 AND fingerprint = ?', [user.id, key.fingerprint])), updated: !!exists });
+});
+
+meRoutes.delete('/pgp/keys/:id', (c) => {
+  if (!run('DELETE FROM pgp_keys WHERE id = ? AND user_id = ? AND own = 0', [intParam(c, 'id'), c.get('user').id]).changes) throw notFound();
+  return c.json({ ok: true });
+});
+
+/** The public keys known for some addresses: { address: [{ fingerprint, armored }] }, only for addresses that have one. */
+meRoutes.post('/pgp/lookup', async (c) => {
+  const user = c.get('user');
+  const { addresses } = await body(c, z.object({ addresses: z.array(z.string().trim().toLowerCase().max(254)).max(100) }));
+  const keys: Record<string, { fingerprint: string; armored: string }[]> = {};
+  for (const address of new Set(addresses)) {
+    const rows = all<{ fingerprint: string; armored: string }>(
+      `SELECT fingerprint, armored FROM pgp_keys
+        WHERE (user_id = ? AND own = 0 AND EXISTS (SELECT 1 FROM json_each(pgp_keys.emails) WHERE value = ?))
+           OR (own = 1 AND user_id IN (SELECT user_id FROM addresses WHERE address = ? AND kind IN ('mailbox', 'alias') AND enabled = 1))
+        ORDER BY own DESC, id`,
+      [user.id, address, address],
+    );
+    const unique = rows.filter((r, i) => rows.findIndex((o) => o.fingerprint === r.fingerprint) === i);
+    if (unique.length) keys[address] = unique;
+  }
+  return c.json({ keys });
 });

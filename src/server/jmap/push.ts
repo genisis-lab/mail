@@ -9,7 +9,9 @@
  *    after a while and the app reconnects.
  *
  * flushPush() runs after requests, incoming mail and background work. It
- * looks for mailboxes whose change counter moved since the last push.
+ * looks for mailboxes whose change counter moved since the last push, and
+ * tells each person who can open that mailbox (its owner, or a shared
+ * mailbox's members, as they are at that moment).
  */
 import { all, get, insert, now, run } from '../db/index.js';
 import { randomToken } from '../lib/crypto.js';
@@ -20,7 +22,7 @@ import { getSettings } from '../settings.js';
 import { currentState } from './changes.js';
 import { MethodError, SetError, asSetError } from './errors.js';
 import { accountId } from './ids.js';
-import { CAP, getIds, getProperties, isObject, method, pick } from './request.js';
+import { CAP, getIds, getProperties, isObject, method, pick, sharedAccounts } from './request.js';
 
 const log = logger('jmap-push');
 
@@ -81,7 +83,7 @@ async function post(sub: PushRow, payload: unknown): Promise<boolean> {
   }
 }
 
-/** Open EventSource streams, by user. The Durable Object is one process, so memory reaches them all. */
+/** Open EventSource streams, by person. The Durable Object is one process, so memory reaches them all. */
 const streams = new Map<number, Set<{ types: Set<string>; send(event: string, data: unknown): void; closeAfterState: boolean; close(): void }>>();
 
 /** Mailboxes that just had mail delivered (for the EmailDelivery type, which apps use to notify). */
@@ -98,6 +100,12 @@ function stateChange(userId: number, types: Set<string> | null, delivery: boolea
   return { '@type': 'StateChange', changed: { [accountId(userId)]: changed } };
 }
 
+/** Every account's current state, for a stream that just opened: the person's own and each shared mailbox's. */
+function currentStates(personId: number, types: Set<string>) {
+  const changed = Object.assign({}, ...[personId, ...sharedAccounts(personId).map((a) => a.box.id)].map((id) => stateChange(id, types, false).changed));
+  return { '@type': 'StateChange', changed };
+}
+
 let flushing: Promise<void> | null = null;
 
 /** Push state changes to every app of every mailbox whose counter moved. */
@@ -108,23 +116,29 @@ export function flushPush(): Promise<void> {
     for (const { user_id, modseq } of due) {
       run('UPDATE jmap_modseq SET pushed = ? WHERE user_id = ?', [modseq, user_id]);
       const delivery = delivered.delete(user_id);
-      // Nothing for people an admin turned mail apps off for, or suspended (their subscriptions wait, unused).
-      if (!get(`SELECT 1 FROM users WHERE id = ? AND status = 'active' AND mail_apps_blocked = 0`, [user_id])) {
-        closeUserStreams(user_id);
-        continue;
-      }
-      for (const s of streams.get(user_id) ?? []) {
-        const change = stateChange(user_id, s.types, delivery);
-        if (Object.keys(change.changed[accountId(user_id)]).length) {
-          s.send('state', change);
-          if (s.closeAfterState) s.close();
+      // The mailbox's person, or the members of a shared mailbox, right now. Nothing for people an admin
+      // turned mail apps off for, or suspended (their subscriptions wait, unused).
+      const people = all<{ id: number }>(
+        `SELECT id FROM users WHERE kind = 'person' AND status = 'active' AND mail_apps_blocked = 0
+            AND (id = ? OR id IN (SELECT mm.user_id FROM mailbox_members mm JOIN users b ON b.id = mm.mailbox_id WHERE mm.mailbox_id = ? AND b.kind = 'shared' AND b.status = 'active'))`,
+        [user_id, user_id],
+      ).map((r) => r.id);
+      // Streams belong to people, so this only ends those of a person who lost access.
+      if (!people.includes(user_id)) closeUserStreams(user_id);
+      for (const person of people) {
+        for (const s of streams.get(person) ?? []) {
+          const change = stateChange(user_id, s.types, delivery);
+          if (Object.keys(change.changed[accountId(user_id)]).length) {
+            s.send('state', change);
+            if (s.closeAfterState) s.close();
+          }
         }
-      }
-      const subs = all<PushRow>('SELECT * FROM jmap_push WHERE user_id = ? AND verified = 1 AND expires_at > ?', [user_id, now()]);
-      for (const sub of subs) {
-        const types = sub.types ? new Set<string>(JSON.parse(sub.types)) : null;
-        const change = stateChange(user_id, types, delivery);
-        if (Object.keys(change.changed[accountId(user_id)]).length) await post(sub, change);
+        const subs = all<PushRow>('SELECT * FROM jmap_push WHERE user_id = ? AND verified = 1 AND expires_at > ?', [person, now()]);
+        for (const sub of subs) {
+          const types = sub.types ? new Set<string>(JSON.parse(sub.types)) : null;
+          const change = stateChange(user_id, types, delivery);
+          if (Object.keys(change.changed[accountId(user_id)]).length) await post(sub, change);
+        }
       }
     }
   })().finally(() => {
@@ -194,7 +208,7 @@ export function eventSource(userId: number, query: { types?: string; closeafter?
       streams.set(userId, set);
       // The current state right away, so the app knows where it stands. Long-polling apps
       // (closeafter=state) instead wait for the next change.
-      if (!entry.closeAfterState) entry.send('state', stateChange(userId, types, false));
+      if (!entry.closeAfterState) entry.send('state', currentStates(userId, types));
       // At least 30 seconds between pings (RFC 8620 7.3 lets the server raise the interval).
       if (pingSeconds) timer = setInterval(() => entry.send('ping', { interval: Math.max(pingSeconds, 30) }), Math.max(pingSeconds, 30) * 1000);
       lifetime = setTimeout(close, STREAM_LIFETIME_MS);

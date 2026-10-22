@@ -204,13 +204,18 @@ sessions, appearance, and personal API keys.
 - **Invitations** (`shared/ics.ts`, `services/calendar.ts`): the first VEVENT of a
   text/calendar part, times converted with `Intl` (IANA and Windows zone names); replies
   are iTIP REPLY parts sent through the normal send path.
+- **Calendar page** (`routes/calendar.ts`): own events in `calendar_events`; each
+  invitation is read once into `messages.invite` (JSON) the first time the calendar
+  loads after it arrives, and shown one per UID as its newest email says. `/api/calendar`
+  acts on a shared mailbox like the mail routes.
 
 - **Mail apps over JMAP** (`src/server/jmap/`, [jmap.md](jmap.md)): RFC 8620/8621 on
   app passwords (API keys with the `mail` scope), off until an admin turns it on.
   Triggers write every visible change to `jmap_changes`; state strings carry a random
   tag so a restore invalidates them. Push goes to verified PushSubscriptions (RFC 8291)
-  or EventSource streams.
+  or EventSource streams. Shared mailboxes are more accounts, checked on every call;
+  FUTURERELEASE holds use the scheduled-send queue, and snooze is a Snoozed mailbox plus
+  Fastmail's `snoozed` Email property.
 
 ## Later
-Shared mailboxes over JMAP, calendar and contacts sync over HTTP (JMAP or
-CalDAV/CardDAV), and multi-tenant billing.
+Calendar and contacts sync over HTTP (JMAP or CalDAV/CardDAV), and multi-tenant billing.

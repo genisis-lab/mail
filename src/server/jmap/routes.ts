@@ -19,7 +19,8 @@ import { readBlob, storeUploadBlob } from './blobs.js';
 import { problem } from './errors.js';
 import { accountId } from './ids.js';
 import { eventSource } from './push.js';
-import { CAP, LIMITS, processRequest } from './request.js';
+import { accountFor, CAP, LIMITS, processRequest, sharedAccounts } from './request.js';
+import { MAX_DELAYED_SEND } from './submission.js';
 // The method handlers register themselves.
 import './mailbox.js';
 import './email.js';
@@ -99,6 +100,18 @@ const base = () => config.publicUrl.replace(/\/+$/, '');
 function session(user: UserRow) {
   const id = accountId(user.id);
   const maxUpload = maxUploadBytes();
+  const mail = {
+    maxMailboxesPerEmail: null,
+    maxMailboxDepth: 1,
+    maxSizeMailboxName: 80,
+    maxSizeAttachmentsPerEmail: maxUpload,
+    emailQuerySortOptions: ['receivedAt', 'sentAt', 'size', 'from', 'to', 'subject', 'hasKeyword'],
+    mayCreateTopLevelMailbox: true,
+  };
+  // FUTURERELEASE's arguments (RFC 4865) are the longest hold and the latest release time; the time counts from the start of the day, so the session changes only daily.
+  const day = Math.floor(now() / 86_400_000) * 86_400_000;
+  const latest = new Date(day + MAX_DELAYED_SEND * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const submission = { maxDelayedSend: MAX_DELAYED_SEND, submissionExtensions: { FUTURERELEASE: [String(MAX_DELAYED_SEND), latest] } };
   const s = {
     capabilities: {
       [CAP.core]: {
@@ -115,26 +128,22 @@ function session(user: UserRow) {
       [CAP.submission]: {},
       [CAP.quota]: {},
       [CAP.vacation]: {},
+      [CAP.snooze]: {},
     },
     accounts: {
       [id]: {
         name: user.email,
         isPersonal: true,
         isReadOnly: false,
-        accountCapabilities: {
-          [CAP.mail]: {
-            maxMailboxesPerEmail: null,
-            maxMailboxDepth: 1,
-            maxSizeMailboxName: 80,
-            maxSizeAttachmentsPerEmail: maxUpload,
-            emailQuerySortOptions: ['receivedAt', 'sentAt', 'size', 'from', 'to', 'subject', 'hasKeyword'],
-            mayCreateTopLevelMailbox: true,
-          },
-          [CAP.submission]: { maxDelayedSend: 0, submissionExtensions: {} },
-          [CAP.quota]: {},
-          [CAP.vacation]: {},
-        },
+        accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.quota]: {}, [CAP.vacation]: {}, [CAP.snooze]: {} },
       },
+      // Each shared mailbox they belong to is another account. Members who can't send still read and write drafts, so none is read-only.
+      ...Object.fromEntries(
+        sharedAccounts(user.id).map(({ box }) => [
+          accountId(box.id),
+          { name: box.email, isPersonal: false, isReadOnly: false, accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.snooze]: {} } },
+        ]),
+      ),
     },
     primaryAccounts: { [CAP.mail]: id, [CAP.submission]: id, [CAP.quota]: id, [CAP.vacation]: id },
     username: user.email,
@@ -210,11 +219,13 @@ jmapRoutes.post('/jmap/api', async (c) => {
   });
 });
 
-const checkAccount = (c: Context<JmapEnv>) => c.req.param('accountId') === accountId(c.get('user').id);
+/** The mailbox the URL's account id names, if the person may use it now. */
+const mailboxOf = (c: Context<JmapEnv>) => accountFor(c.get('user'), c.req.param('accountId'))?.box;
 
 jmapRoutes.get('/jmap/download/:accountId/:blobId/:name', async (c) => {
-  if (!checkAccount(c)) return c.json({ error: 'Not found' }, 404);
-  const blob = await readBlob(c.get('user').id, c.req.param('blobId'));
+  const box = mailboxOf(c);
+  if (!box) return c.json({ error: 'Not found' }, 404);
+  const blob = await readBlob(box.id, c.req.param('blobId'));
   if (!blob) return c.json({ error: 'Not found' }, 404);
   const accept = c.req.query('accept');
   const name = c.req.param('name') || blob.name;
@@ -226,24 +237,25 @@ jmapRoutes.get('/jmap/download/:accountId/:blobId/:name', async (c) => {
       'Content-Security-Policy': "default-src 'none'; sandbox",
       'X-Content-Type-Options': 'nosniff',
       // A blob id always names the same bytes.
-      'Cache-Control': 'private, max-age=31536000, immutable',
+      'Cache-Control': box.id === c.get('user').id ? 'private, max-age=31536000, immutable' : 'no-store',
     },
   });
 });
 
 jmapRoutes.post('/jmap/upload/:accountId/', async (c) => {
   const user = c.get('user');
-  if (!checkAccount(c)) return problem('about:blank', 'No such account', 404);
+  const box = mailboxOf(c);
+  if (!box) return problem('about:blank', 'No such account', 404);
   const max = maxUploadBytes();
   if (Number(c.req.header('content-length') ?? 0) > max) return problem('limit', 'The file is too large', 413, { limit: 'maxSizeUpload' });
   // Uploads nothing uses yet are capped, so they can't fill the store before they expire.
-  const pending = get<{ b: number | null }>('SELECT SUM(size) AS b FROM attachments WHERE user_id = ? AND message_id IS NULL', [user.id])?.b ?? 0;
+  const pending = get<{ b: number | null }>('SELECT SUM(size) AS b FROM attachments WHERE user_id = ? AND message_id IS NULL', [box.id])?.b ?? 0;
   if (pending > 10 * max) return problem('about:blank', 'Too many unused uploads. Use or wait for the earlier ones to expire.', 429);
   return limited(`upload:${user.id}`, LIMITS.maxConcurrentUpload, 'maxConcurrentUpload', async () => {
     const data = new Uint8Array(await c.req.arrayBuffer());
     if (data.length > max) return problem('limit', 'The file is too large', 413, { limit: 'maxSizeUpload' });
     const type = (c.req.header('content-type') ?? 'application/octet-stream').split(';')[0].trim();
-    return c.json({ accountId: accountId(user.id), ...(await storeUploadBlob(user.id, data, type)) }, 201);
+    return c.json({ accountId: accountId(box.id), ...(await storeUploadBlob(box.id, data, type)) }, 201);
   });
 });
 

@@ -1,9 +1,12 @@
 import { DEFAULT_PREFS, type Identity, type Role, type SessionUser, type UserPrefs } from '../../shared/types.js';
 import { all, get, insert, now, run, tx } from '../db/index.js';
-import { hashPassword } from '../lib/crypto.js';
+import { decrypt, hashPassword, sha256, verifyTotp } from '../lib/crypto.js';
 import { domainOf, isEmail, localPart, normalizeEmail } from '../lib/addr.js';
 import { badRequest, conflict } from '../lib/http.js';
 import { getSettings } from '../settings.js';
+import { purgeMessages } from '../mail/store.js';
+import { closeUserStreams } from '../jmap/push.js';
+import { audit } from './audit.js';
 
 export interface UserRow {
   id: number;
@@ -124,6 +127,18 @@ export function sessionUser(user: UserRow): SessionUser {
   };
 }
 
+/** A 2-step code from their authenticator app, or one of their recovery codes (each works once). */
+export function checkTwoStepCode(user: UserRow, code: string, ip: string | null): boolean {
+  if (user.totp_secret && verifyTotp(decrypt(user.totp_secret), code)) return true;
+  if (!user.recovery_codes) return false;
+  const codes: string[] = JSON.parse(user.recovery_codes);
+  const h = sha256(code.replace(/[\s-]/g, '').toLowerCase());
+  if (!codes.includes(h)) return false;
+  run('UPDATE users SET recovery_codes = ? WHERE id = ?', [JSON.stringify(codes.filter((x) => x !== h)), user.id]);
+  audit(user.id, 'auth.recovery_code_used', user.email, undefined, ip);
+  return true;
+}
+
 export function validatePassword(pw: string) {
   const min = getSettings()['security.passwordMinLength'];
   if (typeof pw !== 'string' || pw.length < min) throw badRequest(`Password must be at least ${min} characters`);
@@ -166,6 +181,41 @@ export async function createUser(input: {
     );
     return id;
   });
+}
+
+/**
+ * Delete an account and everything in it (mail, contacts, labels, filters,
+ * keys, sessions, passkeys). Its addresses are freed, or become aliases of
+ * `handTo` so mail sent to them keeps arriving. Stored files are
+ * garbage-collected later, as usual. Says how many addresses moved.
+ */
+export function deleteUser(id: number, handTo?: UserRow | null): number {
+  purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
+  const moved = tx(() => {
+    // The inbound log has no user id and is kept 90 days: blank what it says about their mail.
+    // Rows are matched by the address mail was delivered to: user+tag@ counts as user@ (unless that's
+    // someone's own address), and mail their catch-all took is any address on the domain nobody owns.
+    run(
+      `WITH log AS (
+         SELECT id, lower(substr(rcpt_to, instr(rcpt_to, '@') + 1)) AS dom,
+           CASE WHEN instr(rcpt_to, '+') > 1 AND instr(rcpt_to, '+') < instr(rcpt_to, '@')
+                 AND lower(rcpt_to) NOT IN (SELECT lower(address) FROM addresses)
+             THEN lower(substr(rcpt_to, 1, instr(rcpt_to, '+') - 1) || substr(rcpt_to, instr(rcpt_to, '@')))
+             ELSE lower(rcpt_to) END AS rcpt
+         FROM inbound_log)
+       UPDATE inbound_log SET subject = '', mail_from = '' WHERE id IN (
+         SELECT id FROM log
+         WHERE rcpt IN (SELECT lower(address) FROM addresses WHERE user_id = ?)
+            OR (dom IN (SELECT lower(name) FROM domains WHERE catch_all_user_id = ?) AND rcpt NOT IN (SELECT lower(address) FROM addresses)))`,
+      [id, id],
+    );
+    const n = handTo ? run(`UPDATE addresses SET user_id = ?, kind = 'alias', name = ?, created_by = NULL WHERE user_id = ?`, [handTo.id, handTo.name, id]).changes : 0;
+    if (handTo) run('UPDATE domains SET catch_all_user_id = ? WHERE catch_all_user_id = ?', [handTo.id, id]);
+    run('DELETE FROM users WHERE id = ?', [id]);
+    return n;
+  });
+  closeUserStreams(id);
+  return moved;
 }
 
 export function sentToday(userId: number): number {

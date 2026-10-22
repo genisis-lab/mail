@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import type { Addr } from '../../shared/types.js';
-import { APP_NAME, APP_VERSION } from '../../shared/brand.js';
 import { domainOf } from '../lib/addr.js';
 import { buildMimeMessage } from './mime.js';
 import { htmlToText } from './parse.js';
@@ -52,7 +51,8 @@ export async function buildMime(input: ComposeInput): Promise<{ raw: Buffer; mes
     inReplyTo: input.inReplyTo,
     references: input.references,
     date: input.date,
-    headers: { 'X-Mailer': `${APP_NAME} ${APP_VERSION}`, ...(input.headers ?? {}) },
+    // No X-Mailer or the like: sent mail doesn't say which software or version wrote it.
+    headers: input.headers,
     attachments: input.attachments,
     calendar: input.calendar,
   });
@@ -64,7 +64,8 @@ export function quoteHtml(opts: { html: string | null; text: string | null; from
   const when = new Date(opts.date).toUTCString();
   const who = opts.from.name ? `${escapeHtml(opts.from.name)} &lt;${escapeHtml(opts.from.address)}&gt;` : escapeHtml(opts.from.address);
   const body = opts.html ?? `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(opts.text ?? '')}</pre>`;
-  return `<br><div class="wren-quote"><div>On ${when}, ${who} wrote:</div><blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
+  // The class is for the editor only (sendDraft drops it); mail apps, this one included, fold a blockquote type="cite".
+  return `<br><div class="wren-quote"><div>On ${when}, ${who} wrote:</div><blockquote type="cite" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${body}</blockquote></div>`;
 }
 
 export function escapeHtml(s: string): string {

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookmarkPlus,
   CalendarClock,
+  CalendarDays,
   Check,
   ChevronDown,
   Clock,
@@ -53,6 +54,7 @@ import { ThreadList } from './mail/ThreadList';
 import { ThreadView } from './mail/ThreadView';
 import { SettingsPage } from './settings/SettingsPage';
 import { ContactsPage } from './ContactsPage';
+import { CalendarPage } from './CalendarPage';
 import { PackagesPage } from './PackagesPage';
 import { SubscriptionsPage } from './SubscriptionsPage';
 
@@ -69,8 +71,9 @@ const NAV: { view: View; label: string; icon: ReactNode; count?: 'inbox' | 'draf
   { view: 'trash', label: 'Trash', icon: <Trash2 className="size-[18px]" /> },
 ];
 
-/** Pages under the folders: packages from shipping mail, and the senders of list mail. */
+/** Pages under the folders: the calendar, packages from shipping mail, and the senders of list mail. */
 const PAGES: { to: string; label: string; title: string; icon: ReactNode }[] = [
+  { to: '/calendar', label: 'Calendar', title: 'Calendar', icon: <CalendarDays className="size-[18px]" /> },
   { to: '/packages', label: 'Packages', title: 'Packages', icon: <Package className="size-[18px]" /> },
   { to: '/subscriptions', label: 'Subscriptions', title: 'Manage subscriptions', icon: <MailMinus className="size-[18px]" /> },
 ];
@@ -178,6 +181,7 @@ function MailShell() {
               <Route index element={<Navigate to="/inbox" replace />} />
               <Route path="settings/:tab?" element={<SettingsPage />} />
               <Route path="contacts" element={<ContactsPage />} />
+              <Route path="calendar" element={<CalendarPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="subscriptions" element={<SubscriptionsPage />} />
               <Route path="label/:labelId" element={<ThreadList />} />

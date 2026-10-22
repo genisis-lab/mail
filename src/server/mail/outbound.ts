@@ -13,6 +13,7 @@ import { storeMessage } from './store.js';
 import { escapeHtml } from './compose.js';
 import { suppress, suppressionFor, suppressionReason } from '../services/suppressions.js';
 import { badMailbox } from './dsn.js';
+import { preparePrivateLink } from './private.js';
 
 const log = logger('outbound');
 
@@ -116,7 +117,7 @@ export function enqueue(input: EnqueueInput): number {
 }
 
 /** Headers JSON-API providers (Resend, Postmark…) are asked to send, since they don't take the raw message. */
-const PASS_HEADERS = ['in-reply-to', 'references', 'message-id', 'auto-submitted', 'list-unsubscribe', 'list-unsubscribe-post', 'x-auto-response-suppress', 'x-wren-roundtrip'];
+const PASS_HEADERS = ['in-reply-to', 'references', 'message-id', 'auto-submitted', 'list-unsubscribe', 'list-unsubscribe-post', 'x-auto-response-suppress', 'x-wren-roundtrip', 'x-forwarded-by', 'x-wren-forwarded'];
 
 /** Turn a stored raw message into the structured form adapters use. */
 export async function toOutboundEmail(raw: Buffer, envelope: { from: string; to: string[] }): Promise<OutboundEmail> {
@@ -213,6 +214,8 @@ export function setLocalDeliver(fn: LocalDeliver) {
 }
 
 async function deliver(job: OutboxRow) {
+  // A private message leaves as a notice with its link, made now so the expiry counts from here.
+  if (job.message_id) job.raw_blob = (await preparePrivateLink(job.message_id, job.id)) ?? job.raw_blob;
   const recipients: string[] = JSON.parse(job.recipients);
   const raw = await getBlob(job.raw_blob);
   const settings = getSettings();

@@ -7,11 +7,13 @@ import { authRoutes, setupRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRoutes, mailRoutes } from './routes/mail.js';
 import { apiV1Routes, composeRoutes } from './routes/compose.js';
+import { calendarRoutes } from './routes/calendar.js';
 import { adminRoutes, runtimeInfo } from './routes/admin.js';
 import { adminOpsRoutes } from './routes/admin-ops.js';
 import { meRoutes } from './routes/me.js';
 import { inboundRoutes } from './routes/inbound.js';
 import { avatarRoutes } from './routes/avatars.js';
+import { privateRoutes } from './routes/private.js';
 import { jmapRoutes } from './jmap/routes.js';
 import { pushChanges } from './jmap/push.js';
 
@@ -45,7 +47,8 @@ export function createApp() {
   app.use('*', async (c, next) => {
     await next();
     c.header('X-Content-Type-Options', 'nosniff');
-    c.header('Referrer-Policy', 'same-origin');
+    // Private links ask for no referrer at all.
+    if (!c.res.headers.has('Referrer-Policy')) c.header('Referrer-Policy', 'same-origin');
     c.header('X-Frame-Options', 'SAMEORIGIN');
     if (!c.req.path.startsWith('/api/') && !c.req.path.startsWith('/jmap/')) c.header('Content-Security-Policy', CSP);
   });
@@ -105,17 +108,19 @@ export function createApp() {
   app.route('/api/setup', setupRoutes);
   app.route('/api/auth', authRoutes);
   app.route('/api/inbound', inboundRoutes as any);
+  // Private links: public (GET only, so the CSRF check above doesn't apply), no sign-in.
+  app.route('/api/private', privateRoutes);
 
   // Account routes stay reachable while 2FA setup is pending.
   app.use('/api/account/*', requireUser);
   app.route('/api/account', accountRoutes);
 
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
   app.use('/api/admin/*', requireAdmin);
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar']) {
     app.use(`${prefix}/*`, actAsMailbox);
     app.use(prefix, actAsMailbox);
   }
@@ -124,6 +129,7 @@ export function createApp() {
   app.route('/api/compose', composeRoutes);
   app.route('/api/attachments', attachmentRoutes);
   app.route('/api/labels', labelRoutes);
+  app.route('/api/calendar', calendarRoutes);
   app.route('/api/contacts', contactRoutes);
   app.route('/api/filters', filterRoutes);
   app.route('/api/blocked', blockedRoutes);

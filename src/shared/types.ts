@@ -243,10 +243,27 @@ export interface MessageDetail {
   spoofWarning?: boolean;
   /** Remote pictures in the HTML and their image-proxy signatures ({url: sig}); loaded through /api/img/. */
   images?: Record<string, string>;
+  /** Goes out as a private link that works for `days`; expiresAt is set once it has gone out. */
+  privateLink?: { days: number; expiresAt: number | null } | null;
 }
 
 /** A package on the Packages page: the card, and the conversation it's from. */
 export type PackageItem = Parcel & { threadId: number };
+
+/** An event on the Calendar page: one the person added, or one from an invitation in their mail. */
+export interface CalendarItem {
+  /** The person's own event; null for an invitation. */
+  id: number | null;
+  title: string;
+  /** Start and (exclusive) end in ms; all-day events run from UTC midnight of the first day to UTC midnight after the last. */
+  start: number;
+  end: number;
+  allDay: boolean;
+  location: string;
+  notes: string;
+  /** From an invitation: its newest email, the answer given, and whether it was cancelled. */
+  invite: { messageId: number; threadId: number; answer: 'ACCEPTED' | 'TENTATIVE' | 'DECLINED' | null; cancelled: boolean; recurring: boolean } | null;
+}
 
 /** A sender of newsletters or other list mail, for Manage subscriptions. */
 export interface Subscription {

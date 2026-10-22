@@ -18,9 +18,13 @@ const draftSchema = z.object({
   bcc: addrInput.optional(),
   subject: z.string().max(998).optional(),
   html: z.string().max(5_000_000).optional(),
+  /** A plain-text message (an encrypted or signed one): kept and sent exactly as written, with no HTML part. */
+  text: z.string().max(5_000_000).optional(),
   attachments: z.array(z.number().int().positive()).max(100).optional(),
   replyToId: z.number().int().positive().nullable().optional(),
   forwardOfId: z.number().int().positive().nullable().optional(),
+  // Send as a private link that stops working after a day, a week or a month.
+  privateDays: z.union([z.literal(1), z.literal(7), z.literal(30)]).nullable().optional(),
 });
 
 async function draftResponse(userId: number, id: number) {
@@ -108,7 +112,7 @@ composeRoutes.post('/uploads', async (c) => {
         contentType: file.type || 'application/octet-stream',
         content: Buffer.from(await file.arrayBuffer()),
         inline: key === 'inline',
-        contentId: key === 'inline' ? `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@wren` : null,
+        contentId: key === 'inline' ? `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@inline` : null,
       }),
     );
   }

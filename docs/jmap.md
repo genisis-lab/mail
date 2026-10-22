@@ -38,18 +38,48 @@ app passwords, and app passwords can't be used with the send API.
 | Wren | In a mail app |
 |---|---|
 | Inbox, Archive, Drafts, Sent, Spam, Trash | Mailboxes with the matching roles (`junk` for Spam) |
-| Labels | Mailboxes without a role. An email can be in one folder plus any number of labels. |
+| Snoozed | A Snoozed mailbox (role `snoozed`): snoozed mail shows there instead of Inbox or Archive until it wakes |
+| Labels | Mailboxes without a role. An email can be in one folder (or Snoozed) plus any number of labels. |
+| Shared mailboxes you belong to | More accounts in the app, next to your own |
 | Read, starred, important | The `$seen`, `$flagged` and `$important` keywords |
 | Other keywords (`$answered`, `$forwarded`, your own) | Kept as they are; Wren marks the original `$answered` when you reply |
 | Conversations | Threads |
 | Search | `Email/query` filters: text, from, to, cc, bcc, subject, body, dates, sizes, keywords, attachments |
+| Scheduled send | `EmailSubmission` held with `HOLDUNTIL` or `HOLDFOR` (FUTURERELEASE) |
 | Out-of-office reply | `VacationResponse` |
 | Storage used and allowed | `Quota` (RFC 9425) |
 | Your addresses and signatures | `Identity` (read only; manage them in Wren) |
 
 Apps can read mail, search, flag and move it, manage labels, write drafts with
-attachments, send, and import messages. Changes made anywhere (in the web app, by a
-filter, by another app) reach every app through `/changes` and push.
+attachments, send (now or later), snooze, and import messages. Changes made anywhere
+(in the web app, by a filter, by another app) reach every app through `/changes` and
+push.
+
+**Shared mailboxes.** Each shared mailbox you're a member of is another account in the
+session (`isPersonal: false`), with its own mail, labels, changes and push. Sending from
+it works as in the web app: from the shared mailbox's own addresses, and only if an admin
+lets you send from it (otherwise you can read and write drafts, and sending is refused
+with `forbiddenToSend`); Wren records who sent each message. Shared mailboxes have no
+quota or vacation reply of their own in apps. When an admin removes you, the account
+disappears from the session and every request, download, upload and push for it stops
+right away.
+
+**Scheduled send.** Apps that support FUTURERELEASE (the session's `maxDelayedSend` and
+`submissionExtensions`) can hold a message up to a year ahead with `HOLDUNTIL` or
+`HOLDFOR` on the envelope's `mailFrom`. It goes into Wren's scheduled-send queue, shows in
+the web app's Scheduled folder (and in Sent in apps), and its submission is `pending` until
+it goes out. Cancelling it from the app (`undoStatus: "canceled"`) or the web app turns it
+back into a draft. Sends without a hold go out right away, as before. (The web app has no
+upper limit on how far ahead you schedule; apps need a number, so it's a year.)
+
+**Snooze.** Snoozed mail is in the Snoozed mailbox. Taking it out (moving it to Inbox,
+say) un-snoozes it. Apps that speak Fastmail's snooze extension (the
+`https://cyrusimap.org/ns/jmap/mail` capability, as Cyrus IMAP names it) also see and set
+the Email `snoozed` property, `{ "until": …, "moveToMailboxId": "inbox" }`, together with
+the Snoozed mailbox: setting it snoozes, changing `until` moves the wake-up time, and
+`null` (with the email taken out of Snoozed) wakes it. Snoozed mail always comes back to
+the Inbox, unread, when its time comes, like snooze in the web app, so `moveToMailboxId`
+can only be the Inbox and `setKeywords` isn't supported.
 
 **Push.** Apps can register a push URL (`PushSubscription`); Wren sends a small state
 change there whenever something changes, encrypted for the app (RFC 8291) when it gives
@@ -57,12 +87,8 @@ keys, and only after the app has confirmed the subscription. Subscriptions last 
 days and the app renews them. Apps can also hold an `EventSource` stream open; Wren
 ends each stream after 15 minutes and the app reconnects.
 
-**Not yet:** shared mailboxes (coming in the next version). Snooze, scheduled send and
-inbox tabs are web-only: a snoozed email shows in Archive until it wakes, and mail
-scheduled in the web app shows in Sent with a pending submission, which an app can
-cancel (that turns it back into a draft). Sending from an app is immediate (no delayed
-send or undo). Mailboxes don't nest, and `queryChanges` isn't supported, so apps re-run
-their queries.
+**Not yet:** inbox tabs are web-only. Mailboxes don't nest, and `queryChanges` isn't
+supported, so apps re-run their queries.
 
 ## Limits and safety
 
@@ -94,5 +120,12 @@ The code is in `src/server/jmap/`. Requests reach the Durable Object like `/api/
   the email a new id (the old one is destroyed and a new one created). Raw messages and
   body parts are `R…` and `P…` blobs named the same way; attachments and uploads are
   `A{attachment}`.
+- **Accounts.** An account id is `u{user id}`: the person's own, or a shared mailbox's
+  (`users.kind = 'shared'`). Every method call, download and upload looks up the
+  person's membership again before touching the mailbox; inside a call the mailbox is
+  `ctx.user` and the person `ctx.actor`, like `user` and `actor` in the web app's
+  `actAsMailbox`. The change log is kept per mailbox, so a shared mailbox's changes are
+  the same for all its members.
 - **Push** runs after each request, incoming mail and background work, only when
-  someone is listening.
+  someone is listening. A change to a mailbox goes to its person, or to a shared
+  mailbox's members as they are at that moment.
