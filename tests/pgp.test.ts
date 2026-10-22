@@ -9,6 +9,7 @@ import {
   decryptText,
   encryptFile,
   resealFile,
+  unsealFile,
   encryptText,
   importPrivateKey,
   pgpKind,
@@ -69,6 +70,26 @@ describe('PGP in the browser', () => {
     await expect(resealFile(original, 'plans.txt.pgp', [eve.publicKey], undefined)).rejects.toThrow(/Unlock/);
     const disguised = await resealFile(bytes, 'not-encrypted.pgp', [bob.publicKey], undefined);
     expect((await decryptFile(disguised.data, bob.unlocked)).data).toEqual(bytes);
+  });
+
+  it('restores sender-only draft attachments when encryption is turned off', async () => {
+    const data = new Uint8Array([0, 1, 2, 250, 255]);
+    const encrypted = await encryptFile(data, 'plan.pdf', [ann.publicKey]);
+    // Before the toggle, a recipient without the sender’s key cannot read the upload.
+    await expect(decryptFile(encrypted, bob.unlocked)).rejects.toThrow();
+    expect(await unsealFile(encrypted, 'plan.pdf.pgp', ann.unlocked)).toEqual({ data, filename: 'plan.pdf' });
+    // Only remove the outer draft-encryption layer, including for original .pgp files.
+    const nested = await encryptFile(encrypted, 'original.pgp', [ann.publicKey]);
+    expect(await unsealFile(nested, 'original.pgp.pgp', ann.unlocked)).toEqual({ data: encrypted, filename: 'original.pgp' });
+  });
+
+  it('keeps ordinary attachments unchanged and refuses to unlock with a missing or wrong key', async () => {
+    const data = new TextEncoder().encode('An ordinary attachment');
+    expect((await unsealFile(data, 'ordinary.txt', undefined)).data).toBe(data);
+    expect(await unsealFile(data, 'ordinary.pgp', undefined)).toEqual({ data, filename: 'ordinary.pgp' });
+    const encrypted = await encryptFile(data, 'ordinary.txt', [ann.publicKey]);
+    await expect(unsealFile(encrypted, 'ordinary.txt.pgp', undefined)).rejects.toThrow(/Unlock/);
+    await expect(unsealFile(encrypted, 'ordinary.txt.pgp', bob.unlocked)).rejects.toThrow();
   });
 
   it('checks cleartext signatures and spots a changed message', async () => {

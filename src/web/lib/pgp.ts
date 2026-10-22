@@ -134,18 +134,23 @@ export async function encryptText(text: string, keys: string[], signingKey?: Pri
   return encrypt({ message: await createMessage({ text }), encryptionKeys: await readKeys(keys), signingKeys: signingKey, wildcard: true });
 }
 
-/** Re-encrypt a saved/undone attachment for the current recipients; a filename alone is never proof of encryption. */
-export async function resealFile(data: Uint8Array, filename: string, keys: string[], ownKey: PrivateKey | undefined, signingKey?: PrivateKey): Promise<{ data: Uint8Array; filename: string }> {
+/** Restore an encrypted draft attachment; ordinary files (even ones named .pgp) stay unchanged. */
+export async function unsealFile(data: Uint8Array, filename: string, ownKey: PrivateKey | undefined): Promise<{ data: Uint8Array; filename: string }> {
   if (/\.pgp$/i.test(filename)) {
     const message = await readAnyMessage(data).catch(() => null);
     if (message) {
       if (!ownKey) throw new Error('Unlock your PGP key to update the encrypted attachments');
       const opened = await decryptFile(data, ownKey);
-      data = opened.data;
-      filename = opened.filename || filename.replace(/\.pgp$/i, '');
+      return { data: opened.data, filename: opened.filename || filename.replace(/\.pgp$/i, '') };
     }
   }
-  return { data: await encryptFile(data, filename, keys, signingKey), filename: `${filename}.pgp` };
+  return { data, filename };
+}
+
+/** Re-encrypt a saved/undone attachment for the current recipients; a filename alone is never proof of encryption. */
+export async function resealFile(data: Uint8Array, filename: string, keys: string[], ownKey: PrivateKey | undefined, signingKey?: PrivateKey): Promise<{ data: Uint8Array; filename: string }> {
+  const opened = await unsealFile(data, filename, ownKey);
+  return { data: await encryptFile(opened.data, opened.filename, keys, signingKey), filename: `${opened.filename}.pgp` };
 }
 
 /** An attachment as a binary .pgp file; the original name travels inside it. */

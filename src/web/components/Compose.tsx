@@ -12,7 +12,7 @@ import { fileSize } from '../lib/format';
 import { sanitizeEditorHtml } from '../lib/sanitize';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
-import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, resealFile, signText, storedKey, usableKeys } from '../lib/pgp';
+import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, resealFile, signText, storedKey, unsealFile, usableKeys } from '../lib/pgp';
 import { bytesOf, lookupKeys, useKeyLookup, useUnlock } from './Pgp';
 import { RecipientInput } from './RecipientInput';
 import { RichEditor, type RichEditorHandle } from './RichEditor';
@@ -298,6 +298,7 @@ export function ComposeForm({
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const closed = useRef(false);
+  const changingEncryption = useRef(false);
 
   // PGP. With Encrypt on, the body reaches the server only as ciphertext (drafts: readable by you alone),
   // attachments are encrypted for your key before upload, then re-encrypted for recipients on Send.
@@ -378,7 +379,7 @@ export function ComposeForm({
   useEffect(() => {
     if (!dirty.current) return;
     const t = setTimeout(() => {
-      if (dirty.current && !closed.current) void save();
+      if (dirty.current && !closed.current && !changingEncryption.current) void save();
     }, 1500);
     return () => clearTimeout(t);
   });
@@ -387,6 +388,7 @@ export function ComposeForm({
 
   const upload = (files: File[], inline = false) => uploadNow(files, inline, encrypt);
   const uploadNow = async (files: File[], inline = false, encrypted = false) => {
+    if (changingEncryption.current) return toast('Wait for attachment encryption to finish changing');
     if (!files.length) return;
     setUploading((n) => n + files.length);
     try {
@@ -437,7 +439,7 @@ export function ComposeForm({
       const said = mentionsAttachment(subject, ownText(editor.current?.getHtml() ?? html.current));
       if (said && !window.confirm(`Did you mean to attach files?\n\nYou wrote “${said}”, but there are no files attached. Send anyway?`)) return;
     }
-    if (uploading) {
+    if (uploading || changingEncryption.current) {
       toast('Wait for attachments to finish uploading');
       return;
     }
@@ -546,11 +548,43 @@ export function ComposeForm({
     return { ...p, html: undefined, text: await encryptText(text, keys, signer), attachments: uploaded.map((a) => a.id) };
   };
 
-  const toggleEncrypt = () => {
+  const toggleEncrypt = async () => {
+    if (uploading || sending || changingEncryption.current) return toast('Wait for the current attachment or send operation to finish');
+    if (saving.current) return toast('Wait for the draft to finish saving');
     if (encrypt) {
       if (locked) return toast('Decrypt this draft first');
       if (init.encrypt && !window.confirm('Turn off encryption? This message, including the text it quotes, will be saved and sent unencrypted.')) return;
-      setEncrypt(false);
+      const encryptedFiles = attachments.filter((a) => /\.pgp$/i.test(a.filename));
+      if (encryptedFiles.length) {
+        changingEncryption.current = true;
+        setUploading((n) => n + 1);
+        try {
+          const key = await unlock();
+          if (!key) return;
+          // Finish every decryption before uploading any plaintext. Do not switch modes on failure.
+          const files = await Promise.all(encryptedFiles.map(async (a) => {
+            const data = await bytesOf(`/api/attachments/${a.id}`, mailboxId);
+            return { attachment: a, data, opened: await unsealFile(data, a.filename, key) };
+          }));
+          const changed = files.filter((f) => f.opened.data !== f.data);
+          if (changed.length) {
+            const form = new FormData();
+            for (const { opened } of changed) form.append('file', new Blob([opened.data as BlobPart], { type: 'application/octet-stream' }), opened.filename);
+            const r = await api.post<{ attachments: AttachmentInfo[] }>('/api/compose/uploads', form);
+            if (r.attachments.length !== changed.length) throw new Error('Couldn’t restore all attachments. Encryption is still on.');
+            if (saving.current) await saving.current;
+            const replacements = new Map(changed.map((f, i) => [f.attachment.id, r.attachments[i]]));
+            setAttachments((list) => list.map((a) => replacements.get(a.id) ?? a));
+          }
+          setEncrypt(false);
+        } catch (err) {
+          toast({ message: (err as Error).message, tone: 'error' });
+          return;
+        } finally {
+          changingEncryption.current = false;
+          setUploading((n) => n - 1);
+        }
+      } else setEncrypt(false);
     } else {
       if (!hasKey) {
         toast({ message: 'To send encrypted mail, set up your PGP key first', action: { label: 'Settings', onClick: () => navigate('/settings/encryption') } });
