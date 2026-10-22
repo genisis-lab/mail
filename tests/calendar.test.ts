@@ -296,6 +296,22 @@ describe('the Calendar page', () => {
     expect(named(await events(NOVEMBER), 'Standup')).toEqual([]);
   });
 
+  it('keeps organizers separate and applies cancellations without a repeated date', async () => {
+    h.as('admin');
+    const base = invite('shared-uid', ['SEQUENCE:0', 'DTSTART:20261025T120000Z', 'DTEND:20261025T130000Z', 'SUMMARY:Original meeting', me('ACCEPTED')]);
+    await deliver(base, 'Organizer one');
+    await deliver(base.replaceAll('maya@northwind.example', 'other@example.org').replace('Original meeting', 'Other meeting'), 'Organizer two');
+    expect(named(await events(), 'Original meeting')).toHaveLength(1);
+    expect(named(await events(), 'Other meeting')).toHaveLength(1);
+    await deliver(invite('shared-uid', ['SEQUENCE:1'], 'CANCEL'), 'Cancelled without dates', 'CANCEL');
+    const cancelled = named(await events(), 'Original meeting')[0];
+    expect(cancelled).toMatchObject({ start: Date.UTC(2026, 9, 25, 12), end: Date.UTC(2026, 9, 25, 13), invite: { cancelled: true, answer: 'ACCEPTED' } });
+    expect(named(await events(), 'Other meeting')[0].invite?.cancelled).toBe(false);
+    await deliver(invite('late-uid', ['SEQUENCE:2'], 'CANCEL'), 'Cancellation arrives first', 'CANCEL');
+    await deliver(base.replace('shared-uid', 'late-uid').replace('Original meeting', 'Delayed original'), 'Original arrives later');
+    expect(named(await events(), 'Delayed original')[0]).toMatchObject({ start: Date.UTC(2026, 9, 25, 12), invite: { cancelled: true, answer: 'ACCEPTED' } });
+  });
+
   it('keeps each mailbox’s calendar to itself', async () => {
     h.as('admin');
     await h.call('POST', '/api/admin/users', { email: 'sam@wren.test', name: 'Sam Lee', password: PW });

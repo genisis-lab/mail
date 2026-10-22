@@ -237,7 +237,7 @@ jmapRoutes.get('/jmap/download/:accountId/:blobId/:name', async (c) => {
       'Content-Security-Policy': "default-src 'none'; sandbox",
       'X-Content-Type-Options': 'nosniff',
       // A blob id always names the same bytes.
-      'Cache-Control': 'private, max-age=31536000, immutable',
+      'Cache-Control': box.id === c.get('user').id ? 'private, max-age=31536000, immutable' : 'no-store',
     },
   });
 });

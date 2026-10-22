@@ -48,6 +48,11 @@ function startServer(opts: { secure?: boolean; tls?: { key: string; cert: string
       });
     },
   });
+  // Rejected credentials/recipients and certificate checks deliberately abort connections.
+  // macOS may report that expected disconnect as a reset on the test server.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code !== 'ECONNRESET') throw err;
+  });
   return new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({ port: (server.server.address() as AddressInfo).port, close: () => new Promise((r) => server.close(() => r())) });

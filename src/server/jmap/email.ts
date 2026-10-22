@@ -656,6 +656,7 @@ function updateEmail(ctx: JmapContext, row: any, labels: LabelRef[], patch: Reco
         // Taking an email out of its folder (into labels only) archives it, like Gmail's "remove from Inbox".
         moveTo(row, where.folder ?? (row.folder === 'drafts' ? 'drafts' : 'archive'));
       } else {
+        if (row.status === 'queued') throw new SetError('invalidProperties', 'Cancel the scheduled send before snoozing it', { properties: ['snoozed'] });
         // Snoozed mail waits in Inbox or Archive and wakes into the Inbox (wakeSnoozed), as from the web app.
         if (row.folder !== 'inbox' && row.folder !== 'archive') moveTo(row, 'archive');
         run('UPDATE messages SET snoozed_until = ? WHERE id = ?', [until, row.id]);

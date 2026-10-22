@@ -8,6 +8,7 @@ import {
   decryptMime,
   decryptText,
   encryptFile,
+  resealFile,
   encryptText,
   importPrivateKey,
   pgpKind,
@@ -18,6 +19,7 @@ import {
   usableKeys,
   verifyCleartext,
   verifyDetached,
+  verifySignedMime,
 } from '../src/web/lib/pgp';
 
 const att = (contentType: string, filename = 'x') => ({ id: 1, filename, contentType, size: 1, contentId: null, inline: false });
@@ -39,6 +41,7 @@ beforeAll(async () => {
 describe('PGP in the browser', () => {
   it('encrypts to several keys, decrypts, and checks the signature inside', async () => {
     const armored = await encryptText('Meet at 6\n\nBring the map', [bob.publicKey, ann.publicKey], ann.unlocked);
+    expect((await openpgp.readMessage({ armoredMessage: armored })).getEncryptionKeyIDs().every((id) => id.toHex() === '0000000000000000')).toBe(true);
     const m = { text: `Hi\n${armored}\n-- \nsent from Wren`, html: null, attachments: [] };
     expect(pgpKind(m)).toBe('encrypted');
     expect(armoredIn(m)).toBe(armored.trim());
@@ -54,6 +57,18 @@ describe('PGP in the browser', () => {
     const data = new Uint8Array([1, 2, 3, 250]);
     const sealed = await encryptFile(data, 'plan.pdf', [bob.publicKey]);
     expect(await decryptFile(sealed, bob.unlocked)).toEqual({ data, filename: 'plan.pdf' });
+  });
+
+  it('re-encrypts saved attachments for changed recipients and never trusts a .pgp filename', async () => {
+    const bytes = new TextEncoder().encode('Confidential attachment');
+    const original = await encryptFile(bytes, 'plans.txt', [ann.publicKey, bob.publicKey]);
+    const updated = await resealFile(original, 'plans.txt.pgp', [ann.publicKey, eve.publicKey], ann.unlocked);
+    expect(updated.filename).toBe('plans.txt.pgp');
+    expect((await decryptFile(updated.data, eve.unlocked)).data).toEqual(bytes);
+    await expect(decryptFile(updated.data, bob.unlocked)).rejects.toThrow();
+    await expect(resealFile(original, 'plans.txt.pgp', [eve.publicKey], undefined)).rejects.toThrow(/Unlock/);
+    const disguised = await resealFile(bytes, 'not-encrypted.pgp', [bob.publicKey], undefined);
+    expect((await decryptFile(disguised.data, bob.unlocked)).data).toEqual(bytes);
   });
 
   it('checks cleartext signatures and spots a changed message', async () => {
@@ -79,6 +94,16 @@ describe('PGP in the browser', () => {
     const signed = signedPart(new TextEncoder().encode(raw.replace(/\r\n/g, '\n')))!;
     expect(new TextDecoder().decode(signed)).toBe(part);
     expect(await verifyDetached(signed, sig, [ann.publicKey])).toBe('valid');
+    const wrapped = `Content-Type: multipart/mixed; boundary="outer"\r\n\r\n--outer\r\nContent-Type: text/html\r\n\r\n<p>Pay the attacker instead</p>\r\n--outer\r\n${raw}\r\n--outer--\r\n`;
+    const verified = await verifySignedMime(new TextEncoder().encode(wrapped), sig, [ann.publicKey]);
+    expect(verified.signature).toBe('valid');
+    expect(verified.text).toContain('Hello there');
+    expect(JSON.stringify(verified)).not.toContain('attacker');
+    const wrappedEncrypted = await encryptText(wrapped, [bob.publicKey]);
+    const opened = await decryptMime(new TextEncoder().encode(wrappedEncrypted), bob.unlocked, [ann.publicKey]);
+    expect(opened.signature).toBe('valid');
+    expect(opened.text).toContain('Hello there');
+    expect(JSON.stringify(opened)).not.toContain('attacker');
     expect(await verifyDetached(signedPart(new TextEncoder().encode(raw.replace('Hello', 'Jello')))!, sig, [ann.publicKey])).toBe('bad');
     expect(pgpKind({ text: 'Hello there', html: null, attachments: [att('application/pgp-signature', 'signature.asc')] })).toBe('signed-mime');
   });

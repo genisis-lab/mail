@@ -136,8 +136,8 @@ interface InviteFacts {
   key: string;
   summary: string;
   location: string;
-  start: number;
-  end: number;
+  start: number | null;
+  end: number | null;
   allDay: boolean;
   cancelled: boolean;
   sequence: number;
@@ -156,17 +156,17 @@ const READ_BATCH = 100;
 async function inviteColumn(userId: number, messageId: number): Promise<string> {
   const loaded = await loadEvent(userId, messageId).catch((err) => {
     log.warn(`Couldn't read the invitation in message ${messageId}`, err);
-    return null;
+    throw err; // A transient blob failure must not permanently cache 'no invitation'.
   });
   const ev = loaded?.ev;
-  if (!loaded || !ev || ev.start === null || loaded.msg.direction !== 'in' || !ON_CALENDAR.has(ev.method)) return '';
+  if (!loaded || !ev || (ev.start === null && ev.method !== 'CANCEL') || loaded.msg.direction !== 'in' || !ON_CALENDAR.has(ev.method)) return '';
   const occurrence = ev.props.find((p) => p.name === 'RECURRENCE-ID')?.value.trim();
   const facts: InviteFacts = {
-    key: `${ev.uid || `message:${messageId}`}${occurrence ? `|${occurrence}` : ''}`,
+    key: JSON.stringify([ev.uid || `message:${messageId}`, ev.organizer?.email ?? loaded.msg.from_addr.toLowerCase(), occurrence ?? '']),
     summary: ev.summary.slice(0, 300),
     location: ev.location.slice(0, 300),
     start: ev.start,
-    end: Math.max(ev.end ?? ev.start, ev.start),
+    end: ev.start === null ? null : Math.max(ev.end ?? ev.start, ev.start),
     allDay: ev.allDay,
     cancelled: ev.method === 'CANCEL' || ev.status === 'CANCELLED',
     sequence: ev.sequence,
@@ -234,15 +234,34 @@ export async function calendarEvents(userId: number, from: number, to: number): 
       continue;
     }
     const seen = latest.get(facts.key);
-    const answer = row.rsvp ?? seen?.answer ?? null;
+    const answer = row.rsvp ?? seen?.answer ?? (facts.cancelled ? seen?.facts.me : null) ?? null;
     // A later email updates the event, unless it's an older version of it.
-    if (!seen || facts.sequence >= seen.facts.sequence) latest.set(facts.key, { row, facts, answer });
-    else seen.answer = answer;
+    if (!seen || facts.sequence >= seen.facts.sequence) {
+      // A cancellation may identify an event without repeating its date or title.
+      if (facts.cancelled && seen && facts.start === null) {
+        facts = {
+          ...seen.facts, ...facts, start: seen.facts.start, end: seen.facts.end,
+          allDay: seen.facts.allDay, summary: facts.summary || seen.facts.summary,
+          location: facts.location || seen.facts.location, recurring: seen.facts.recurring,
+        };
+      }
+      latest.set(facts.key, { row, facts, answer });
+    } else {
+      seen.answer = answer;
+      // A delayed older invitation can supply dates omitted by a cancellation already received.
+      if (seen.facts.cancelled && seen.facts.start === null && facts.start !== null) {
+        seen.facts = {
+          ...facts, ...seen.facts, start: facts.start, end: facts.end, allDay: facts.allDay,
+          summary: seen.facts.summary || facts.summary, location: seen.facts.location || facts.location,
+          me: seen.facts.me ?? facts.me,
+        };
+      }
+    }
   }
   const invites: CalendarItem[] = [];
   for (const { row, facts: f, answer } of latest.values()) {
     // shortcut: a repeating invitation shows its first occurrence only; expand its RRULE here if people need the rest.
-    if (!overlaps(f.start, f.end, from, to)) continue;
+    if (f.start === null || f.end === null || !overlaps(f.start, f.end, from, to)) continue;
     const given = answer ?? f.me;
     invites.push({
       id: null,

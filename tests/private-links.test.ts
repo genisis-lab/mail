@@ -156,7 +156,9 @@ describe('private links', () => {
     h.as('admin@wren.test');
     const own = await h.call('GET', `/api/mail/messages/${id}/private`);
     expect(own.body.html).toContain('S3CRET-4242');
-    expect(await (await h.request(`/api/mail/messages/${id}/private/attachments/${fileId}`)).text()).toBe('offer-file-4242');
+    const ownFile = await h.request(`/api/mail/messages/${id}/private/attachments/${fileId}`);
+    expect(ownFile.headers.get('Cache-Control')).toBe('no-store');
+    expect(await ownFile.text()).toBe('offer-file-4242');
     expect((await h.call('DELETE', `/api/mail/messages/${id}/private`)).status).toBe(200);
     expect(link(id)).toBeUndefined();
     expect((await h.call('GET', `/api/mail/messages/${id}`)).body.privateLink).toBeNull();

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { Download, KeyRound, Lock, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
 import type { PrivateKey } from 'openpgp';
 import type { MessageDetail } from '../../shared/types';
-import { api, linkUrl } from '../lib/api';
+import { api, getApiMailbox, linkUrl } from '../lib/api';
 import { fileSize } from '../lib/format';
 import {
   armoredIn,
@@ -13,11 +13,10 @@ import {
   decryptText,
   pgpKind,
   publicKeyFrom,
-  signedPart,
   unlockKey,
   unlockedKey,
   verifyCleartext,
-  verifyDetached,
+  verifySignedMime,
   type DecryptedFile,
   type SignatureStatus,
 } from '../lib/pgp';
@@ -46,8 +45,8 @@ export function lookupKeys(qc: QueryClient, addresses: string[]): Promise<KnownK
 }
 
 /** A file the browser downloads itself (an attachment, the raw message). */
-export async function bytesOf(url: string): Promise<Uint8Array> {
-  const res = await fetch(linkUrl(url), { credentials: 'same-origin' });
+export async function bytesOf(url: string, mailbox = getApiMailbox()): Promise<Uint8Array> {
+  const res = await fetch(linkUrl(url, mailbox), { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`Couldn’t download it (${res.status})`);
   return new Uint8Array(await res.arrayBuffer());
 }
@@ -169,7 +168,7 @@ export function PgpMessage({ m, children }: { m: MessageDetail; children: (body:
   const kind = pgpKind(m);
   const encrypted = kind === 'encrypted' || kind === 'encrypted-mime';
   const [result, setResult] = useState<Opened | null>(() => opened.get(m.id) ?? null);
-  const [signed, setSigned] = useState<{ text: string | null; signature: SignatureStatus | 'error' } | null>(null);
+  const [signed, setSigned] = useState<{ text: string | null; html?: string | null; signature: SignatureStatus | 'error' } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -223,9 +222,7 @@ export function PgpMessage({ m, children }: { m: MessageDetail; children: (body:
       if (kind === 'signed') return verifyCleartext(armoredIn(m, true)!, senderKeys);
       const sig = m.attachments.find((a) => a.contentType === 'application/pgp-signature')!;
       const [raw, signature] = await Promise.all([bytesOf(`/api/mail/messages/${m.id}/raw`), bytesOf(`/api/attachments/${sig.id}`)]);
-      const part = signedPart(raw);
-      if (!part) throw new Error('No signed part');
-      return { text: null, signature: await verifyDetached(part, new TextDecoder().decode(signature), senderKeys) };
+      return verifySignedMime(raw, new TextDecoder().decode(signature), senderKeys);
     })().then(
       (r) => live && setSigned(r),
       () => live && setSigned({ text: null, signature: 'error' }),
@@ -260,7 +257,7 @@ export function PgpMessage({ m, children }: { m: MessageDetail; children: (body:
       )}
       {signature === 'valid' && (
         <p className="mb-3 flex items-center gap-1.5 text-[13px] text-ok">
-          <ShieldCheck className="size-4 shrink-0" aria-hidden /> Signed by {sender}
+          <ShieldCheck className="size-4 shrink-0" aria-hidden /> Message body signed by {sender}
         </p>
       )}
       {signature === 'bad' && (
@@ -310,7 +307,7 @@ export function PgpMessage({ m, children }: { m: MessageDetail; children: (body:
         ? children({ html: result.html, text: result.text, decrypted: true })
         : encrypted
           ? null
-          : children({ ...(signed?.text != null ? { html: null, text: signed.text } : { html: m.html, text: m.text }), decrypted: false })}
+          : children({ ...(signed && signed.signature !== 'error' ? { html: signed.html ?? null, text: signed.text } : { html: m.html, text: m.text }), decrypted: false })}
       {result && result.files.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-2">
           {result.files.map((f, i) => (

@@ -12,7 +12,7 @@ import { fileSize } from '../lib/format';
 import { sanitizeEditorHtml } from '../lib/sanitize';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
-import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, signText, storedKey, usableKeys } from '../lib/pgp';
+import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, resealFile, signText, storedKey, usableKeys } from '../lib/pgp';
 import { bytesOf, lookupKeys, useKeyLookup, useUnlock } from './Pgp';
 import { RecipientInput } from './RecipientInput';
 import { RichEditor, type RichEditorHandle } from './RichEditor';
@@ -300,12 +300,11 @@ export function ComposeForm({
   const closed = useRef(false);
 
   // PGP. With Encrypt on, the body reaches the server only as ciphertext (drafts: readable by you alone),
-  // and files attached meanwhile stay on this device until Send encrypts them.
+  // attachments are encrypted for your key before upload, then re-encrypted for recipients on Send.
   const hasKey = !!storedKey(user.id);
-  const [encrypt, setEncrypt] = useState(!!init.encryptedBody || (!!init.encrypt && hasKey));
-  const [sign, setSign] = useState(!!init.sign && hasKey);
+  const [encrypt, setEncrypt] = useState(!!init.encryptedBody || !!init.encrypt);
+  const [sign, setSign] = useState(!!init.sign);
   const [locked, setLocked] = useState<string | null>(init.encryptedBody ?? null);
-  const [localFiles, setLocalFiles] = useState<File[]>([]);
   const { unlock, dialog } = useUnlock();
   const recipients = useMemo(() => [...new Set([...to, ...cc, ...bcc].map((a) => a.address.toLowerCase()))], [to, cc, bcc]);
   const known = useKeyLookup(recipients, hasKey);
@@ -386,16 +385,23 @@ export function ComposeForm({
 
   useEffect(() => onSubjectChange?.(subject), [subject, onSubjectChange]);
 
-  const upload = (files: File[], inline = false) => (encrypt ? setLocalFiles((list) => [...list, ...files]) : uploadNow(files, inline));
-  const uploadNow = async (files: File[], inline = false) => {
+  const upload = (files: File[], inline = false) => uploadNow(files, inline, encrypt);
+  const uploadNow = async (files: File[], inline = false, encrypted = false) => {
     if (!files.length) return;
     setUploading((n) => n + files.length);
     try {
       const fd = new FormData();
-      for (const f of files) fd.append(inline ? 'inline' : 'file', f);
+      for (const f of files) {
+        if (encrypted) {
+          const own = storedKey(user.id);
+          if (!own) throw new Error('Set up your PGP key before attaching files to encrypted mail');
+          const data = await encryptFile(new Uint8Array(await f.arrayBuffer()), f.name, [await publicKeyOf(own)]);
+          fd.append('file', new Blob([data as BlobPart], { type: 'application/octet-stream' }), `${f.name}.pgp`);
+        } else fd.append(inline ? 'inline' : 'file', f);
+      }
       const r = await api.post<{ attachments: AttachmentInfo[] }>('/api/compose/uploads', fd);
       setAttachments((a) => [...a, ...r.attachments]);
-      if (inline) {
+      if (inline && !encrypted) {
         for (const a of r.attachments) editor.current?.insertHtml(`<img src="/api/attachments/${a.id}?inline=1" alt="${escapeHtml(a.filename)}" style="max-width:100%">`);
       }
       markDirty();
@@ -427,7 +433,7 @@ export function ComposeForm({
       toast('Decrypt this draft before sending it');
       return;
     }
-    if (!attachments.length && !localFiles.length && !uploading) {
+    if (!attachments.length && !uploading) {
       const said = mentionsAttachment(subject, ownText(editor.current?.getHtml() ?? html.current));
       if (said && !window.confirm(`Did you mean to attach files?\n\nYou wrote “${said}”, but there are no files attached. Send anyway?`)) return;
     }
@@ -522,20 +528,22 @@ export function ComposeForm({
       if (!usable.length) throw new Error(`The PGP key for ${a} has expired or was revoked. Ask them for a new one, or turn off encryption.`);
       keys.push(...usable);
     }
-    // Each file goes as name.pgp. One that already is (a send that was undone) stays as it is.
-    // shortcut: such a file isn't re-encrypted for recipients added since; attach it again if that matters.
-    const done = attachments.filter((a) => /\.pgp$/i.test(a.filename));
+    // Saved drafts and undone sends may target a different set of recipients now.
+    const ownKey = attachments.some((a) => /\.pgp$/i.test(a.filename)) ? await unlock() : undefined;
+    if (ownKey === null) return null;
     const files = await Promise.all([
-      ...localFiles.map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })),
-      ...attachments.filter((a) => !done.includes(a)).map(async (a) => ({ name: a.filename, data: await bytesOf(`/api/attachments/${a.id}`) })),
+      ...attachments.map(async (a) => ({ name: a.filename, data: await bytesOf(`/api/attachments/${a.id}`, mailboxId) })),
     ]);
     let uploaded: AttachmentInfo[] = [];
     if (files.length) {
       const form = new FormData();
-      for (const f of files) form.append('file', new Blob([(await encryptFile(f.data, f.name, keys, signer)) as BlobPart], { type: 'application/octet-stream' }), `${f.name}.pgp`);
+      for (const f of files) {
+        const sealed = await resealFile(f.data, f.name, keys, ownKey, signer);
+        form.append('file', new Blob([sealed.data as BlobPart], { type: 'application/octet-stream' }), sealed.filename);
+      }
       uploaded = (await api.post<{ attachments: AttachmentInfo[] }>('/api/compose/uploads', form)).attachments;
     }
-    return { ...p, html: undefined, text: await encryptText(text, keys, signer), attachments: [...done, ...uploaded].map((a) => a.id) };
+    return { ...p, html: undefined, text: await encryptText(text, keys, signer), attachments: uploaded.map((a) => a.id) };
   };
 
   const toggleEncrypt = () => {
@@ -543,9 +551,6 @@ export function ComposeForm({
       if (locked) return toast('Decrypt this draft first');
       if (init.encrypt && !window.confirm('Turn off encryption? This message, including the text it quotes, will be saved and sent unencrypted.')) return;
       setEncrypt(false);
-      // Files kept on this device go up as they are now.
-      void uploadNow(localFiles);
-      setLocalFiles([]);
     } else {
       if (!hasKey) {
         toast({ message: 'To send encrypted mail, set up your PGP key first', action: { label: 'Settings', onClick: () => navigate('/settings/encryption') } });
@@ -754,7 +759,7 @@ export function ComposeForm({
             </span>
           </p>
         )}
-        {(attachments.filter((a) => !a.inline).length > 0 || localFiles.length > 0 || uploading > 0) && (
+        {(attachments.filter((a) => !a.inline).length > 0 || uploading > 0) && (
           <div className="flex flex-wrap gap-2 py-2">
             {attachments
               .filter((a) => !a.inline)
@@ -776,21 +781,6 @@ export function ComposeForm({
                   </button>
                 </span>
               ))}
-            {localFiles.map((f, i) => (
-              <span key={`local-${i}`} className="inline-flex max-w-60 items-center gap-2 rounded-lg border border-line bg-panel2 py-1 pr-1 pl-2.5 text-[13px]" title="Encrypted on this device when you send">
-                <Lock className="size-3.5 shrink-0 text-muted" aria-hidden />
-                <span className="truncate font-medium">{f.name}</span>
-                <span className="shrink-0 text-xs text-muted">{fileSize(f.size)}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${f.name}`}
-                  className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
-                  onClick={() => setLocalFiles((list) => list.filter((x) => x !== f))}
-                >
-                  <X className="size-3.5" />
-                </button>
-              </span>
-            ))}
             {uploading > 0 && (
               <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-line-strong px-2.5 py-1 text-[13px] text-muted">
                 <Loader2 className="size-3.5 animate-spin" /> Uploading {uploading}…

@@ -759,6 +759,9 @@ export const migrations: string[] = [
   );
   CREATE UNIQUE INDEX idx_pgp_keys_own ON pgp_keys(user_id) WHERE own = 1;
   `,
+
+  // 20: Re-read cached invitations with organizer-scoped identities and date-less cancellations.
+  `UPDATE messages SET invite = NULL WHERE invite IS NOT NULL;`,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

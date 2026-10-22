@@ -25,7 +25,7 @@ interface PrivateMessage {
 export function PrivateMessagePage({ instance }: { instance: Instance }) {
   const { token = '' } = useParams();
   const base = `/api/private/${encodeURIComponent(token)}`;
-  const q = useQuery({ queryKey: ['private', token], queryFn: () => api.get<PrivateMessage>(base) });
+  const q = useQuery({ queryKey: ['private', token], queryFn: () => api.get<PrivateMessage>(base), gcTime: 0, retry: false, refetchOnMount: 'always', refetchInterval: 30_000 });
   const [blocked, setBlocked] = useState(0);
   const pictureUrl = useCallback((id: number) => `${base}/attachments/${id}?inline=1`, [base]);
 
@@ -44,7 +44,14 @@ export function PrivateMessagePage({ instance }: { instance: Instance }) {
     return () => metas.forEach((m) => m.remove());
   }, []);
 
-  const m = q.data;
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => {
+    if (!q.data || q.data.expiresAt <= Date.now()) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.min(Math.max(0, q.data.expiresAt - Date.now()) + 1, 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [q.data, clock]);
+  const expired = !!q.data && q.data.expiresAt <= Math.max(clock, Date.now());
+  const m = q.isError || expired ? undefined : q.data;
   const files = m?.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`)) ?? [];
 
   return (
@@ -59,7 +66,7 @@ export function PrivateMessagePage({ instance }: { instance: Instance }) {
               <Spinner className="size-6" />
             </div>
           ) : !m ? (
-            q.error instanceof ApiError && q.error.status === 404 ? (
+            expired || (q.error instanceof ApiError && q.error.status === 404) ? (
               <>
                 <h1 className="text-xl font-semibold">This message has expired or was withdrawn</h1>
                 <p className="mt-2 text-sm text-muted">If you still need it, ask the person who sent it to share it again.</p>

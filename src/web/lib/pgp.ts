@@ -128,15 +128,30 @@ export async function usableKeys(armored: string[]): Promise<string[]> {
 
 // ── Encrypting and signing ──────────────────────────────────────────────────
 
+/** Hide recipient key IDs as well as addresses, including those of Bcc recipients. */
 export async function encryptText(text: string, keys: string[], signingKey?: PrivateKey): Promise<string> {
   const { createMessage, encrypt } = await openpgp();
-  return encrypt({ message: await createMessage({ text }), encryptionKeys: await readKeys(keys), signingKeys: signingKey });
+  return encrypt({ message: await createMessage({ text }), encryptionKeys: await readKeys(keys), signingKeys: signingKey, wildcard: true });
+}
+
+/** Re-encrypt a saved/undone attachment for the current recipients; a filename alone is never proof of encryption. */
+export async function resealFile(data: Uint8Array, filename: string, keys: string[], ownKey: PrivateKey | undefined, signingKey?: PrivateKey): Promise<{ data: Uint8Array; filename: string }> {
+  if (/\.pgp$/i.test(filename)) {
+    const message = await readAnyMessage(data).catch(() => null);
+    if (message) {
+      if (!ownKey) throw new Error('Unlock your PGP key to update the encrypted attachments');
+      const opened = await decryptFile(data, ownKey);
+      data = opened.data;
+      filename = opened.filename || filename.replace(/\.pgp$/i, '');
+    }
+  }
+  return { data: await encryptFile(data, filename, keys, signingKey), filename: `${filename}.pgp` };
 }
 
 /** An attachment as a binary .pgp file; the original name travels inside it. */
 export async function encryptFile(data: Uint8Array, filename: string, keys: string[], signingKey?: PrivateKey): Promise<Uint8Array> {
   const { createMessage, encrypt } = await openpgp();
-  return encrypt({ message: await createMessage({ binary: data, filename }), encryptionKeys: await readKeys(keys), signingKeys: signingKey, format: 'binary' });
+  return encrypt({ message: await createMessage({ binary: data, filename }), encryptionKeys: await readKeys(keys), signingKeys: signingKey, wildcard: true, format: 'binary' });
 }
 
 /** Cleartext-signed text: readable anywhere, checkable with your public key. */
@@ -180,13 +195,12 @@ const decodeEntities = (s: string) => s.replace(/&nbsp;/g, ' ').replace(/&lt;/g,
 
 /** Which of the sender's keys made the signature, and whether it checks out. */
 async function signatureStatus(signatures: VerifyMessageResult['signatures'], keys: Key[]): Promise<SignatureStatus | null> {
+  // Verification promises for unknown and additional signers can reject too.
+  const checked = await Promise.all(signatures.map((s) => s.verified.then(() => true, () => false)));
   if (!signatures.length) return null;
   const known = signatures.find((s) => keys.some((k) => k.getKeys(s.keyID).length));
   if (!known) return 'unknown';
-  return known.verified.then(
-    () => 'valid' as const,
-    () => 'bad' as const,
-  );
+  return checked[signatures.indexOf(known)] ? 'valid' : 'bad';
 }
 
 async function readAnyMessage(data: string | Uint8Array) {
@@ -230,12 +244,15 @@ export async function decryptMime(data: Uint8Array, key: PrivateKey, senderKeys:
   const verificationKeys = await readKeys(senderKeys);
   const r = await decrypt({ message: await readAnyMessage(data), decryptionKeys: key, verificationKeys, format: 'binary' });
   const { default: PostalMime } = await import('postal-mime');
-  const email = await PostalMime.parse(r.data, { attachmentEncoding: 'arraybuffer' });
+  let email = await PostalMime.parse(r.data, { attachmentEncoding: 'arraybuffer' });
   // Signed, then encrypted as a second layer: what's inside is itself multipart/signed.
   const sig = email.attachments.find((a) => a.mimeType === 'application/pgp-signature');
   let signature = await signatureStatus(r.signatures, verificationKeys);
   const signed = sig && !signature ? signedPart(r.data) : null;
-  if (sig && signed) signature = await verifyDetached(signed, new TextDecoder().decode(sig.content as ArrayBuffer), senderKeys);
+  if (sig && signed) {
+    signature = await verifyDetached(signed, new TextDecoder().decode(sig.content as ArrayBuffer), senderKeys);
+    email = await PostalMime.parse(signed, { attachmentEncoding: 'arraybuffer' });
+  }
   return {
     text: email.text ?? null,
     html: email.html ?? null,
@@ -264,6 +281,16 @@ export async function verifyDetached(data: Uint8Array, armoredSignature: string,
   const message = await (textMode ? createMessage({ text: new TextDecoder().decode(data) }) : createMessage({ binary: data }));
   const r = await verify({ message, signature, verificationKeys: keys });
   return (await signatureStatus(r.signatures, keys)) ?? 'unknown';
+}
+
+/** Render only the MIME entity whose bytes were verified, never an unsigned outer wrapper. */
+export async function verifySignedMime(raw: Uint8Array, signature: string, senderKeys: string[]): Promise<{ text: string | null; html: string | null; signature: SignatureStatus }> {
+  const part = signedPart(raw);
+  if (!part) throw new Error('No signed part');
+  const status = await verifyDetached(part, signature, senderKeys);
+  const { default: PostalMime } = await import('postal-mime');
+  const email = await PostalMime.parse(part);
+  return { text: email.text ?? null, html: email.html ?? null, signature: status };
 }
 
 /**

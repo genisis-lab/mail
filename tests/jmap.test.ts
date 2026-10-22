@@ -634,6 +634,7 @@ describe('shared mailboxes', () => {
 
     const blob = (await call('Email/get', { accountId: shared, ids: [id], properties: ['blobId'] })).list[0].blobId;
     expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: auth() })).status).toBe(200);
+    expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: auth() })).headers.get('Cache-Control')).toBe('no-store');
     expect((await h.app.request(`/jmap/download/${shared}/${blob}/x.eml`, { headers: bobAuth() })).status).toBe(404);
     // Not through the member's own account either.
     expect((await h.app.request(`/jmap/download/${account}/${blob}/x.eml`, { headers: auth() })).status).toBe(404);
@@ -766,6 +767,21 @@ describe('scheduled send', () => {
     expect((await call('Email/get', { ids: [id], properties: ['mailboxIds'] })).list[0].mailboxIds).toEqual({ drafts: true });
     expect(await scheduled()).toEqual([]);
     expect(get<{ status: string }>(`SELECT status FROM outbox WHERE subject = 'See you tomorrow'`)!.status).toBe('cancelled');
+  });
+
+  it('does not let a cancelled submission cancel a later send of the same draft', async () => {
+    const id = await draft('Rescheduled safely');
+    const first = (await submit(id, { HOLDFOR: '3600' })).created.s;
+    await call('EmailSubmission/set', { update: { [first.id]: { undoStatus: 'canceled' } } });
+    const second = (await submit(id, { HOLDFOR: '7200' })).created.s;
+    expect(second.id).not.toBe(first.id);
+    await call('EmailSubmission/set', { update: { [first.id]: { undoStatus: 'canceled' } } });
+    expect((await call('EmailSubmission/get', { ids: [second.id] })).list[0].undoStatus).toBe('pending');
+    expect(get<any>('SELECT status FROM outbox WHERE id = ?', [Number(second.id.slice(1))]).status).toBe('queued');
+    const current = (await call('Email/query', { filter: { text: 'Rescheduled safely' } })).ids[0];
+    const snooze = await jmap([['Email/set', { accountId: account, update: { [current]: { mailboxIds: { snoozed: true }, snoozed: { until: new Date(Date.now() + 3600_000).toISOString() } } } }, 's']], [...USING, SNOOZE]);
+    expect(snooze.responses[0][1].notUpdated[current].type).toBe('invalidProperties');
+    await call('EmailSubmission/set', { update: { [second.id]: { undoStatus: 'canceled' } } });
   });
 
   it('takes HOLDFOR, refuses holds it can’t keep, and still sends right away without one', async () => {

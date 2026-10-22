@@ -15,7 +15,7 @@ import { getPrefs, identities } from '../services/users.js';
 import { emailSet, loadRows } from './email.js';
 import { MethodError, SetError, asSetError } from './errors.js';
 import { emailId, threadId } from './ids.js';
-import { CAP, getIds, isObject, method, pick, resolveId, getProperties, type JmapContext } from './request.js';
+import { CAP, checkSetSize, getIds, isObject, method, pick, resolveId, getProperties, type JmapContext } from './request.js';
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
@@ -267,6 +267,7 @@ async function createSubmission(ctx: JmapContext, obj: Record<string, any>): Pro
 }
 
 method('EmailSubmission/set', CAP.submission, async (args, ctx) => {
+  checkSetSize(args);
   const userId = ctx.user.id;
   const oldState = submissionState(userId);
   if (args.ifInState !== undefined && args.ifInState !== null && args.ifInState !== oldState) throw new MethodError('stateMismatch', 'Submissions changed');
@@ -298,6 +299,12 @@ method('EmailSubmission/set', CAP.submission, async (args, ctx) => {
       if (!r) throw new SetError('notFound', 'No such submission');
       const keys = Object.keys(patch ?? {});
       if (keys.some((k) => k !== 'undoStatus') || patch.undoStatus !== 'canceled') throw new SetError('invalidProperties', 'Only undoStatus can change, to canceled', { properties: keys });
+      // A cancelled submission can share its message with a later re-send. Never cancel that newer job.
+      if (r.status === 'cancelled') {
+        updated[id] = null;
+        continue;
+      }
+      if (r.status !== 'queued') throw new SetError('cannotUnsend', 'It has already been sent');
       if (!cancelSend(userId, r.message_id)) throw new SetError('cannotUnsend', 'It has already been sent');
       emailOf.set(id, emailId(r.m));
       updated[id] = null;

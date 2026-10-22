@@ -259,6 +259,11 @@ mailRoutes.get('/messages/:id/invite.ics', async (c) => {
 
 // ── Private links (mail/private.ts): the sender's view ─────────────────────
 
+mailRoutes.use('/messages/:id/private*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store');
+});
+
 /** What a private link shows, for its sender's card. */
 mailRoutes.get('/messages/:id/private', async (c) => {
   const link = ownLink(c.get('user').id, intParam(c, 'id'));
