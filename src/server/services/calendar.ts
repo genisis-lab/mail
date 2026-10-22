@@ -41,7 +41,7 @@ export interface InviteView {
 }
 
 async function loadEvent(userId: number, messageId: number): Promise<{ ev: CalendarEvent; msg: any } | null> {
-  const msg = get<any>('SELECT id, user_id, thread_id, direction, folder, delivered_to, from_addr, rsvp FROM messages WHERE id = ? AND user_id = ?', [messageId, userId]);
+  const msg = get<any>('SELECT id, user_id, thread_id, direction, folder, delivered_to, from_addr, auth_results, rsvp FROM messages WHERE id = ? AND user_id = ?', [messageId, userId]);
   if (!msg) return null;
   const atts = all<{ blob: string; content_type: string; filename: string; size: number }>('SELECT blob, content_type, filename, size FROM attachments WHERE message_id = ? ORDER BY id', [messageId]);
   // Prefer the inline text/calendar part over a .ics attachment.
@@ -56,6 +56,17 @@ async function loadEvent(userId: number, messageId: number): Promise<{ ev: Calen
 function myAttendee(userId: number, ev: CalendarEvent, deliveredTo: string | null) {
   const mine = new Set([...userAddresses(userId), ...(deliveredTo ? [deliveredTo.toLowerCase()] : [])]);
   return ev.attendees.find((a) => mine.has(a.email)) ?? null;
+}
+
+/** An ICS organizer (or SENT-BY parameter) alone cannot authorize a different sender to change an event. */
+function organizerSent(ev: CalendarEvent, msg: { from_addr: string; auth_results: string | null }): boolean {
+  if (ev.organizer && ev.organizer.email !== msg.from_addr.trim().toLowerCase()) return false;
+  try {
+    const auth = msg.auth_results ? JSON.parse(msg.auth_results) : {};
+    return auth.dmarc !== 'fail';
+  } catch {
+    return false;
+  }
 }
 
 export async function inviteFor(userId: number, messageId: number): Promise<InviteView | null> {
@@ -80,7 +91,7 @@ export async function inviteFor(userId: number, messageId: number): Promise<Invi
     url: ev.url,
     me: me ? { email: me.email, status: me.status ?? null } : null,
     rsvp: msg.rsvp ?? null,
-    canReply: msg.direction === 'in' && ev.method === 'REQUEST' && ev.status !== 'CANCELLED' && !!ev.organizer?.email && !!ev.uid,
+    canReply: msg.direction === 'in' && ev.method === 'REQUEST' && ev.status !== 'CANCELLED' && !!ev.organizer?.email && !!ev.uid && organizerSent(ev, msg),
   };
 }
 
@@ -94,6 +105,7 @@ export async function replyToInvite(userId: number, messageId: number, status: R
   const { ev, msg } = loaded;
   if (msg.direction !== 'in' || ev.method !== 'REQUEST' || ev.status === 'CANCELLED') throw new Error('This invitation can’t be answered');
   if (!ev.organizer?.email || !ev.uid) throw new Error('This invitation has no organizer to answer');
+  if (!organizerSent(ev, msg)) throw new Error('This invitation wasn’t sent by its organizer');
   const user = getUser(userId)!;
   const ids = identities(userId);
   const me = myAttendee(userId, ev, msg.delivered_to);
@@ -159,7 +171,7 @@ async function inviteColumn(userId: number, messageId: number): Promise<string> 
     throw err; // A transient blob failure must not permanently cache 'no invitation'.
   });
   const ev = loaded?.ev;
-  if (!loaded || !ev || (ev.start === null && ev.method !== 'CANCEL') || loaded.msg.direction !== 'in' || !ON_CALENDAR.has(ev.method)) return '';
+  if (!loaded || !ev || (ev.start === null && ev.method !== 'CANCEL') || loaded.msg.direction !== 'in' || !ON_CALENDAR.has(ev.method) || !organizerSent(ev, loaded.msg)) return '';
   const occurrence = ev.props.find((p) => p.name === 'RECURRENCE-ID')?.value.trim();
   const facts: InviteFacts = {
     key: JSON.stringify([ev.uid || `message:${messageId}`, ev.organizer?.email ?? loaded.msg.from_addr.toLowerCase(), occurrence ?? '']),

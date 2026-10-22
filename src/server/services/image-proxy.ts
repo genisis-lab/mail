@@ -43,10 +43,12 @@ export function normalizeImageUrl(raw: string): string | null {
   return /^https?:\/\/[^\s]+$/i.test(abs) && abs.length <= 2048 ? abs : null;
 }
 
+const codePoint = (n: number) => Number.isInteger(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : '\uFFFD';
+
 const decodeEntities = (s: string) =>
   s
-    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => codePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d: string) => codePoint(Number(d)))
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')

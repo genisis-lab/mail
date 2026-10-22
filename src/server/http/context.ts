@@ -296,17 +296,28 @@ export const actAsMailbox: MiddlewareHandler<AppEnv> = async (c, next) => {
 export const requireUserReady: MiddlewareHandler<AppEnv> = async (c, next) => {
   const s = loadSession(c);
   if (!s) throw unauthorized();
-  if (mustChangePassword(s.user)) throw new HttpError(403, 'Choose a new password first', 'password_change_required');
-  if (mustSetup2fa(s.user)) throw new HttpError(403, 'Two-factor authentication must be set up first', 'mfa_setup_required');
+  assertUserReady(s.user);
   c.set('user', s.user);
   c.set('session', s.session);
   c.set('apiKeyId', null);
   await next();
 };
 
+function assertUserReady(user: UserRow) {
+  if (mustChangePassword(user)) throw new HttpError(403, 'Choose a new password first', 'password_change_required');
+  if (mustSetup2fa(user)) throw new HttpError(403, 'Two-factor authentication must be set up first', 'mfa_setup_required');
+}
+
+/** Only the steps needed to finish enrollment may bypass account readiness. */
+export const requireAccountUser: MiddlewareHandler<AppEnv> = (c, next) => {
+  const enrollment = c.req.method === 'POST' && ['/api/account/password', '/api/account/password/required', '/api/account/2fa/setup', '/api/account/2fa/enable'].includes(c.req.path);
+  return (enrollment ? requireUser : requireUserReady)(c, next);
+};
+
 export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   const k = loadApiKey(c);
   if (!k) throw unauthorized('Invalid API key');
+  assertUserReady(k.user);
   c.set('user', k.user);
   c.set('session', null);
   c.set('apiKeyId', k.keyId);

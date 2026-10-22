@@ -20,6 +20,7 @@ import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createProxyHandler } from './http-proxy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8787);
@@ -68,32 +69,7 @@ wrangler.on('exit', (code) => {
   process.exit(code ?? 1);
 });
 
-const clientIp = (req) => {
-  if (TRUST_PROXY) {
-    const fwd = req.headers['x-forwarded-for'];
-    if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
-  }
-  return (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
-};
-
-const server = http.createServer((req, res) => {
-  // Wrangler's /cdn-cgi/* endpoints let anyone inject mail or trigger handlers. Never expose them.
-  if (req.url?.startsWith('/cdn-cgi/')) {
-    res.writeHead(404).end();
-    return;
-  }
-  const headers = { ...req.headers, 'cf-connecting-ip': clientIp(req) };
-  delete headers['x-forwarded-for'];
-  const upstream = http.request({ host: '127.0.0.1', port: INTERNAL, method: req.method, path: req.url, headers }, (up) => {
-    res.writeHead(up.statusCode ?? 502, up.headers);
-    up.pipe(res);
-  });
-  upstream.on('error', () => {
-    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' });
-    res.end('Wren is starting up. Try again in a few seconds.');
-  });
-  req.pipe(upstream);
-});
+const server = http.createServer(createProxyHandler(INTERNAL, TRUST_PROXY));
 
 server.listen(PORT, HOST, () => {
   console.log(`Wren (self-hosted) on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}, data in ${DATA_DIR}`);

@@ -198,8 +198,9 @@ describe('the Calendar page', () => {
   const lunch = { title: 'Lunch, with Bo', start: Date.UTC(2026, 9, 21, 12), end: Date.UTC(2026, 9, 21, 13), location: 'Café Rose', notes: 'Bring the book' };
   const invite = (uid: string, lines: string[], method = 'REQUEST') =>
     ['BEGIN:VCALENDAR', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`, 'ORGANIZER;CN=Maya Chen:mailto:maya@northwind.example', ...lines, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
-  const deliver = async (ics: string, subject: string, method = 'REQUEST') => {
-    await ingest(imip(ics, method, subject), { rcptTo: ['admin@wren.test'], source: 'resend' });
+  const deliver = async (ics: string, subject: string, method = 'REQUEST', sender = 'maya@northwind.example') => {
+    const raw = Buffer.from(imip(ics, method, subject).toString().replace('From: Maya Chen <maya@northwind.example>', `From: <${sender}>`));
+    await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'resend' });
     return get<{ id: number; thread_id: number }>('SELECT id, thread_id FROM messages WHERE subject = ? ORDER BY id DESC', [subject])!;
   };
   const me = (status: string) => `ATTENDEE;PARTSTAT=${status};RSVP=TRUE:mailto:admin@wren.test`;
@@ -300,7 +301,7 @@ describe('the Calendar page', () => {
     h.as('admin');
     const base = invite('shared-uid', ['SEQUENCE:0', 'DTSTART:20261025T120000Z', 'DTEND:20261025T130000Z', 'SUMMARY:Original meeting', me('ACCEPTED')]);
     await deliver(base, 'Organizer one');
-    await deliver(base.replaceAll('maya@northwind.example', 'other@example.org').replace('Original meeting', 'Other meeting'), 'Organizer two');
+    await deliver(base.replaceAll('maya@northwind.example', 'other@example.org').replace('Original meeting', 'Other meeting'), 'Organizer two', 'REQUEST', 'other@example.org');
     expect(named(await events(), 'Original meeting')).toHaveLength(1);
     expect(named(await events(), 'Other meeting')).toHaveLength(1);
     await deliver(invite('shared-uid', ['SEQUENCE:1'], 'CANCEL'), 'Cancelled without dates', 'CANCEL');
