@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.5.0 — privacy, PGP, calendar, private links; more for mail apps
+
+**Privacy when reading.**
+- **Link trackers are cleaned.** Tracking bits (`utm_*`, `fbclid`, `gclid` and the like)
+  are taken off links in mail you receive, and known redirect wrappers (Google, Outlook
+  SafeLinks, Facebook and others) are unwrapped, so a link goes straight where it says.
+  Hovering shows the real address, and a link whose text names a different site asks
+  before opening.
+- **Tracking pixels are blocked.** Tiny or hidden images and images from well-known
+  trackers never load, even with images turned on, and the email says how many were
+  blocked ("3 trackers blocked").
+- **Sent mail doesn't name Wren.** The `X-Mailer` header is gone, so recipients no longer
+  see which app or version you use. Forwarded mail now carries `X-Forwarded-By`.
+
+**Encrypted mail files.** Raw messages, attachments, very large bodies, profile pictures,
+backups and exports are now encrypted in storage (AES-256-GCM, with a key from
+`WREN_SECRET` or the key Wren generated), and named so the storage bucket alone shows
+nothing about them. Downloads come out as normal, readable files.
+- Files stored before the upgrade are encrypted in the background; **Admin → System**
+  shows how many are left.
+- The owner can see the generated key in **Admin → System → Show key** (password and
+  2-step code needed). Keep a copy somewhere safe: moving to another deployment, or
+  restoring a stored backup there, needs it.
+- If the key changes, Wren warns in the admin panel. Put the original key back, or
+  choose **Use the current key** to carry on without what the old key protected.
+  Details: [docs/cloudflare.md](docs/cloudflare.md) and
+  [docs/self-hosting.md](docs/self-hosting.md).
+
+**PGP.** Settings → Encryption: create or import a PGP key, publish your public key so
+others on your server can write to you encrypted, and save other people's keys. Your
+private key stays in this browser only, for each account. Encrypted mail (inline and
+PGP/MIME) is decrypted in the browser, and signatures are checked. Compose has
+**Encrypt** and **Sign**; drafts and the outbox only ever hold the encrypted text.
+
+**Delete your account.** Settings → Security → **Delete your account**, with a reminder
+to download your mail first, your password and your 2-step code if that's on. Its mail
+goes and its addresses are freed. An admin can turn this off in Admin → Settings &
+policies → Security → **People can delete their own account** (on by default). The last
+owner or admin can't delete themselves.
+
+**Calendar.** A new Calendar page: a month view (an agenda on phones) with the
+invitations in your mail, your answer to each and any cancellations, plus events you add
+yourself. Events download as .ics. It works for shared mailboxes too.
+
+**Private links.** Compose → **Send as private link**, for 1 day, 1 week or 1 month.
+Recipients get a link to the message instead of the message itself; it stops working when
+the time is up, and you can **Stop sharing** sooner. The content is deleted once it
+expires.
+
+**Mail apps (JMAP).**
+- **Shared mailboxes.** Each shared mailbox you belong to shows as another account in
+  your mail app, with its own mail and push. Sending from it follows the same rules as in
+  the web app, and removing someone from it stops their app at once.
+- **Scheduled send.** Apps that support it (FUTURERELEASE) can send later, up to a year
+  ahead. Scheduled mail shows in the web app's Scheduled folder, and cancelling it from
+  either side turns it back into a draft.
+- **Snooze.** Snoozed mail is in a Snoozed mailbox in apps, and moving it out un-snoozes
+  it. Apps that speak Fastmail's snooze extension can also snooze and change the time.
+  Details: [docs/jmap.md](docs/jmap.md).
+
+**Under the hood.** One new dependency, `openpgp`, loaded only when PGP is used.
+
+**Upgrading.** Redeploy; the database updates (migrations 16 to 20) run by themselves,
+and existing mail files are encrypted in the background. If Wren generated its own key,
+copy it from **Admin → System → Show key** and keep it safe. Everyone stays signed in.
+
 ## v0.4.0 — several accounts in one browser; mail apps
 
 **Several accounts.** Sign in to more than one account on your Wren server in the same
