@@ -762,6 +762,9 @@ export const migrations: string[] = [
 
   // 20: Re-read cached invitations with organizer-scoped identities and date-less cancellations.
   `UPDATE messages SET invite = NULL WHERE invite IS NOT NULL;`,
+
+  // 21: Revalidate cached calendar updates against the message sender.
+  `UPDATE messages SET invite = NULL WHERE invite IS NOT NULL;`,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { HttpError } from './lib/http.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
-import { actAsMailbox, requireAdmin, requireApiKey, requireUser, requireUserReady, type AppEnv } from './http/context.js';
+import { actAsMailbox, requireAdmin, requireApiKey, requireAccountUser, requireUserReady, type AppEnv } from './http/context.js';
 import { authRoutes, setupRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRoutes, mailRoutes } from './routes/mail.js';
@@ -111,8 +111,8 @@ export function createApp() {
   // Private links: public (GET only, so the CSRF check above doesn't apply), no sign-in.
   app.route('/api/private', privateRoutes);
 
-  // Account routes stay reachable while 2FA setup is pending.
-  app.use('/api/account/*', requireUser);
+  // Only enrollment endpoints stay reachable while password changes or 2FA setup are pending.
+  app.use('/api/account/*', requireAccountUser);
   app.route('/api/account', accountRoutes);
 
   for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
