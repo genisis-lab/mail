@@ -93,6 +93,14 @@ export function randomToken(bytes = 32): string {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
+/** `n` uniformly random decimal digits, for codes sent by email. */
+export function randomDigits(n: number): string {
+  let out = '';
+  // 250 is the largest multiple of 10 under 256: anything above would favour the low digits.
+  while (out.length < n) for (const b of crypto.randomBytes(n)) if (b < 250 && out.length < n) out += b % 10;
+  return out;
+}
+
 export function sha256(data: string | Uint8Array): string {
   return crypto.createHash('sha256').update(data).digest('hex');
 }

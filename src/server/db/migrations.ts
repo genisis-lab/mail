@@ -777,6 +777,23 @@ export const migrations: string[] = [
 
   // 23: Preserve browser signing intent across draft saves and undo send.
   `ALTER TABLE messages ADD COLUMN pgp_sign INTEGER NOT NULL DEFAULT 0;`,
+
+  // 24: a private link opens only for a recipient who enters the code emailed to them.
+  //     kind 'code': that code (its keyed hash, a few tries); kind 'pass': a browser that
+  //     entered one (its cookie's hash). Both are short-lived and go with their link.
+  `
+  CREATE TABLE private_link_access (
+    id         INTEGER PRIMARY KEY,
+    link_id    INTEGER NOT NULL REFERENCES private_links(id) ON DELETE CASCADE,
+    recipient  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    hash       TEXT NOT NULL UNIQUE,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_private_link_access ON private_link_access(link_id, recipient, kind);
+  CREATE INDEX idx_private_link_access_expiry ON private_link_access(expires_at);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

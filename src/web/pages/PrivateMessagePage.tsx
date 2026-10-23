@@ -1,8 +1,11 @@
-/** A private message opened from its link (/p/<token>), by anyone who has it: signed in or not. */
-import { useCallback, useEffect, useState } from 'react';
+/**
+ * A private message opened from its link (/p/<token>), signed in or not. It
+ * opens only after the viewer enters a code emailed to one of its recipients.
+ */
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Clock, Download, ImageOff, Lock, Paperclip } from 'lucide-react';
+import { Clock, Download, ImageOff, Lock, Mail, Paperclip } from 'lucide-react';
 import { APP_NAME } from '../../shared/brand';
 import type { Addr, AttachmentInfo } from '../../shared/types';
 import { api, ApiError } from '../lib/api';
@@ -10,7 +13,7 @@ import { fileSize, longDate } from '../lib/format';
 import type { Instance } from '../lib/session';
 import { Logo } from '../components/Logo';
 import { MessageBody } from '../components/MessageBody';
-import { Spinner } from '../components/ui';
+import { Button, Field, Input, Spinner } from '../components/ui';
 
 interface PrivateMessage {
   from: Addr;
@@ -22,10 +25,16 @@ interface PrivateMessage {
   attachments: AttachmentInfo[];
 }
 
+/** Not opened here yet: only who it's from, until a code is entered. */
+interface LockedMessage {
+  locked: true;
+  from: Addr;
+}
+
 export function PrivateMessagePage({ instance }: { instance: Instance }) {
   const { token = '' } = useParams();
   const base = `/api/private/${encodeURIComponent(token)}`;
-  const q = useQuery({ queryKey: ['private', token], queryFn: () => api.get<PrivateMessage>(base), gcTime: 0, retry: false, refetchOnMount: 'always', refetchInterval: 30_000 });
+  const q = useQuery({ queryKey: ['private', token], queryFn: () => api.get<PrivateMessage | LockedMessage>(base), gcTime: 0, retry: false, refetchOnMount: 'always', refetchInterval: 30_000 });
   const [blocked, setBlocked] = useState(0);
   const pictureUrl = useCallback((id: number) => `${base}/attachments/${id}?inline=1`, [base]);
 
@@ -44,14 +53,16 @@ export function PrivateMessagePage({ instance }: { instance: Instance }) {
     return () => metas.forEach((m) => m.remove());
   }, []);
 
+  const opened = q.data && !('locked' in q.data) ? q.data : undefined;
   const [clock, setClock] = useState(Date.now());
   useEffect(() => {
-    if (!q.data || q.data.expiresAt <= Date.now()) return;
-    const timer = setTimeout(() => setClock(Date.now()), Math.min(Math.max(0, q.data.expiresAt - Date.now()) + 1, 2_147_483_647));
+    if (!opened || opened.expiresAt <= Date.now()) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.min(Math.max(0, opened.expiresAt - Date.now()) + 1, 2_147_483_647));
     return () => clearTimeout(timer);
-  }, [q.data, clock]);
-  const expired = !!q.data && q.data.expiresAt <= Math.max(clock, Date.now());
-  const m = q.isError || expired ? undefined : q.data;
+  }, [opened, clock]);
+  const expired = !!opened && opened.expiresAt <= Math.max(clock, Date.now());
+  const locked = !q.isError && q.data && 'locked' in q.data ? q.data : undefined;
+  const m = q.isError || expired ? undefined : opened;
   const files = m?.attachments.filter((a) => !a.inline || !m.html?.includes(`cid:${a.contentId}`)) ?? [];
 
   return (
@@ -65,6 +76,8 @@ export function PrivateMessagePage({ instance }: { instance: Instance }) {
             <div className="flex justify-center py-6">
               <Spinner className="size-6" />
             </div>
+          ) : locked ? (
+            <Unlock base={base} from={locked.from} onOpen={() => void q.refetch()} />
           ) : !m ? (
             expired || (q.error instanceof ApiError && q.error.status === 404) ? (
               <>
@@ -128,5 +141,98 @@ export function PrivateMessagePage({ instance }: { instance: Instance }) {
         </div>
       </div>
     </main>
+  );
+}
+
+/** Ask for a code at one of the recipients' addresses, then enter it. */
+function Unlock({ base, from, onOpen }: { base: string; from: Addr; onOpen: () => void }) {
+  const [email, setEmail] = useState('');
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [resent, setResent] = useState(false);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = (action: () => Promise<void>) => async (e?: FormEvent) => {
+    e?.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sendCode = run(async () => {
+    await api.post(`${base}/code`, { email: email.trim() });
+    setResent(!!sentTo);
+    setSentTo(email.trim());
+    setCode('');
+  });
+  const verify = run(async () => {
+    const digits = code.replace(/\D/g, '');
+    if (digits.length !== 6) throw new Error('Enter the 6-digit code from the email.');
+    await api.post(`${base}/verify`, { email: sentTo, code: digits });
+    onOpen();
+  });
+
+  return (
+    <div className="mx-auto max-w-sm">
+      <div className="flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-ink">
+        {sentTo ? <Mail className="size-6" aria-hidden /> : <Lock className="size-6" aria-hidden />}
+      </div>
+      {!sentTo ? (
+        <form className="mt-4 space-y-4" onSubmit={sendCode}>
+          <div>
+            <h1 className="text-xl font-semibold">{from.name || from.address} sent you a private message</h1>
+            <p className="mt-1 text-sm text-muted">To open it, enter the email address it was sent to. We’ll email a code there.</p>
+          </div>
+          <Field label="Your email address" error={error}>
+            <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
+          </Field>
+          <Button type="submit" variant="primary" className="w-full" loading={busy}>
+            Send code
+          </Button>
+        </form>
+      ) : (
+        <form className="mt-4 space-y-4" onSubmit={verify}>
+          <div>
+            <h1 className="text-xl font-semibold" role="status">
+              Check your email
+            </h1>
+            <p className="mt-1 text-sm text-muted">
+              If this message was sent to <b className="text-fg">{sentTo}</b>, a 6-digit code is on its way there. It works for 10 minutes.
+            </p>
+            <p className="mt-2 text-sm text-muted" aria-live="polite">
+              {resent && 'A new code was sent. Only the newest one works.'}
+            </p>
+          </div>
+          <Field label="Code" error={error}>
+            <Input inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={code} onChange={(e) => setCode(e.target.value)} autoFocus required placeholder="123456" />
+          </Field>
+          <Button type="submit" variant="primary" className="w-full" loading={busy}>
+            Open message
+          </Button>
+          <div className="flex justify-between text-sm">
+            <button type="button" className="text-muted hover:text-fg" onClick={() => void sendCode()} disabled={busy}>
+              Send a new code
+            </button>
+            <button
+              type="button"
+              className="text-muted hover:text-fg"
+              onClick={() => {
+                setSentTo(null);
+                setResent(false);
+                setError(null);
+              }}
+            >
+              Use a different address
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
