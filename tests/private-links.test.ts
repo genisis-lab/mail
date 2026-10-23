@@ -80,7 +80,7 @@ describe('private links', () => {
     const out = (await outbox('user')).find((o) => o.subject === 'Salary review')!;
     expect(out.status).toBe('sent');
     expect(out.text).toContain('Ada Admin sent you a private message');
-    expect(out.text).toContain('This link stops working on');
+    expect(out.text).toContain('This link stops working 7 days after delivery');
     expect(out.text).toContain('Subject: Salary review');
     token = tokenIn(out.text)!;
     expect(token).toBeTruthy();

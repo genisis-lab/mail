@@ -263,6 +263,7 @@ export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): Mess
     spoofWarning: spoofed(r),
     images: signedImages(r.html_body),
     privateLink: r.private_link ? JSON.parse(r.private_link) : null,
+    pgpSign: !!r.pgp_sign,
   };
 }
 

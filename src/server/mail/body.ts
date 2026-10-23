@@ -1,5 +1,6 @@
 import { getBlob, putBlob } from './blobs.js';
 import { htmlToText } from './parse.js';
+import { HttpError } from '../lib/http.js';
 
 /**
  * Message bodies normally live in the `messages` row. Very large ones (huge
@@ -30,10 +31,12 @@ export async function loadBody<T extends { text_body: string | null; html_body: 
   if (!row.body_blob) return row;
   try {
     const body = JSON.parse(new TextDecoder().decode(await getBlob(row.body_blob))) as { text: string | null; html: string | null };
+    if (!body || ![body.text, body.html].every((v) => v === null || typeof v === 'string')) throw new Error('Invalid stored body');
     row.text_body = body.text;
     row.html_body = body.html;
   } catch {
-    // Keep the stored prefix if the blob is unavailable.
+    // The inline prefix is only a search index, never an editable or sendable body.
+    throw new HttpError(503, 'The full message body could not be read. Restore the storage or encryption key before opening, editing or sending this message.', 'body_unavailable');
   }
   return row;
 }

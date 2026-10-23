@@ -16,8 +16,7 @@ import type { Folder } from '../../shared/types.js';
 import { all, get, insert, now, run } from '../db/index.js';
 import { decryptJson, encryptJson, sha256 } from '../lib/crypto.js';
 import { badRequest } from '../lib/http.js';
-import { platform } from '../platform.js';
-import { getBlob, loadBlob, putBlob } from '../mail/blobs.js';
+import { deleteBlobs, getBlob, loadBlob, putBlob } from '../mail/blobs.js';
 import { loadBody } from '../mail/body.js';
 import { buildMime } from '../mail/compose.js';
 import { ImapConnection, type ImapOptions, type Mailbox } from '../mail/imap-client.js';
@@ -425,7 +424,7 @@ export function exportStream(job: JobRow): ReadableStream<Uint8Array> {
 export async function deleteJob(job: JobRow) {
   if (job.kind === 'export') {
     const parts = (JSON.parse(job.state || '{}') as Partial<ExportState>).parts ?? [];
-    if (parts.length) await platform().blobs.delete(parts);
+    if (parts.length) await deleteBlobs(parts);
   }
   run('DELETE FROM jobs WHERE id = ?', [job.id]);
 }

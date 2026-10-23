@@ -14,7 +14,7 @@
  */
 import { all, get, insert, now, run } from '../db/index.js';
 import { logger } from '../lib/log.js';
-import { loadBlob, putBlob } from '../mail/blobs.js';
+import { deleteBlobs, loadBlob, putBlob } from '../mail/blobs.js';
 import { platform } from '../platform.js';
 import { getSettings } from '../settings.js';
 import { raiseAlert, resolveAlert } from './alerts.js';
@@ -164,7 +164,7 @@ export async function stepBackup(b: BackupRow, budgetMs = STEP_MS, partBytes = P
     const message = (err as Error).message || String(err);
     log.warn(`Backup ${b.id} failed`, err);
     run(`UPDATE backups SET status = 'failed', error = ?, finished_at = ?, parts = '[]' WHERE id = ?`, [message.slice(0, 500), now(), b.id]);
-    if (parts.length) await platform().blobs.delete(parts).catch(() => {});
+    if (parts.length) await deleteBlobs(parts).catch(() => {});
     if (b.kind === 'auto') {
       await raiseAlert({ kind: 'backup', key: 'auto', severity: 'warn', title: 'The automatic backup failed', detail: message, link: '/admin/system' }).catch(() => {});
     }
@@ -186,7 +186,7 @@ export async function pruneBackups() {
 
 export async function deleteBackup(b: BackupRow) {
   const parts: string[] = JSON.parse(b.parts);
-  if (parts.length) await platform().blobs.delete(parts);
+  if (parts.length) await deleteBlobs(parts);
   run('DELETE FROM backups WHERE id = ?', [b.id]);
 }
 

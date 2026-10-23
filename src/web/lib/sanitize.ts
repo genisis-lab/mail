@@ -110,7 +110,8 @@ const TRACKER_IMAGES = [
  */
 export function isTrackingPixel(attr: (name: string) => string | null): boolean {
   const src = attr('src')?.trim() ?? '';
-  if (!/^(https?:)?\/\//i.test(src)) return false; // embedded pictures can't report back
+  const url = webUrl(src);
+  if (!url) return false; // embedded pictures can't report back
   const style = (attr('style') ?? '').toLowerCase();
   const size = (name: string): number | undefined => {
     const css = new RegExp(`(?:^|;)\\s*${name}\\s*:([^;]*)`).exec(style)?.[1].replace('!important', '');
@@ -121,12 +122,16 @@ export function isTrackingPixel(attr: (name: string) => string | null): boolean 
   const tiny = dims.length > 0 && dims.every((d) => d <= 2);
   const hidden = attr('hidden') !== null || /(?:^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/.test(style);
   if (tiny || (hidden && !dims.some((d) => !(d <= 2)))) return true;
-  try {
-    const u = new URL(src, 'https://wren.invalid');
-    return TRACKER_IMAGES.some((re) => re.test(u.hostname + u.pathname));
-  } catch {
-    return false;
-  }
+  return TRACKER_IMAGES.some((re) => re.test(url.hostname + url.pathname));
+}
+
+/** Decode CSS escapes before checking URLs (including escaped url() identifiers). */
+function decodeCss(css: string): string {
+  return css.replace(/\\(?:\r\n|[\r\n\f])/g, '').replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/gi, (_m, hex: string | undefined, char: string) => {
+    if (!hex) return char;
+    const n = parseInt(hex, 16);
+    return n === 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff) ? '\ufffd' : String.fromCodePoint(n);
+  });
 }
 
 /** HTML shown in the main document while composing must be safe even without a CSP. */
@@ -202,7 +207,7 @@ export function renderMailHtml(
   let blocked = 0;
   let trackers = 0;
 
-  const isRemote = (url: string) => /^(https?:)?\/\//i.test(url.trim());
+  const isRemote = (url: string) => !!webUrl(url);
   /** The same address the server signed (see normalizeImageUrl in image-proxy.ts). */
   const proxied = (url: string): string => {
     const t = url.trim();
@@ -210,11 +215,15 @@ export function renderMailHtml(
     const sig = opts.proxy?.[abs];
     return sig ? `/api/img/${sig}?u=${encodeURIComponent(abs)}` : t;
   };
-  const fixUrl = (url: string): string | null => {
+  const fixUrl = (url: string, element?: Element): string | null => {
     const u = url.trim();
     if (/^cid:/i.test(u)) {
       const id = cidMap.get(u.slice(4).replace(/[<>]/g, '').toLowerCase());
       return id ? (opts.attachmentUrl?.(id) ?? `/api/attachments/${id}?inline=1`) : '';
+    }
+    if (isTrackingPixel((name) => name === 'src' ? u : element?.getAttribute(name) ?? null)) {
+      trackers++;
+      return null;
     }
     if (isRemote(u) && !opts.allowRemote) {
       blocked++;
@@ -222,6 +231,16 @@ export function renderMailHtml(
     }
     return isRemote(u) ? proxied(u) : u;
   };
+
+  const fixCss = (css: string, element?: Element) => decodeCss(css)
+    // Remote stylesheets can themselves fetch trackers, so never load them.
+    .replace(/@import\b[^;]*(?:;|$)/gi, '')
+    .replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi, (_m, double: string | undefined, single: string | undefined, bare: string | undefined) => {
+      const fixed = fixUrl(double ?? single ?? bare ?? '', element);
+      return fixed === null ? 'none' : `url(${JSON.stringify(fixed)})`;
+    })
+    // Decoding escapes must never introduce an HTML closing tag into a style block.
+    .replace(/</g, '\\3c ');
 
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     const el = node as Element;
@@ -255,24 +274,17 @@ export function renderMailHtml(
       el.removeAttribute('srcset');
     }
     if (el.hasAttribute('background')) {
-      const bg = fixUrl(el.getAttribute('background') ?? '');
+      const bg = fixUrl(el.getAttribute('background') ?? '', el);
       if (bg === null) el.removeAttribute('background');
       else el.setAttribute('background', bg);
     }
     const style = el.getAttribute('style');
-    if (style && /url\(/i.test(style)) {
-      el.setAttribute(
-        'style',
-        style.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (_m, _q, url: string) => {
-          const fixed = fixUrl(url);
-          return fixed === null ? 'none' : `url("${fixed}")`;
-        }),
-      );
-    }
+    if (style) el.setAttribute('style', fixCss(style, el));
+    if (el.tagName === 'STYLE') el.textContent = fixCss(el.textContent ?? '');
   });
 
   try {
-    let clean = DOMPurify.sanitize(keepDocumentStyles(html), {
+    const clean = DOMPurify.sanitize(keepDocumentStyles(html), {
       WHOLE_DOCUMENT: false,
       // Otherwise leading <style> blocks are parsed into <head> and dropped.
       FORCE_BODY: true,
@@ -281,18 +293,6 @@ export function renderMailHtml(
       ALLOW_UNKNOWN_PROTOCOLS: false,
       ADD_ATTR: ['target'],
     }) as string;
-    // Remote CSS in <style> blocks (e.g. @import, url()) is also a tracking vector.
-    if (!opts.allowRemote) {
-      clean = clean.replace(/@import[^;]+;/gi, '').replace(/url\(\s*(['"]?)(https?:)?\/\/[^)]*\)/gi, () => {
-        blocked++;
-        return 'none';
-      });
-    } else if (opts.proxy) {
-      clean = clean.replace(/url\(\s*(['"]?)((?:https?:)?\/\/[^'")]+)\1\s*\)/gi, (m, _q, url: string) => {
-        const p = proxied(url);
-        return p === url.trim() ? m : `url("${p}")`;
-      });
-    }
     return { html: clean, blockedImages: blocked, trackers };
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes');

@@ -20,7 +20,8 @@ export const EXPORT_FORMAT = 'wren-export';
 
 /** Never exported: sessions (everyone signs in again), rate-limit counters and internal state. */
 // JMAP's change log and push subscriptions describe this database's history and devices, not its contents.
-const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'webauthn_challenges', 'known_devices', 'backups', 'jmap_modseq', 'jmap_changes', 'jmap_push']);
+// Integrity records belong to the retained blob store, not to a particular mail snapshot.
+const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'blob_integrity', 'webauthn_challenges', 'known_devices', 'backups', 'jmap_modseq', 'jmap_changes', 'jmap_push']);
 
 export interface ExportHeader {
   format: typeof EXPORT_FORMAT;

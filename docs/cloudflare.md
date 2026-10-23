@@ -70,6 +70,15 @@ Durable Object storage at rest. After an upgrade, files stored earlier are encry
 the background (**Admin → System** shows how many are left, and any file that couldn't be
 encrypted, which is left as it was and still opens).
 
+SQLite also keeps each file's plaintext digest and whether it requires encryption.
+Reads reject plaintext replacements and ciphertext copied from a different file.
+Existing files are enrolled on their first successful read or by the background upgrade
+pass; this cannot detect changes made before enrollment. These integrity records stay
+with the blob store across portable backup restores. When moving a deployment, keep
+the trusted database together with its blob store. A missing or unreadable large body
+blocks opening, editing and sending the message until storage or the key is restored;
+the search prefix is never used as a replacement body.
+
 If you'd rather keep the key separate from the data, set it as a Worker secret **before
 the first start**:
 

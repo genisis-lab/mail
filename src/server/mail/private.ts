@@ -2,9 +2,9 @@
  * Private links: the recipients of a message get a link instead of its content,
  * and the link stops working after a set time. A draft is marked first
  * (setPrivate); only when the message actually goes out (preparePrivateLink, from
- * the outbox) is the token made, the content moved here and the outgoing message
- * turned into a short notice, so expiry counts from then and undo / scheduled
- * send work as usual. Only the token's hash is kept; the token is in the link.
+ * the outbox) is the token made and the outgoing message turned into a notice.
+ * The original stays in Sent until a recipient accepts delivery; only then does
+ * expiry start. Only the token's hash is kept; the token is in the link.
  */
 import type { Addr, AttachmentInfo } from '../../shared/types.js';
 import { config } from '../config.js';
@@ -14,6 +14,7 @@ import { putBlob } from './blobs.js';
 import { loadBody } from './body.js';
 import { buildMime, escapeHtml } from './compose.js';
 import { indexMessage } from './store.js';
+import { parseMail } from './parse.js';
 
 const DAY = 86_400_000;
 
@@ -56,29 +57,27 @@ export function isPrivate(messageId: number): boolean {
   return !!get('SELECT 1 FROM private_links WHERE message_id = ?', [messageId]);
 }
 
-/** Its link was made (it went out, at least to someone). */
+/** Its outgoing notice was prepared, so delivery may already be in flight. */
 export function linkMade(messageId: number): boolean {
   return !!get('SELECT 1 FROM private_links WHERE message_id = ? AND token_hash IS NOT NULL', [messageId]);
 }
 
-// shortcut: the date is in UTC because the server doesn't know the sender's time zone; pass it from compose if people ask.
-const until = (ts: number) => `${new Intl.DateTimeFormat('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' }).format(ts)} UTC`;
-
 /** What recipients get: who sent it, a button to open it and when it stops working. Nothing of the message itself. */
-function noticeBody(sender: string, url: string, expiresAt: number): { html: string; text: string } {
-  const text = `${sender} sent you a private message.\n\nOpen the message:\n${url}\n\nThis link stops working on ${until(expiresAt)}.\n`;
+function noticeBody(sender: string, url: string, days: number): { html: string; text: string } {
+  // A retry may happen much later. The notice must not promise a deadline before delivery.
+  const expiry = `${days} ${days === 1 ? 'day' : 'days'} after delivery`;
+  const text = `${sender} sent you a private message.\n\nOpen the message:\n${url}\n\nThis link stops working ${expiry}.\n`;
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1f2328">
 <p><b>${escapeHtml(sender)}</b> sent you a private message.</p>
 <p><a href="${escapeHtml(url)}" style="display:inline-block;padding:10px 20px;border-radius:999px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600">Open the message</a></p>
-<p style="color:#5f6368;font-size:13px">This link stops working on ${until(expiresAt)}.</p>
+<p style="color:#5f6368;font-size:13px">This link stops working ${expiry}.</p>
 </div>`;
   return { html, text };
 }
 
 /**
- * As a private message goes out: make its link (expiry counts from now), move the
- * body and attachments here, and turn the Sent copy and the outgoing message into
- * the notice. Returns the notice's raw blob, or null when the message isn't
+ * Prepare a notice and a copy of the content, retaining the original message
+ * until delivery succeeds. Returns the notice's raw blob, or null when the message isn't
  * private or its link was already made (a retry).
  */
 export async function preparePrivateLink(messageId: number, outboxId: number): Promise<string | null> {
@@ -86,11 +85,9 @@ export async function preparePrivateLink(messageId: number, outboxId: number): P
   const m = link && get<any>('SELECT * FROM messages WHERE id = ?', [messageId]);
   if (!link || !m) return null;
   const token = randomToken(32);
-  const expiresAt = now() + link.days * DAY;
   const from: Addr = { address: m.from_addr, name: m.from_name };
   const sender = from.name || from.address;
-  // The Sent copy is the notice too: the sender sees what recipients got, and the card shows them the content.
-  const body = noticeBody(sender, `${config.publicUrl}/p/${token}`, expiresAt);
+  const body = noticeBody(sender, `${config.publicUrl}/p/${token}`, link.days);
   const { raw } = await buildMime({
     messageId: m.message_id,
     from,
@@ -106,28 +103,37 @@ export async function preparePrivateLink(messageId: number, outboxId: number): P
   const rawBlob = await putBlob(raw);
   const atts = all<StoredAttachment>('SELECT id, filename, content_type, size, content_id, inline, blob FROM attachments WHERE message_id = ? ORDER BY id', [messageId]);
   tx(() => {
-    run('UPDATE private_links SET token_hash = ?, expires_at = ?, html_body = ?, text_body = ?, body_blob = ?, attachments = ? WHERE id = ?', [
+    run('UPDATE private_links SET token_hash = ?, html_body = ?, text_body = ?, body_blob = ?, attachments = ? WHERE id = ?', [
       sha256(token),
-      expiresAt,
       m.html_body,
       m.text_body,
       m.body_blob,
       JSON.stringify(atts),
       link.id,
     ]);
+    run('UPDATE outbox SET raw_blob = ? WHERE id = ?', [rawBlob, outboxId]);
+  });
+  return rawBlob;
+}
+
+/** Start the lifetime on the first accepted delivery, including partial/local success. */
+export async function activatePrivateLink(messageId: number, raw: Buffer, rawBlob: string) {
+  if (!get('SELECT 1 FROM private_links WHERE message_id = ? AND token_hash IS NOT NULL AND expires_at IS NULL', [messageId])) return;
+  const notice = await parseMail(raw);
+  tx(() => {
+    const activated = run('UPDATE private_links SET expires_at = ? + days * ? WHERE message_id = ? AND token_hash IS NOT NULL AND expires_at IS NULL', [now(), DAY, messageId]);
+    if (!activated.changes) return; // a retry must never extend an already delivered link
     run('DELETE FROM attachments WHERE message_id = ?', [messageId]);
     // A new revision, so mail apps (JMAP) see the notice as a new email rather than a changed one.
     run('UPDATE messages SET html_body = ?, text_body = ?, body_blob = NULL, snippet = ?, raw_blob = ?, has_attachments = 0, jmap_rev = jmap_rev + 1 WHERE id = ?', [
-      body.html,
-      body.text,
-      `${sender} sent you a private message.`,
+      notice.html,
+      notice.text,
+      `${notice.from?.name || notice.from?.address || 'Someone'} sent you a private message.`,
       rawBlob,
       messageId,
     ]);
-    run('UPDATE outbox SET raw_blob = ? WHERE id = ?', [rawBlob, outboxId]);
     indexMessage(messageId);
   });
-  return rawBlob;
 }
 
 /** The working link for a token, with its message's sender, subject and date. Expired, withdrawn and unknown tokens are all null. */
