@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.5.1 — a code to open private links; security fixes
+
+**Private links need a code.** Opening a private link now works like Gmail's confidential
+mode passcode. The page shows only who sent the message and asks for the address it was
+sent to. If that address was in To, Cc or Bcc, Wren emails it a 6-digit code, and
+entering the code opens the message in that browser for an hour. This is always on,
+including for links sent before the upgrade.
+- A code works once, for 10 minutes and 5 tries, and only for the address it was sent
+  to. Wren stores only a keyed hash of it.
+- Any address gets the same answer, so the link can't be used to find out who else got
+  the message. Asking for codes is rate-limited.
+- Stop sharing, or the link running out, also ends every code and open browser.
+
+**Private links start counting at delivery.** A private link's time now starts when the
+first recipient accepts the message, not when it is queued. The notice says "7 days after
+delivery" instead of a date, and the original stays in Sent until then, so a failed or
+retried delivery no longer eats into the time or loses the message.
+
+**Security fixes.**
+- **Self-hosted:** the public server now refuses Wrangler's internal endpoints
+  (`/cdn-cgi/*`, `/__scheduled`) however the path is encoded.
+- **Sign-in:** someone who still has to choose a new password or set up 2-step
+  verification can reach only those steps, not the rest of Settings. API keys follow the
+  same rule.
+- **Calendar:** an invitation can only add or change an event, or be answered, when it
+  comes from its organizer and doesn't fail DMARC.
+- **Tracking:** pictures in CSS backgrounds and `url()` (including escaped ones) now go
+  through the same tracker and remote-image blocking as normal pictures, and remote
+  stylesheets (`@import`) never load.
+
+**Stored files.** Wren now remembers what each stored file should contain, and refuses a
+file in the bucket that was swapped or copied from another one. A message whose full body
+can't be read now says so instead of quietly showing a shortened copy, and can't be
+edited or sent until the storage or key is back. Details:
+[docs/cloudflare.md](docs/cloudflare.md).
+
+**Smaller fixes.** "Sign" in Compose is remembered when a draft is saved, reopened or
+the send is undone.
+
+**Under the hood.** Dependency updates (postal-mime, zod, React, Vite, Vitest, Wrangler
+and others).
+
+**Upgrading.** Redeploy; the database updates (migrations 21 to 24) run by themselves.
+Calendar invitations are re-read once, and existing stored files are enrolled in the
+integrity check in the background. Everyone stays signed in.
+
 ## v0.5.0 — privacy, PGP, calendar, private links; more for mail apps
 
 **Privacy when reading.**
