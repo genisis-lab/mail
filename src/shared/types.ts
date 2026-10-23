@@ -245,6 +245,8 @@ export interface MessageDetail {
   images?: Record<string, string>;
   /** Goes out as a private link that works for `days`; expiresAt is set once it has gone out. */
   privateLink?: { days: number; expiresAt: number | null } | null;
+  /** The browser should sign this draft when it is sent. */
+  pgpSign?: boolean;
 }
 
 /** A package on the Packages page: the card, and the conversation it's from. */

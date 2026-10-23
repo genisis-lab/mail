@@ -20,6 +20,7 @@ const draftSchema = z.object({
   html: z.string().max(5_000_000).optional(),
   /** A plain-text message (an encrypted or signed one): kept and sent exactly as written, with no HTML part. */
   text: z.string().max(5_000_000).optional(),
+  pgpSign: z.boolean().optional(),
   attachments: z.array(z.number().int().positive()).max(100).optional(),
   replyToId: z.number().int().positive().nullable().optional(),
   forwardOfId: z.number().int().positive().nullable().optional(),

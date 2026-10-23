@@ -6,6 +6,24 @@ import { platform } from '../platform.js';
 
 const log = logger('blobs');
 
+// The bucket is not trusted to identify either a file's format or its contents.
+// A plaintext digest in SQLite binds both encrypted and legacy files to their name,
+// and survives encryption in place and restoring an older database snapshot.
+interface Integrity { digest: string; encrypted: number }
+const integrity = (key: string) => get<Integrity>('SELECT digest, encrypted FROM blob_integrity WHERE key = ?', [key]);
+const remember = (key: string, digest: string, encrypted: boolean) =>
+  run('INSERT INTO blob_integrity (key, digest, encrypted) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET encrypted = MAX(blob_integrity.encrypted, excluded.encrypted)', [key, digest, encrypted ? 1 : 0]);
+const changed = (name: string) => new Error(`Stored file ${name.slice(0, 12)}… failed its integrity check`);
+
+// Deduplicated writes and the upgrade pass must not race to enroll the same name.
+const writes = new Map<string, Promise<unknown>>();
+async function withFile<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const task = (writes.get(name) ?? Promise.resolve()).catch(() => {}).then(fn);
+  writes.set(name, task);
+  try { return await task; }
+  finally { if (writes.get(name) === task) writes.delete(name); }
+}
+
 /**
  * Content-addressed storage for raw messages and attachments (and avatars,
  * backups and exports). Backed by R2 (or the Durable Object itself when no
@@ -17,8 +35,22 @@ const log = logger('blobs');
  * so they read whichever key ends up in place (the encryption pass gets them later).
  */
 export async function putBlob(data: Uint8Array, name = blobName(data)): Promise<string> {
-  await platform().blobs.put(name, config.keyMismatch ? data : encryptBlob(data));
-  return name;
+  return withFile(name, async () => {
+    const digest = sha256(data);
+    const existing = await loadBlob(name);
+    if (existing) {
+      if (sha256(existing) !== digest) throw changed(name);
+      return name;
+    }
+    const expected = integrity(name);
+    if (expected && (expected.digest !== digest || (expected.encrypted && config.keyMismatch))) throw changed(name);
+    // Record the expectation before the external write: a crash must not leave a
+    // newly written encrypted object eligible for the legacy plaintext fallback.
+    remember(name, digest, !config.keyMismatch);
+    await platform().blobs.put(name, config.keyMismatch ? data : encryptBlob(data));
+    if (!(await loadBlob(name))) throw new Error('The stored file could not be read back');
+    return name;
+  });
 }
 
 export async function getBlob(hash: string): Promise<Buffer> {
@@ -32,12 +64,27 @@ export async function getBlob(hash: string): Promise<Buffer> {
 export async function loadBlob(name: string): Promise<Buffer | null> {
   const data = await platform().blobs.get(name);
   if (!data) return null;
-  if (!isEncryptedBlob(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-  try {
-    return decryptBlob(data);
-  } catch {
-    throw new Error(`Stored file ${name.slice(0, 12)}… can’t be decrypted: it was saved with a different WREN_SECRET`);
+  const expected = integrity(name);
+  const encrypted = isEncryptedBlob(data);
+  if (expected?.encrypted && !encrypted) throw changed(name);
+  let plain: Buffer;
+  if (encrypted) {
+    try { plain = decryptBlob(data); }
+    catch { throw new Error(`Stored file ${name.slice(0, 12)}… can’t be decrypted: it was saved with a different WREN_SECRET or has been damaged`); }
+  } else plain = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const digest = sha256(plain);
+  if (expected && expected.digest !== digest) throw changed(name);
+  if (!expected || (encrypted && !expected.encrypted)) {
+    // Older installations have no trusted manifest. Enroll on the first successful
+    // read; the upgrade pass visits even files that nobody opens, including backups.
+    remember(name, digest, encrypted);
   }
+  return plain;
+}
+
+export async function deleteBlobs(keys: string[]): Promise<void> {
+  await platform().blobs.delete(keys);
+  tx(() => { for (const key of keys) run('DELETE FROM blob_integrity WHERE key = ?', [key]); });
 }
 
 /** Unreferenced files are kept this long, so restoring a backup or a point in time finds them. */
@@ -85,7 +132,7 @@ export async function collectGarbage(): Promise<{ removed: number; bytes: number
       if (seen === undefined) mark.push(b.key);
     }
   }
-  await store.delete(doomed);
+  await deleteBlobs(doomed);
   tx(() => {
     for (const key of mark) run('INSERT OR IGNORE INTO blob_tombstones (key, seen_at) VALUES (?, ?)', [key, ts]);
     for (const key of doomed) run('DELETE FROM blob_tombstones WHERE key = ?', [key]);
@@ -189,7 +236,7 @@ export async function continueBlobEncryption(limit = 50, budgetMs = 5000): Promi
       } else {
         // Saved first: if this attempt brings the whole object down, the next run moves past the file.
         savePass({ after, left, skipped, trying: b.key });
-        await encryptInPlace(b.key);
+        await withFile(b.key, () => encryptInPlace(b.key));
       }
       after = b.key;
       left = Math.max(0, left - 1);
@@ -214,15 +261,19 @@ export async function continueBlobEncryption(limit = 50, budgetMs = 5000): Promi
  */
 async function encryptInPlace(key: string) {
   const store = platform().blobs;
+  // Reading first verifies (and enrolls) old encrypted files as well as plaintext.
+  if (!(await loadBlob(key))) return;
   const plain = await store.get(key);
   if (!plain || isEncryptedBlob(plain)) return; // deleted meanwhile, or already encrypted
+  if (sha256(plain) !== integrity(key)?.digest) throw changed(key);
   let sealed: Buffer | null = encryptBlob(plain);
   const digest = sha256(sealed);
   await store.put(key, sealed, true);
   sealed = null; // let go of it before reading the stored copy back
   const stored = await store.get(key);
-  if (stored && sha256(stored) !== digest) {
+  if (!stored || sha256(stored) !== digest) {
     await store.put(key, plain, true);
     throw new Error(`Stored file ${key.slice(0, 12)}… didn’t read back correctly after encrypting, so it was left as it was`);
   }
+  remember(key, sha256(plain), true);
 }

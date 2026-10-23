@@ -112,7 +112,7 @@ function urlToCid(html: string, atts: AttachmentInfo[]) {
 }
 
 /** Reopen a saved draft (or a send that was undone). A PGP-encrypted one stays locked until it's decrypted here. */
-function draftInit(d: MessageDetail, mailbox: number | null): ComposeInit {
+export function draftInit(d: MessageDetail, mailbox: number | null): ComposeInit {
   const encrypted = !d.html && isPgpMessage(d.text);
   const signed = !d.html && d.text ? cleartextOf(d.text) : null;
   return {
@@ -127,7 +127,7 @@ function draftInit(d: MessageDetail, mailbox: number | null): ComposeInit {
     attachments: d.attachments,
     privateDays: d.privateLink?.days ?? null,
     ...(encrypted && { encryptedBody: d.text! }),
-    ...(signed !== null && { sign: true }),
+    sign: !!d.pgpSign || signed !== null,
   };
 }
 
@@ -323,8 +323,9 @@ export function ComposeForm({
       replyToId: init.replyToId ?? null,
       forwardOfId: init.forwardOfId ?? null,
       privateDays,
+      pgpSign: sign,
     }),
-    [from, to, cc, bcc, subject, attachments, init.replyToId, init.forwardOfId, privateDays],
+    [from, to, cc, bcc, subject, attachments, init.replyToId, init.forwardOfId, privateDays, sign],
   );
 
   /** What a draft saves. Encrypting: the body only as ciphertext for your own key (still locked: as it was). */
@@ -607,6 +608,7 @@ export function ComposeForm({
     }
     if (!sign && privateDays !== null) return toast('Turn off the private link first: PGP mail can’t be sent as a link');
     setSign((v) => !v);
+    markDirty();
   };
 
   const openLocked = async () => {

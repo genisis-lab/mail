@@ -765,6 +765,18 @@ export const migrations: string[] = [
 
   // 21: Revalidate cached calendar updates against the message sender.
   `UPDATE messages SET invite = NULL WHERE invite IS NOT NULL;`,
+
+  // 22: Bind stored files to their contents in trusted SQLite, independently of the bucket.
+  // Old files are enrolled by the encryption pass (or their first successful read).
+  `CREATE TABLE blob_integrity (
+    key TEXT PRIMARY KEY,
+    digest TEXT NOT NULL,
+    encrypted INTEGER NOT NULL
+  );
+  DELETE FROM _meta WHERE key = 'blob_encryption';`,
+
+  // 23: Preserve browser signing intent across draft saves and undo send.
+  `ALTER TABLE messages ADD COLUMN pgp_sign INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

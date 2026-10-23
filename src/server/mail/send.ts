@@ -23,6 +23,8 @@ export interface DraftInput {
   html?: string;
   /** Plain text only, sent exactly as written (PGP-encrypted or signed text); `html` is ignored. */
   text?: string;
+  /** Browser compose preference; signing itself happens only in the browser. */
+  pgpSign?: boolean;
   attachments?: number[];
   /** db id of the message being replied to / forwarded */
   replyToId?: number | null;
@@ -73,6 +75,13 @@ function linkAttachments(userId: number, draftId: number, ids: number[]) {
 
 /** Create or update a draft. Returns the draft's message id. */
 export async function saveDraft(userId: number, input: DraftInput): Promise<number> {
+  if (input.id) {
+    const existing = get<any>('SELECT * FROM messages WHERE id = ? AND user_id = ?', [input.id, userId]);
+    if (!existing) throw notFound('Draft not found');
+    if (existing.folder !== 'drafts') throw badRequest('This message is no longer a draft');
+    // Also reject stale clients that previously obtained only a search prefix.
+    await loadBody(existing);
+  }
   const from = pickIdentity(userId, input.from);
   const to = addrList(input.to);
   const cc = addrList(input.cc);
@@ -129,6 +138,7 @@ export async function saveDraft(userId: number, input: DraftInput): Promise<numb
       );
     }
     if (input.attachments) linkAttachments(userId, draftId, input.attachments);
+    if (input.pgpSign !== undefined) run('UPDATE messages SET pgp_sign = ? WHERE id = ?', [input.pgpSign ? 1 : 0, draftId]);
     if (input.privateDays !== undefined) setPrivate(userId, draftId, input.privateDays);
     indexMessage(draftId);
     return draftId;

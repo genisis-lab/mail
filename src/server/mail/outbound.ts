@@ -13,7 +13,7 @@ import { storeMessage } from './store.js';
 import { escapeHtml } from './compose.js';
 import { suppress, suppressionFor, suppressionReason } from '../services/suppressions.js';
 import { badMailbox } from './dsn.js';
-import { preparePrivateLink } from './private.js';
+import { activatePrivateLink, preparePrivateLink } from './private.js';
 
 const log = logger('outbound');
 
@@ -214,7 +214,7 @@ export function setLocalDeliver(fn: LocalDeliver) {
 }
 
 async function deliver(job: OutboxRow) {
-  // A private message leaves as a notice with its link, made now so the expiry counts from here.
+  // Prepare the private notice now; expiry starts only after a recipient accepts it.
   if (job.message_id) job.raw_blob = (await preparePrivateLink(job.message_id, job.id)) ?? job.raw_blob;
   const recipients: string[] = JSON.parse(job.recipients);
   const raw = await getBlob(job.raw_blob);
@@ -239,6 +239,7 @@ async function deliver(job: OutboxRow) {
 
   if (local.length && localDeliver) {
     const res = await localDeliver(raw, local, job.mail_from, job.user_id);
+    if (res.accepted.length && job.message_id) await activatePrivateLink(job.message_id, raw, job.raw_blob);
     failures.push(...res.rejected);
     if (res.accepted.length) logDelivery(job, 'delivered', null, res.accepted, 'Local delivery');
     // Never deliver locally twice on retries.
@@ -263,6 +264,7 @@ async function deliver(job: OutboxRow) {
         usedProvider = pid;
         markProvider(pid, true);
         const refused = new Set((result.rejected ?? []).map((r) => normalizeEmail(r.rcpt)));
+        if (job.message_id && external.some((r) => !refused.has(normalizeEmail(r)))) await activatePrivateLink(job.message_id, raw, job.raw_blob);
         logDelivery(job, 'sent', pid, external.filter((r) => !refused.has(normalizeEmail(r))), result.detail ?? `via ${p.name}`);
         // Some recipients refused while the rest were accepted: they bounce now, and a missing mailbox is suppressed.
         for (const r of result.rejected ?? []) {
