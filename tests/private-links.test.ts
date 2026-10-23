@@ -13,8 +13,12 @@ const deliverNow = async () => {
   await processQueue();
 };
 const tokenIn = (text: string) => /\/p\/([A-Za-z0-9_-]{43})/.exec(text)?.[1];
-/** A request from someone who isn't signed in. */
-const anon = (path: string) => h.app.request(path);
+/** A request from someone who isn't signed in (with their pass to a link, if any). */
+const anon = (path: string, cookie?: string) => h.app.request(path, cookie ? { headers: { cookie } } : {});
+const post = (path: string, data: unknown) => h.app.request(path, { method: 'POST', headers: { 'X-Wren': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+const CODE_SUBJECT = 'Your code to open a private message';
+const codesTo = async (address: string) => (await outbox()).filter((o) => o.subject === CODE_SUBJECT && o.to.includes(address));
+const codeIn = (text: string) => /<b>(\d{6})<\/b>/.exec(text)?.[1];
 const link = (messageId: number) => get<any>('SELECT * FROM private_links WHERE message_id = ?', [messageId]);
 
 async function upload(name: string, content: string, inline = false) {
@@ -81,6 +85,7 @@ describe('private links', () => {
     expect(out.status).toBe('sent');
     expect(out.text).toContain('Ada Admin sent you a private message');
     expect(out.text).toContain('This link stops working 7 days after delivery');
+    expect(out.text).toContain('enter a code that is emailed to you');
     expect(out.text).toContain('Subject: Salary review');
     token = tokenIn(out.text)!;
     expect(token).toBeTruthy();
@@ -109,27 +114,103 @@ describe('private links', () => {
     for (const leak of ['S3CRET-4242', 'offer.pdf', 'chart.png', Buffer.from('offer-file-4242').toString('base64'), 'Content-Disposition']) expect(out.raw).not.toContain(leak);
   });
 
-  it('shows the content to anyone with the link, with no caching or referrer', async () => {
+  it('shows only the sender until a recipient enters the code emailed to them', async () => {
     const res = await anon(`/api/private/${token}`);
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(res.headers.get('X-Robots-Tag')).toBe('noindex');
-    const body = (await res.json()) as any;
+    expect(await res.json()).toEqual({ locked: true, from: { address: 'admin@wren.test', name: 'Ada Admin' } });
+    expect((await anon(`/api/private/${token}/attachments/${fileId}`)).status).toBe(404);
+
+    // An address the message didn't go to gets the same answer, and no email.
+    const before = (await outbox()).length;
+    const stranger = await post(`/api/private/${token}/code`, { email: 'eve@ext.example' });
+    expect(stranger.status).toBe(200);
+    expect(await stranger.json()).toEqual({ ok: true });
+    expect(await outbox()).toHaveLength(before);
+    expect(get('SELECT 1 FROM private_link_access')).toBeUndefined();
+
+    // A recipient (any case) gets a code, and the email carries nothing of the message.
+    expect((await post(`/api/private/${token}/code`, { email: ' Kim@Ext.Example ' })).status).toBe(200);
+    const mail = (await codesTo('kim@ext.example')).at(-1)!;
+    expect(mail.to).toEqual(['kim@ext.example']);
+    expect(mail.text).toContain('Ada Admin sent you a private message');
+    for (const leak of ['S3CRET-4242', 'Salary review', 'offer.pdf', token]) expect(mail.raw).not.toContain(leak);
+    const code = codeIn(mail.text)!;
+    expect(code).toMatch(/^\d{6}$/);
+    // Stored only as a keyed hash, bound to this link and recipient.
+    const row = get<any>(`SELECT * FROM private_link_access WHERE kind = 'code'`);
+    expect(row).toMatchObject({ recipient: 'kim@ext.example', attempts: 0 });
+    expect(row.hash).not.toContain(code);
+    expect(row.hash).not.toBe(sha256(code));
+    expect(row.expires_at).toBeLessThanOrEqual(now() + 10 * 60_000);
+
+    // The code is only good for the address it went to.
+    expect((await post(`/api/private/${token}/verify`, { email: 'bob@wren.test', code })).status).toBe(400);
+    expect((await post(`/api/private/${token}/verify`, { email: 'eve@ext.example', code })).status).toBe(400);
+    expect((await post(`/api/private/${token}/verify`, { email: 'kim@ext.example', code: 'abcdef' })).status).toBe(400);
+
+    const ok = await post(`/api/private/${token}/verify`, { email: 'KIM@ext.example', code });
+    expect(ok.status).toBe(200);
+    const setCookie = ok.headers.get('set-cookie')!;
+    expect(setCookie).toMatch(new RegExp(`Path=/api/private/${token}`));
+    expect(setCookie).toMatch(/HttpOnly/);
+    expect(setCookie).toMatch(/SameSite=Strict/);
+    const pass = setCookie.split(';')[0];
+    // Used up: it can't open the message a second time, in another browser.
+    expect((await post(`/api/private/${token}/verify`, { email: 'kim@ext.example', code })).status).toBe(400);
+    expect(get(`SELECT 1 FROM private_link_access WHERE kind = 'code'`)).toBeUndefined();
+
+    const opened = await anon(`/api/private/${token}`, pass);
+    expect(opened.status).toBe(200);
+    const body = (await opened.json()) as any;
     expect(body).toMatchObject({ subject: 'Salary review', from: { address: 'admin@wren.test', name: 'Ada Admin' } });
     expect(body.html).toContain('S3CRET-4242');
     expect(body.attachments.map((a: any) => a.filename)).toEqual(['chart.png', 'offer.pdf']);
     expect(JSON.stringify(body)).not.toMatch(/"blob"/);
 
-    const file = await anon(`/api/private/${token}/attachments/${fileId}`);
+    const file = await anon(`/api/private/${token}/attachments/${fileId}`, pass);
     expect(file.status).toBe(200);
     expect(file.headers.get('Content-Disposition')).toMatch(/^attachment/);
     expect(file.headers.get('Cache-Control')).toBe('no-store');
     expect(await file.text()).toBe('offer-file-4242');
-    expect((await anon(`/api/private/${token}/attachments/${picture.id}?inline=1`)).headers.get('Content-Disposition')).toMatch(/^inline/);
-    // Attachments only with the right token, and only this message's.
-    expect((await anon(`/api/private/${'x'.repeat(43)}/attachments/${fileId}`)).status).toBe(404);
-    expect((await anon(`/api/private/${token}/attachments/999999`)).status).toBe(404);
+    expect((await anon(`/api/private/${token}/attachments/${picture.id}?inline=1`, pass)).headers.get('Content-Disposition')).toMatch(/^inline/);
+    // Attachments only with the right token and pass, and only this message's.
+    expect((await anon(`/api/private/${'x'.repeat(43)}/attachments/${fileId}`, pass)).status).toBe(404);
+    expect((await anon(`/api/private/${token}/attachments/999999`, pass)).status).toBe(404);
+    expect((await anon(`/api/private/${token}`, 'wren_private=forged')).status).toBe(200);
+    expect(await (await anon(`/api/private/${token}`, 'wren_private=forged')).json()).toMatchObject({ locked: true });
+
+    // The pass lasts an hour; then a new code is needed.
+    const later = Date.now() + 3_600_000 + 1;
+    vi.spyOn(Date, 'now').mockReturnValue(later);
+    expect(await (await anon(`/api/private/${token}`, pass)).json()).toMatchObject({ locked: true });
+    vi.restoreAllMocks();
+  });
+
+  it('caps the tries for a code, and how often codes can be asked for', async () => {
+    expect((await post(`/api/private/${token}/code`, { email: 'bob@wren.test' })).status).toBe(200);
+    const code = codeIn((await codesTo('bob@wren.test')).at(-1)!.text)!;
+    const wrong = code === '000000' ? '111111' : '000000';
+    for (let i = 0; i < 5; i++) expect((await post(`/api/private/${token}/verify`, { email: 'bob@wren.test', code: wrong })).status).toBe(400);
+    // Out of tries: even the right code no longer works.
+    expect((await post(`/api/private/${token}/verify`, { email: 'bob@wren.test', code })).status).toBe(400);
+
+    // A new code replaces the old one, and expires after 10 minutes.
+    expect((await post(`/api/private/${token}/code`, { email: 'bob@wren.test' })).status).toBe(200);
+    const fresh = codeIn((await codesTo('bob@wren.test')).at(-1)!.text)!;
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000 + 1);
+    expect((await post(`/api/private/${token}/verify`, { email: 'bob@wren.test', code: fresh })).status).toBe(400);
+    vi.restoreAllMocks();
+
+    // Three codes per address in 15 minutes: the same answer for addresses that didn't get it.
+    expect((await post(`/api/private/${token}/code`, { email: 'bob@wren.test' })).status).toBe(200);
+    expect((await post(`/api/private/${token}/code`, { email: 'bob@wren.test' })).status).toBe(429);
+    for (let i = 0; i < 3; i++) expect((await post(`/api/private/${token}/code`, { email: 'nobody@ext.example' })).status).toBe(200);
+    expect((await post(`/api/private/${token}/code`, { email: 'nobody@ext.example' })).status).toBe(429);
+    // Asking needs the CSRF header like every other POST.
+    expect((await h.app.request(`/api/private/${token}/code`, { method: 'POST', body: '{}' })).status).toBe(403);
   });
 
   it('gives expired, withdrawn and unknown links the same answer', async () => {
@@ -161,6 +242,8 @@ describe('private links', () => {
     expect(await ownFile.text()).toBe('offer-file-4242');
     expect((await h.call('DELETE', `/api/mail/messages/${id}/private`)).status).toBe(200);
     expect(link(id)).toBeUndefined();
+    // Its codes and passes go with it.
+    expect(get('SELECT 1 FROM private_link_access')).toBeUndefined();
     expect((await h.call('GET', `/api/mail/messages/${id}`)).body.privateLink).toBeNull();
     expect((await h.call('DELETE', `/api/mail/messages/${id}/private`)).status).toBe(404);
     await ask(token);

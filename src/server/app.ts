@@ -108,7 +108,7 @@ export function createApp() {
   app.route('/api/setup', setupRoutes);
   app.route('/api/auth', authRoutes);
   app.route('/api/inbound', inboundRoutes as any);
-  // Private links: public (GET only, so the CSRF check above doesn't apply), no sign-in.
+  // Private links: public, no sign-in. Asking for and entering a code are POSTs, so they need the CSRF header too.
   app.route('/api/private', privateRoutes);
 
   // Only enrollment endpoints stay reachable while password changes or 2FA setup are pending.
