@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { Context } from 'hono';
 import { badRequest, forbidden, notFound } from '../lib/http.js';
 import { get } from '../db/index.js';
-import { cancelSend, composeTemplate, deleteDraft, saveDraft, sendDraft, sendDirect, storeUpload } from '../mail/send.js';
+import { cancelSend, composeTemplate, deleteDraft, saveDraft, sendDraft, sendDirect, sendNow, storeUpload } from '../mail/send.js';
+import { processQueue } from '../mail/outbound.js';
 import { getMessage } from '../mail/threads.js';
 import { body, intParam, type AppEnv } from '../http/context.js';
 
@@ -98,6 +99,13 @@ composeRoutes.post('/messages/:id/cancel', (c) => {
   const id = intParam(c, 'id');
   if (!cancelSend(user.id, id)) throw badRequest('Too late — the message has already been sent');
   return c.json({ draftId: id });
+});
+
+/** Send now: skip the rest of the undo-send wait. */
+composeRoutes.post('/messages/:id/send-now', (c) => {
+  if (!sendNow(c.get('user').id, intParam(c, 'id'))) throw badRequest('This message is no longer waiting to send');
+  void processQueue();
+  return c.json({ ok: true });
 });
 
 composeRoutes.post('/uploads', async (c) => {

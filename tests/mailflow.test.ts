@@ -9,7 +9,7 @@ import { ingest } from '../src/server/mail/ingest';
 import { buildMime } from '../src/server/mail/compose';
 import { getBlob } from '../src/server/mail/blobs';
 import { processQueue } from '../src/server/mail/outbound';
-import { saveDraft, sendDraft, cancelSend, composeTemplate } from '../src/server/mail/send';
+import { saveDraft, sendDraft, cancelSend, composeTemplate, sendNow } from '../src/server/mail/send';
 import { applyThreadAction, getThread, listThreads, counters } from '../src/server/mail/threads';
 import { invalidateSettings } from '../src/server/settings';
 
@@ -174,6 +174,18 @@ describe('sending', () => {
     await sendDraft(alice, d2, { undoSeconds: 30 });
     expect(cancelSend(alice, d2)).toBe(true);
     expect(get<any>('SELECT folder, status FROM messages WHERE id = ?', [d2])).toMatchObject({ folder: 'drafts', status: 'draft' });
+    // An undone message can't be sent now.
+    expect(sendNow(alice, d2)).toBe(false);
+
+    // Send now skips the rest of the undo wait.
+    const d3 = await saveDraft(alice, { to: 'bob@wren.test', subject: 'Right away', html: '<p>now</p>' });
+    await sendDraft(alice, d3, { undoSeconds: 30 });
+    expect(sendNow(bob, d3)).toBe(false); // not hers to send
+    expect(sendNow(alice, d3)).toBe(true);
+    await processQueue();
+    expect(get<any>('SELECT status FROM messages WHERE id = ?', [d3]).status).toBe('sent');
+    expect(cancelSend(alice, d3)).toBe(false);
+    expect(sendNow(alice, d3)).toBe(true); // already on its way: nothing to do
   });
 
   it('threads replies with the original and builds reply-all recipients', async () => {

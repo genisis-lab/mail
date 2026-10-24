@@ -276,6 +276,18 @@ export function cancelSend(userId: number, messageId: number): boolean {
   return true;
 }
 
+/** Send now: skip what's left of the undo-send wait. False once it was undone (or for a scheduled send). */
+export function sendNow(userId: number, messageId: number): boolean {
+  const m = get<{ status: string }>(`SELECT status FROM messages WHERE id = ? AND user_id = ? AND folder = 'sent' AND is_scheduled = 0`, [messageId, userId]);
+  if (!m) return false;
+  if (m.status !== 'queued') return true; // already on its way
+  const ts = now();
+  // A first attempt only: a retry keeps its backoff.
+  run(`UPDATE outbox SET next_attempt_at = ?, updated_at = ? WHERE message_id = ? AND status = 'queued' AND attempts = 0 AND next_attempt_at > ?`, [ts, ts, messageId, ts]);
+  run(`UPDATE messages SET send_at = MIN(send_at, ?) WHERE id = ? AND status = 'queued'`, [ts, messageId]);
+  return true;
+}
+
 /** Prefilled compose fields for reply / reply-all / forward. Nothing is saved yet. */
 export async function composeTemplate(userId: number, messageId: number, mode: 'reply' | 'replyAll' | 'forward') {
   const m = await getMessage(userId, messageId);
