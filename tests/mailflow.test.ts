@@ -12,6 +12,8 @@ import { processQueue } from '../src/server/mail/outbound';
 import { saveDraft, sendDraft, cancelSend, composeTemplate, sendNow } from '../src/server/mail/send';
 import { applyThreadAction, getThread, listThreads, counters } from '../src/server/mail/threads';
 import { invalidateSettings } from '../src/server/settings';
+import { parseMail } from '../src/server/mail/parse';
+import { parseAuthResults } from '../src/server/mail/spam';
 
 let alice: number;
 let bob: number;
@@ -147,6 +149,74 @@ describe('inbound pipeline', () => {
     expect(all(`SELECT 1 FROM outbox WHERE kind = 'autoreply' AND user_id = ?`, [bob])).toHaveLength(1);
     prefs.vacation.enabled = false;
     savePrefs(bob, prefs);
+  });
+});
+
+describe('learning from spam buttons', () => {
+  const SPAMMY = { subject: 'CONGRATULATIONS YOU ARE A WINNER!!!', text: 'Claim your prize. Wire transfer. Act now, 100% free. viagra casino' };
+  const folderOf = (subject: string) => get<{ folder: string }>('SELECT folder FROM messages WHERE user_id = ? AND subject = ? ORDER BY id DESC LIMIT 1', [bob, subject])?.folder;
+  const threadOf = (subject: string) => get<{ thread_id: number }>('SELECT thread_id FROM messages WHERE user_id = ? AND subject = ? ORDER BY id DESC LIMIT 1', [bob, subject])!.thread_id;
+  const send = (from: string, subject: string, extra: Partial<Parameters<typeof buildMime>[0]> = {}) =>
+    inbound({ from: { address: from }, to: [{ address: 'bob@wren.test' }], subject, text: 'hello', ...extra }, ['bob@wren.test']);
+
+  it('"Report spam" sends that sender\'s later mail to Spam, and Undo forgets it', async () => {
+    await send('pushy@shop.example', 'Deals 1');
+    expect(folderOf('Deals 1')).toBe('inbox');
+    applyThreadAction(bob, [threadOf('Deals 1')], { type: 'spam' });
+    await send('Pushy@Shop.example', 'Deals 2');
+    expect(folderOf('Deals 2')).toBe('spam');
+    expect(get<any>(`SELECT reason FROM inbound_log WHERE subject = 'Deals 2'`).reason).toBe('sender reported as spam');
+
+    // Undo is "Not spam": it takes the report back rather than vouching for the sender.
+    applyThreadAction(bob, [threadOf('Deals 1')], { type: 'notspam' });
+    expect(get('SELECT 1 FROM sender_verdicts WHERE user_id = ? AND sender = ?', [bob, 'pushy@shop.example'])).toBeUndefined();
+    await send('pushy@shop.example', 'Deals 3');
+    expect(folderOf('Deals 3')).toBe('inbox');
+  });
+
+  it('"Not spam" lets that sender\'s later mail through, unless it is forged', async () => {
+    await send('loud@friend.example', SPAMMY.subject + ' 1', { text: SPAMMY.text });
+    expect(folderOf(SPAMMY.subject + ' 1')).toBe('spam');
+    applyThreadAction(bob, [threadOf(SPAMMY.subject + ' 1')], { type: 'notspam' });
+    expect(folderOf(SPAMMY.subject + ' 1')).toBe('inbox');
+
+    await send('loud@friend.example', SPAMMY.subject + ' 2', { text: SPAMMY.text });
+    expect(folderOf(SPAMMY.subject + ' 2')).toBe('inbox');
+    await send('loud@friend.example', SPAMMY.subject + ' 3', {
+      text: SPAMMY.text,
+      headers: { 'Authentication-Results': 'mx.example; spf=fail smtp.mailfrom=friend.example; dkim=none; dmarc=fail header.from=friend.example' },
+    });
+    expect(folderOf(SPAMMY.subject + ' 3')).toBe('spam');
+  });
+
+  it('never records your own addresses', async () => {
+    await send('bob@wren.test', 'Note to self');
+    applyThreadAction(bob, [threadOf('Note to self')], { type: 'spam' });
+    expect(get('SELECT 1 FROM sender_verdicts WHERE user_id = ? AND sender = ?', [bob, 'bob@wren.test'])).toBeUndefined();
+  });
+
+  it('reads Cloudflare\'s ARC-Authentication-Results for Email Routing mail, topmost header only', async () => {
+    const raw = Buffer.from(
+      [
+        'ARC-Authentication-Results: i=2; mx.cloudflare.net; dkim=fail; spf=fail smtp.mailfrom=bank.example; dmarc=fail header.from=bank.example',
+        'ARC-Authentication-Results: i=1; mx.forged.example; dkim=pass; spf=pass; dmarc=pass',
+        'From: Bank <alerts@bank.example>',
+        'To: bob@wren.test',
+        'Subject: Account notice',
+        'Message-ID: <arc-1@bank.example>',
+        'Date: Fri, 23 Oct 2026 10:00:00 +0000',
+        '',
+        'Please read.',
+        '',
+      ].join('\r\n'),
+    );
+    const p = await parseMail(raw);
+    expect(parseAuthResults(p)).toEqual({});
+    expect(parseAuthResults(p, { arc: true })).toMatchObject({ spf: 'fail', dkim: 'fail', dmarc: 'fail' });
+
+    await ingest(raw, { rcptTo: ['bob@wren.test'], source: 'cloudflare-routing' });
+    const m = get<{ auth_results: string }>(`SELECT auth_results FROM messages WHERE user_id = ? AND subject = 'Account notice'`, [bob])!;
+    expect(JSON.parse(m.auth_results)).toMatchObject({ dmarc: 'fail' });
   });
 });
 

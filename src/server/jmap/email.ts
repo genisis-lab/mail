@@ -13,6 +13,7 @@ import { cancelOutbox } from '../mail/outbound.js';
 import { ftsTerm } from '../mail/search.js';
 import { saveDraft } from '../mail/send.js';
 import { purgeMessages } from '../mail/store.js';
+import { rememberSenders } from '../mail/sender-verdicts.js';
 import { cleanMessageId, formatAddr } from '../lib/addr.js';
 import { importRaw, QuotaExceeded } from '../services/mail-import.js';
 import { rawMessage, readBlob } from './blobs.js';
@@ -615,12 +616,15 @@ function writeKeywords(row: any, kw: Set<string>) {
   }
 }
 
-function moveTo(row: any, target: Folder) {
+function moveTo(userId: number, row: any, target: Folder) {
   const shown = folderOf(row);
   if (folderMailbox(target) === shown) return;
   if (target === 'drafts') throw new SetError('invalidProperties', 'Only new drafts go in Drafts', { properties: ['mailboxIds'] });
   if (row.folder === 'drafts' && target !== 'trash') throw new SetError('invalidProperties', 'A draft is sent with EmailSubmission, or deleted', { properties: ['mailboxIds'] });
   if (target === 'sent' && row.direction !== 'out') throw new SetError('invalidProperties', 'Only mail you sent goes in Sent', { properties: ['mailboxIds'] });
+  // A mail app's "Junk" / "Not Junk" teaches Wren about the sender, like the web app's buttons.
+  if (target === 'spam' && row.folder !== 'spam') rememberSenders(userId, [row.id], 'spam');
+  else if (row.folder === 'spam' && target === 'inbox') rememberSenders(userId, [row.id], 'safe');
   run(
     `UPDATE messages SET folder = ?, snoozed_until = NULL, nudged_at = NULL,
        trashed_at = CASE WHEN ? = 'trash' THEN COALESCE(trashed_at, ?) ELSE NULL END WHERE id = ?`,
@@ -654,11 +658,11 @@ function updateEmail(ctx: JmapContext, row: any, labels: LabelRef[], patch: Reco
       if (where.snoozed !== (until !== null)) throw new SetError('invalidProperties', 'A snoozed email is in Snoozed, and only a snoozed one', { properties: ['mailboxIds', 'snoozed'] });
       if (until === null) {
         // Taking an email out of its folder (into labels only) archives it, like Gmail's "remove from Inbox".
-        moveTo(row, where.folder ?? (row.folder === 'drafts' ? 'drafts' : 'archive'));
+        moveTo(ctx.user.id, row, where.folder ?? (row.folder === 'drafts' ? 'drafts' : 'archive'));
       } else {
         if (row.status === 'queued') throw new SetError('invalidProperties', 'Cancel the scheduled send before snoozing it', { properties: ['snoozed'] });
         // Snoozed mail waits in Inbox or Archive and wakes into the Inbox (wakeSnoozed), as from the web app.
-        if (row.folder !== 'inbox' && row.folder !== 'archive') moveTo(row, 'archive');
+        if (row.folder !== 'inbox' && row.folder !== 'archive') moveTo(ctx.user.id, row, 'archive');
         run('UPDATE messages SET snoozed_until = ? WHERE id = ?', [until, row.id]);
       }
       setLabels(row, labels, where.labels);

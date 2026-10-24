@@ -13,6 +13,7 @@ import { getHeader, htmlToText, parseMail, type Parsed } from './parse.js';
 import { findOneTimeCode } from './otp.js';
 import { findParcel } from './parcel.js';
 import { checkSpam, type SpamVerdict } from './spam.js';
+import { senderVerdict } from './sender-verdicts.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
 import { readReport } from './dsn.js';
@@ -121,7 +122,13 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
   const spam: SpamVerdict | null =
     opts.skipSpam || opts.localSenderId
       ? null
-      : await checkSpam(p, raw, { verdicts: opts.verdicts, providerScore: opts.providerScore, mailFrom: opts.mailFrom, rcptTo: rcpts });
+      : await checkSpam(p, raw, {
+          verdicts: opts.verdicts,
+          providerScore: opts.providerScore,
+          mailFrom: opts.mailFrom,
+          rcptTo: rcpts,
+          arc: opts.source === 'cloudflare-routing',
+        });
 
   for (const [userId, rcpt] of userTargets) {
     try {
@@ -188,13 +195,21 @@ async function deliverToUser(
   let folder: Folder = 'inbox';
   let reason = '';
   const blocked = sender && isUserBlocked(userId, sender);
-  const spammy = spam?.isSpam && !(contact && spam.score < threshold + 5);
+  // "Report spam" / "Not spam" on this sender before. Trust only counts when the sender's
+  // domain didn't fail its checks, so forging a trusted address doesn't get mail past the filter.
+  const verdict = sender ? senderVerdict(userId, sender) : null;
+  const forged = spam?.auth.dmarc === 'fail' || (spam?.auth.spf === 'fail' && spam.auth.dkim !== 'pass');
+  const trusted = verdict === 'safe' && !forged;
+  const spammy = spam?.isSpam && !trusted && !(contact && spam.score < threshold + 5);
   if (blocked) {
     folder = 'spam';
     reason = 'sender blocked by user';
   } else if (a.alwaysSpam) {
     folder = 'spam';
     reason = 'filter';
+  } else if (verdict === 'spam' && !a.neverSpam) {
+    folder = 'spam';
+    reason = 'sender reported as spam';
   } else if (spammy && !a.neverSpam) {
     folder = 'spam';
     reason = `spam score ${spam!.score}`;
