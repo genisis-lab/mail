@@ -29,11 +29,20 @@ const SPAMMY = [
   /\bbitcoin\b.*\bdouble\b/i,
 ];
 
-/** Parse Authentication-Results headers into {spf, dkim, dmarc}. */
-export function parseAuthResults(p: Parsed): Record<string, string> {
+function headerValues(p: Parsed, name: string): string[] {
+  const raw = p.headers.get(name);
+  return (Array.isArray(raw) ? raw : raw ? [raw] : []).map((v) => (typeof v === 'string' ? v : JSON.stringify(v)));
+}
+
+/**
+ * Parse Authentication-Results headers into {spf, dkim, dmarc}. With `arc`, the topmost
+ * ARC-Authentication-Results comes first: Cloudflare Email Routing records its checks there, and
+ * as the last hop its header is the newest one (anything below it came with the message).
+ */
+export function parseAuthResults(p: Parsed, opts: { arc?: boolean } = {}): Record<string, string> {
   const out: Record<string, string> = {};
-  const raw = p.headers.get('authentication-results');
-  const values = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((v) => (typeof v === 'string' ? v : JSON.stringify(v)));
+  const values = headerValues(p, 'authentication-results');
+  if (opts.arc) values.unshift(...headerValues(p, 'arc-authentication-results').slice(0, 1));
   for (const v of values) {
     for (const key of ['spf', 'dkim', 'dmarc', 'arc']) {
       const m = new RegExp(`\\b${key}=([a-z]+)`, 'i').exec(v);
@@ -133,10 +142,10 @@ async function rspamdScore(raw: Buffer, envelope: { from?: string; rcpt?: string
 export async function checkSpam(
   p: Parsed,
   raw: Buffer,
-  opts: { verdicts?: Record<string, string>; providerScore?: number; mailFrom?: string; rcptTo?: string[] } = {},
+  opts: { verdicts?: Record<string, string>; providerScore?: number; mailFrom?: string; rcptTo?: string[]; arc?: boolean } = {},
 ): Promise<SpamVerdict> {
   const s = getSettings();
-  const auth = { ...parseAuthResults(p), ...(opts.verdicts ?? {}) };
+  const auth = { ...parseAuthResults(p, { arc: opts.arc }), ...(opts.verdicts ?? {}) };
   if (!s['spam.enabled']) return { score: 0, isSpam: false, reasons: [], auth, engine: 'off' };
   const rs = await rspamdScore(raw, { from: opts.mailFrom, rcpt: opts.rcptTo });
   const result = rs ?? builtinScore(p, auth, opts.providerScore);

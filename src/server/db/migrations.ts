@@ -794,6 +794,17 @@ export const migrations: string[] = [
   CREATE INDEX idx_private_link_access ON private_link_access(link_id, recipient, kind);
   CREATE INDEX idx_private_link_access_expiry ON private_link_access(expires_at);
   `,
+
+  // 25: "Report spam" and "Not spam" are remembered per sender, so later mail from them follows.
+  `
+  CREATE TABLE sender_verdicts (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender     TEXT NOT NULL COLLATE NOCASE,
+    verdict    TEXT NOT NULL CHECK (verdict IN ('spam','safe')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, sender)
+  );
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

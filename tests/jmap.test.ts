@@ -277,6 +277,16 @@ describe('organizing', () => {
     expect(twice.notUpdated[id].type).toBe('invalidProperties');
   });
 
+  it('learns from Junk and Not Junk like the web app', async () => {
+    const [id] = await idsIn('inbox');
+    const verdict = () => get<{ verdict: string }>('SELECT verdict FROM sender_verdicts WHERE user_id = ? AND sender = ?', [userId, 'grace@example.com'])?.verdict;
+    await call('Email/set', { update: { [id]: { mailboxIds: { junk: true } } } });
+    expect(verdict()).toBe('spam');
+    // Moving it back takes the report back.
+    await call('Email/set', { update: { [id]: { mailboxIds: { inbox: true } } } });
+    expect(verdict()).toBeUndefined();
+  });
+
   it('turns labels into mailboxes', async () => {
     const created = await call('Mailbox/set', { create: { r: { name: 'Receipts' } } });
     const box = created.created.r.id as string;

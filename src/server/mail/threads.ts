@@ -6,6 +6,7 @@ import { parcelColumn, parcelFor, parcelRows, readFacts, type ParcelRow } from '
 import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
 import { purgeMessages } from './store.js';
+import { rememberSenders } from './sender-verdicts.js';
 
 export const VIEWS: View[] = ['inbox', 'starred', 'snoozed', 'important', 'sent', 'scheduled', 'drafts', 'all', 'spam', 'trash'];
 
@@ -411,10 +412,16 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
         const list = ids(`AND folder = 'trash'`);
         return upd(`folder = CASE WHEN direction = 'out' THEN 'sent' ELSE 'inbox' END, trashed_at = NULL`, list);
       }
-      case 'spam':
-        return upd(`folder = 'spam', snoozed_until = NULL`, ids(`AND direction = 'in'`));
-      case 'notspam':
-        return upd(`folder = 'inbox'`, ids(`AND folder = 'spam'`));
+      case 'spam': {
+        const list = ids(`AND direction = 'in' AND folder != 'spam'`);
+        rememberSenders(userId, list, 'spam');
+        return upd(`folder = 'spam', snoozed_until = NULL`, list);
+      }
+      case 'notspam': {
+        const list = ids(`AND folder = 'spam'`);
+        rememberSenders(userId, list, 'safe');
+        return upd(`folder = 'inbox'`, list);
+      }
       case 'delete': {
         const list = ids(`AND folder IN ('trash','spam')`);
         purgeMessages(list);
