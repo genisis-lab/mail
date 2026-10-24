@@ -111,6 +111,25 @@ function urlToCid(html: string, atts: AttachmentInfo[]) {
   return out;
 }
 
+/** "Sending in 3s…" while undo send waits. Screen readers hear "Sending…" once rather than every tick. */
+function SendCountdown({ until }: { until: number }) {
+  const left = () => Math.max(0, Math.ceil((until - Date.now()) / 1000));
+  const [n, setN] = useState(left);
+  useEffect(() => {
+    const t = setInterval(() => setN(left()), 250);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [until]);
+  return (
+    <>
+      <span aria-hidden="true" className="whitespace-nowrap tabular-nums">
+        {n ? `Sending in ${n}s…` : 'Sending…'}
+      </span>
+      <span className="sr-only">Sending…</span>
+    </>
+  );
+}
+
 /** Reopen a saved draft (or a send that was undone). A PGP-encrypted one stays locked until it's decrypted here. */
 export function draftInit(d: MessageDetail, mailbox: number | null): ComposeInit {
   const encrypted = !d.html && isPgpMessage(d.text);
@@ -488,18 +507,44 @@ export function ComposeForm({
       if (sendAt) {
         toast({ message: `Send scheduled for ${new Date(sendAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`, action: { label: 'Undo', onClick: undo } });
       } else {
-        const ms = r.undoUntil ? Math.max(1500, r.undoUntil - Date.now()) : 4000;
-        toast({
-          message: r.undoUntil ? 'Sending…' : 'Message sent',
-          action: r.undoUntil ? { label: 'Undo', onClick: undo } : undefined,
-          secondary: { label: 'View message', onClick: () => navigate(`/sent`) },
-          duration: ms + 500,
-        });
-        if (r.undoUntil) {
+        const view = { label: 'View message', onClick: () => navigate(`/sent`) };
+        const refresh = (after: number) =>
           setTimeout(() => {
             qc.invalidateQueries({ queryKey: ['threads'] });
             qc.invalidateQueries({ queryKey: ['thread'] });
-          }, ms + 1500);
+          }, after);
+        if (!r.undoUntil) {
+          toast({ message: 'Message sent', secondary: view });
+        } else {
+          const ms = Math.max(1500, r.undoUntil - Date.now());
+          // Undo and Send now each end the wait; otherwise "Message sent" follows the countdown, like Gmail.
+          let settled = false;
+          const sendNow = async () => {
+            settled = true;
+            try {
+              await api.post(`/api/compose/messages/${r.id}/send-now`);
+              toast({ message: 'Message sent', secondary: view });
+              refresh(1500);
+            } catch (err) {
+              toast({ message: (err as Error).message, tone: 'error' });
+            }
+          };
+          toast({
+            message: <SendCountdown until={Date.now() + ms} />,
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                settled = true;
+                void undo();
+              },
+            },
+            secondary: { label: 'Send now', onClick: sendNow },
+            duration: ms + 500,
+          });
+          setTimeout(() => {
+            if (!settled) toast({ message: 'Message sent', secondary: view });
+          }, ms);
+          refresh(ms + 1500);
         }
       }
     } catch (err) {
