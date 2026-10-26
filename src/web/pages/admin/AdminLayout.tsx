@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
-import { Activity, ArrowLeft, Globe, Inbox, LayoutDashboard, Mail, Menu as MenuIcon, PlugZap, ScrollText, Server, Settings2, Ticket, Users, AtSign } from 'lucide-react';
+import { Activity, ArrowLeft, Globe, Inbox, LayoutDashboard, Mail, Menu as MenuIcon, PlugZap, ScrollText, Server, Settings2, ShieldCheck, Ticket, Users, AtSign } from 'lucide-react';
 import { useSession } from '../../lib/session';
 import { LogoMark } from '../../components/Logo';
 import { cx, IconButton, useDialogFocus } from '../../components/ui';
@@ -10,6 +10,7 @@ import { UsersPage } from './Users';
 import { UserDetailPage } from './UserDetail';
 import { DomainsPage, DomainDetail } from './Domains';
 import { AddressesPage } from './Addresses';
+import { DmarcPage } from './Dmarc';
 import { ProvidersPage } from './Providers';
 import { QueuePage, LogsPage } from './Queue';
 import { InvitesPage } from './Invites';
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/domains', label: 'Domains', icon: Globe },
+  { to: '/admin/dmarc', label: 'DMARC reports', icon: ShieldCheck },
   { to: '/admin/addresses', label: 'Aliases & groups', icon: AtSign },
   { to: '/admin/providers', label: 'Providers', icon: PlugZap },
   { to: '/admin/queue', label: 'Mail queue', icon: Mail },
@@ -124,6 +126,7 @@ export function AdminLayout() {
                 <Route path="users/:id" element={<UserDetailPage />} />
                 <Route path="domains" element={<DomainsPage />} />
                 <Route path="domains/:id" element={<DomainDetail />} />
+                <Route path="dmarc" element={<DmarcPage />} />
                 <Route path="addresses" element={<AddressesPage />} />
                 <Route path="providers" element={<ProvidersPage />} />
                 <Route path="queue" element={<QueuePage />} />

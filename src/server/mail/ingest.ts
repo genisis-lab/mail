@@ -17,6 +17,7 @@ import { senderVerdict } from './sender-verdicts.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
 import { readReport } from './dsn.js';
+import { readDmarcReports } from './dmarc.js';
 import { recordDeliveryEvents } from '../services/delivery-events.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
@@ -118,6 +119,11 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
     if (res.catchAll) recordCatchAllHit(r, p.from?.address ?? opts.mailFrom ?? '', p.subject);
     for (const u of res.userIds) if (!userTargets.has(u)) userTargets.set(u, r);
     for (const e of res.external) if (!externalTargets.has(e)) externalTargets.set(e, r);
+  }
+  // DMARC aggregate reports for our domains (sent to postmaster@, which may have no mailbox): keep the data
+  // for the admin's DMARC page. The message itself is still delivered, or refused, like any other.
+  if (!opts.localSenderId && p.attachments.length && rcpts.some((r) => isHostedDomain(domainOf(r)))) {
+    await readDmarcReports(p).catch((err) => log.warn('Could not read DMARC report', err));
   }
   if (!userTargets.size && !externalTargets.size) return result;
   if (opts.source === 'cloudflare-routing') verifyDomainsByRouting(result.accepted);

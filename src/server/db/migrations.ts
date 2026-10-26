@@ -805,6 +805,38 @@ export const migrations: string[] = [
     PRIMARY KEY (user_id, sender)
   );
   `,
+
+  // 26: DMARC aggregate reports sent to postmaster@, one row per report and per sending source in it.
+  `
+  CREATE TABLE dmarc_reports (
+    id               INTEGER PRIMARY KEY,
+    org              TEXT NOT NULL,
+    email            TEXT NOT NULL DEFAULT '',
+    report_id        TEXT NOT NULL,
+    domain           TEXT NOT NULL,
+    policy           TEXT NOT NULL DEFAULT 'none',
+    subdomain_policy TEXT NOT NULL DEFAULT 'none',
+    pct              INTEGER,
+    begin_at         INTEGER NOT NULL,
+    end_at           INTEGER NOT NULL,
+    messages         INTEGER NOT NULL DEFAULT 0,
+    passed           INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL,
+    UNIQUE (org, report_id)
+  );
+  CREATE INDEX idx_dmarc_reports_domain ON dmarc_reports(domain, end_at);
+  CREATE INDEX idx_dmarc_reports_end ON dmarc_reports(end_at);
+  CREATE TABLE dmarc_records (
+    report_id   INTEGER NOT NULL REFERENCES dmarc_reports(id) ON DELETE CASCADE,
+    source_ip   TEXT NOT NULL,
+    count       INTEGER NOT NULL,
+    disposition TEXT NOT NULL,
+    dkim        TEXT NOT NULL,
+    spf         TEXT NOT NULL,
+    header_from TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX idx_dmarc_records_report ON dmarc_records(report_id);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

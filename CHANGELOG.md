@@ -8,6 +8,12 @@ mail carrying one: add to its spam score (as before), always put it in Spam, or 
 which shows in the inbound log with the reason. Every attachment is checked by its last
 extension, so `invoice.pdf.exe` counts as `.exe`.
 
+- **DMARC reports for admins.** The aggregate reports that Gmail, Outlook and others send
+  to `postmaster@` your domain (as gzip, zip or XML attachments) are read on arrival.
+  Admin → DMARC reports shows each domain's pass rate, DKIM and SPF alignment, and the
+  sources failing both. Reports sent twice are kept once and are pruned after 180 days.
+  The report email itself is delivered as before.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential
