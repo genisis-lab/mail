@@ -9,7 +9,8 @@
  *   PORT=80 DATA_DIR=/srv/wren npm run serve
  *
  * Environment: PORT (8787), HOST (0.0.0.0), DATA_DIR (./data), PUBLIC_URL,
- * WREN_SECRET (optional), TRUST_PROXY=1 behind a reverse proxy.
+ * WREN_SECRET (optional), TRUST_PROXY=1 behind a reverse proxy,
+ * WREN_IGNORE_ADMIN_IP_ALLOWLIST=1 to get back into an admin panel you locked to other IPs.
  *
  * Cloudflare-network features (Email Routing, Email Service binding,
  * point-in-time recovery) need a real Cloudflare deployment; self-hosted Wren
@@ -35,6 +36,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const vars = ['WREN_SELF_HOSTED:1'];
 if (process.env.PUBLIC_URL) vars.push(`PUBLIC_URL:${process.env.PUBLIC_URL}`);
 if (process.env.WREN_SECRET) vars.push(`WREN_SECRET:${process.env.WREN_SECRET}`);
+if (process.env.WREN_IGNORE_ADMIN_IP_ALLOWLIST) vars.push(`WREN_IGNORE_ADMIN_IP_ALLOWLIST:${process.env.WREN_IGNORE_ADMIN_IP_ALLOWLIST}`);
 
 const wrangler = spawn(
   process.platform === 'win32' ? 'npx.cmd' : 'npx',

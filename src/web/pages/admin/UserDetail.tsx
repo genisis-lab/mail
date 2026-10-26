@@ -44,15 +44,22 @@ interface Detail {
   addresses: { id: number; address: string; kind: string; enabled: number; can_send: number; created_by: number | null }[];
   shared: { id: number; email: string; name: string; canSend: boolean }[];
   sessions: { id: string; ip: string | null; userAgent: string | null; createdAt: number; lastSeenAt: number }[];
-  signIns: { action: string; ip: string | null; at: number; mfa: boolean; passkey?: boolean }[];
+  signIns: { id: number; ok: boolean; method: string; reason: string | null; ip: string | null; country: string | null; userAgent: string | null; newLocation: boolean; at: number }[];
 }
 
 const FOLDER_NAMES: Record<string, string> = { inbox: 'Inbox', archive: 'Archive', sent: 'Sent', drafts: 'Drafts', spam: 'Spam', trash: 'Trash' };
-const SIGN_IN: Record<string, string> = {
-  'auth.login': 'Signed in',
-  'auth.login_failed': 'Failed sign-in',
-  'auth.password_reset': 'Reset password',
-  'auth.account_setup': 'Set up account',
+const SIGN_IN_METHOD: Record<string, string> = {
+  password: 'Password',
+  passkey: 'Passkey',
+  'password+2fa': 'Password + 2-step',
+  'passkey+2fa': 'Passkey + 2-step',
+  link: 'Reset or setup link',
+};
+const SIGN_IN_FAILURE: Record<string, string> = {
+  wrong_password: 'Wrong password',
+  wrong_code: 'Wrong 2-step code',
+  passkey_rejected: 'Passkey rejected',
+  suspended: 'Refused: account suspended',
 };
 
 /** "Chrome on macOS" from a user-agent string. */
@@ -343,18 +350,19 @@ export function UserDetailPage() {
         <ExportCard userId={u.id} jobs={d.exports} run={call} />
         <LegalHoldCard key={u.legalHold ? 'held' : 'free'} userId={u.id} hold={u.legalHold} run={call} />
 
-        <Card title="Recent sign-in activity" className="lg:col-span-2">
+        <Card title="Sign-ins" description="The last 50 attempts on this account, kept for 90 days. “New location” marks a sign-in from a country (or network) they hadn’t used in that time." className="lg:col-span-2">
           {d.signIns.length === 0 ? (
-            <p className="text-sm text-muted">No sign-ins yet.</p>
+            <p className="text-sm text-muted">No sign-ins in the last 90 days.</p>
           ) : (
             <ul className="-my-1.5 divide-y divide-line text-sm">
-              {d.signIns.map((s, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
-                  {s.action === 'auth.login_failed' ? <UserX className="size-4 text-danger" aria-hidden /> : <CheckCircle2 className="size-4 text-ok" aria-hidden />}
-                  <span className={s.action === 'auth.login_failed' ? 'text-danger' : ''}>{SIGN_IN[s.action] ?? s.action}</span>
-                  {s.mfa && <Badge tone="ok">2-step</Badge>}
-                  {s.passkey && <Badge tone="ok">passkey</Badge>}
-                  <span className="text-muted">{s.ip ?? ''}</span>
+              {d.signIns.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
+                  {s.ok ? <CheckCircle2 className="size-4 text-ok" aria-hidden /> : <UserX className="size-4 text-danger" aria-hidden />}
+                  <span className={s.ok ? '' : 'text-danger'}>{s.ok ? 'Signed in' : (SIGN_IN_FAILURE[s.reason ?? ''] ?? 'Failed')}</span>
+                  <Badge>{SIGN_IN_METHOD[s.method] ?? s.method}</Badge>
+                  {s.newLocation && <Badge tone="warn">new location</Badge>}
+                  <span className="text-muted">{[s.ip, s.country].filter(Boolean).join(' · ')}</span>
+                  {s.userAgent && <span className="text-xs text-muted">{device(s.userAgent)}</span>}
                   <span className="ml-auto text-xs text-muted">{longDate(s.at)}</span>
                 </li>
               ))}

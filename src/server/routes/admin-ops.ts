@@ -27,6 +27,7 @@ import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
 import { closeUserStreams } from '../jmap/push.js';
 import { dmarcSummary, listDmarcReports, RETENTION_DAYS } from '../mail/dmarc.js';
+import { recentSignIns } from '../services/sign-ins.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -399,13 +400,6 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
     'SELECT id, ip, user_agent, created_at, last_seen_at FROM sessions WHERE user_id = ? AND expires_at > ? AND mfa_pending = 0 ORDER BY last_seen_at DESC',
     [id, now()],
   ).map((s) => ({ id: s.id.slice(0, 16), ip: s.ip, userAgent: s.user_agent, createdAt: s.created_at, lastSeenAt: s.last_seen_at }));
-  const signIns = all<any>(
-    `SELECT action, ip, created_at, details FROM audit_log WHERE user_id = ? AND action IN ('auth.login','auth.login_failed','auth.password_reset','auth.account_setup') ORDER BY id DESC LIMIT 25`,
-    [id],
-  ).map((r) => {
-    const d = r.details ? JSON.parse(r.details) : {};
-    return { action: r.action, ip: r.ip, at: r.created_at, mfa: !!d.mfa, passkey: typeof d.passkey === 'string' };
-  });
   const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
   const prefs = getPrefs(id);
   const exports = all<JobRow>(`SELECT * FROM jobs WHERE user_id = ? AND kind = 'export' ORDER BY id DESC LIMIT 5`, [id]).map(jobDto);
@@ -448,7 +442,7 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
     addresses,
     shared: shared.map((b) => ({ id: b.id, email: b.email, name: b.name, canSend: !!b.can_send })),
     sessions,
-    signIns,
+    signIns: recentSignIns(id),
   });
 });
 

@@ -133,6 +133,8 @@ export function AdminSettingsPage() {
         </Card>
       )}
 
+      {tab === 'security' && <AdminIpCard draft={draft} set={set} />}
+
       {tab === 'limits' && (
         <Card title="Default limits" description="Applied to users without a custom value.">
           <div className="grid max-w-xl gap-4 sm:grid-cols-2">
@@ -265,6 +267,36 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
         <Field label="Replies go to" help="Optional. When someone replies to a system email, it goes here (for example support@). Blank: replies go to the Send from address.">
           <Input type="email" value={draft['mail.systemReplyTo']} onChange={(e) => set('mail.systemReplyTo', e.target.value)} placeholder="No Reply-To" />
         </Field>
+      </div>
+    </Card>
+  );
+}
+
+/** Lock the admin panel to known networks. Saving a list that leaves out your own IP is refused by the server. */
+function AdminIpCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
+  const ip = useQuery({ queryKey: ['admin', 'settings', 'ip'], queryFn: () => api.get<{ clientIp: string }>('/api/admin/settings').then((r) => r.clientIp) });
+  const list = String(draft['security.adminIpAllowlist'] ?? '');
+  const mine = ip.data || '';
+  const listed = list.split(/[\s,]+/).includes(mine);
+  return (
+    <Card
+      className="mt-6"
+      title="Admin panel access"
+      description="Only allow the admin panel from these IP addresses or ranges, for every administrator. Leave empty to allow it from anywhere. Mail and everyone’s own settings are not affected."
+    >
+      <div className="grid max-w-xl gap-3">
+        <Field label="Allowed IPs and ranges" help="One per line (or separated by commas). IPv4 and IPv6, single addresses or CIDR ranges such as 203.0.113.0/24 or 2001:db8::/48.">
+          <Textarea value={list} onChange={(e) => set('security.adminIpAllowlist', e.target.value)} rows={4} className="font-mono" placeholder={'203.0.113.7\n198.51.100.0/24'} spellCheck={false} />
+        </Field>
+        <p className="flex flex-wrap items-center gap-2 text-[13px] text-muted">
+          Your current IP address: <b className="font-mono text-fg">{mine || 'unknown'}</b>
+          {mine && !listed && (
+            <Button size="sm" variant="ghost" onClick={() => set('security.adminIpAllowlist', list.trim() ? `${list.trim()}\n${mine}` : mine)}>
+              Add it
+            </Button>
+          )}
+        </p>
+        <p className="text-xs text-muted">Wren won’t save a list that leaves out your current address. If you get locked out anyway (your address changed), see “Locked out of the admin panel” in the README.</p>
       </div>
     </Card>
   );

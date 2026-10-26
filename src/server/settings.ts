@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   'security.require2fa': 'none' as 'none' | 'admins' | 'all',
   'security.sessionDays': 30,
   'security.maxLoginAttempts': 10,
+  /** IPs and CIDR ranges the admin panel answers from, one per line. Empty: anywhere. */
+  'security.adminIpAllowlist': '',
 
   'limits.defaultQuotaMb': 10240,
   'limits.maxAttachmentMb': 25,

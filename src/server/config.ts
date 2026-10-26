@@ -19,6 +19,8 @@ export const config = {
   publicUrlPinned: false,
   /** Pictures in mail load through the Worker's image proxy (not when self-hosted). */
   imageProxy: true,
+  /** WREN_IGNORE_ADMIN_IP_ALLOWLIST: the way back in for an admin locked out by Settings → Security. */
+  ignoreAdminIpAllowlist: false,
 };
 
 export type Config = typeof config;
@@ -29,5 +31,6 @@ export function initConfig(vars: Vars, opts: { secret: string }) {
   config.publicUrlPinned = !!pinned;
   if (pinned) config.publicUrl = pinned.replace(/\/+$/, '');
   config.imageProxy = !/^(1|true)$/i.test(str(vars.WREN_SELF_HOSTED) ?? '');
+  config.ignoreAdminIpAllowlist = /^(1|true)$/i.test(str(vars.WREN_IGNORE_ADMIN_IP_ALLOWLIST) ?? '');
   if (!config.secret || config.secret.length < 16) throw new Error('WREN_SECRET must be at least 16 characters');
 }

@@ -31,6 +31,7 @@ import { removeSubscription } from '../services/push.js';
 import { inboxSummary } from '../mail/threads.js';
 import { finishLogin, loginOptions } from '../services/passkeys.js';
 import { noteSignIn } from '../services/signin-alerts.js';
+import { recordSignIn } from '../services/sign-ins.js';
 import { WebAuthnError } from '../lib/webauthn.js';
 
 export const authRoutes = new Hono<AppEnv>();
@@ -102,9 +103,13 @@ authRoutes.post('/login', async (c) => {
   const ok = user ? await verifyPassword(password, user.password_hash) : await verifyPassword(password, 'scrypt$16384$8$1$AAAA$AAAA');
   if (!user || !ok) {
     audit(user?.id ?? null, 'auth.login_failed', normalizeEmail(email), undefined, ip);
+    if (user) recordSignIn(c, user.id, 'password', 'wrong_password');
     throw unauthorized('Incorrect email or password');
   }
-  if (user.status !== 'active') throw forbidden('This account is suspended. Contact your administrator.');
+  if (user.status !== 'active') {
+    recordSignIn(c, user.id, 'password', 'suspended');
+    throw forbidden('This account is suspended. Contact your administrator.');
+  }
   clearRateLimit(`login:user:${normalizeEmail(email)}`);
   if (user.totp_enabled) {
     createSession(c, user.id, true);
@@ -113,6 +118,7 @@ authRoutes.post('/login', async (c) => {
   createSession(c, user.id);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, undefined, ip);
+  recordSignIn(c, user.id, 'password');
   await noteSignIn(c, user, 'your password');
   return c.json({ user: sessionUser(user) });
 });
@@ -123,12 +129,17 @@ authRoutes.post('/mfa', async (c) => {
   if (!pending) throw unauthorized('Your sign-in expired. Please start again.');
   rateLimit(`mfa:${pending.user.id}`, 8, 15 * 60_000);
   const { user, session } = pending;
-  if (!checkTwoStepCode(user, code, clientIp(c))) throw unauthorized('That code is not valid');
+  const method = pending.passkey ? 'passkey+2fa' : 'password+2fa';
+  if (!checkTwoStepCode(user, code, clientIp(c))) {
+    recordSignIn(c, user.id, method, 'wrong_code');
+    throw unauthorized('That code is not valid');
+  }
   clearRateLimit(`mfa:${user.id}`);
   createSession(c, user.id);
   run('DELETE FROM sessions WHERE id = ?', [session.id]);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { mfa: true }, clientIp(c));
+  recordSignIn(c, user.id, method);
   await noteSignIn(c, user, pending.passkey ? 'a passkey and 2-step verification' : 'your password and 2-step verification');
   return c.json({ user: sessionUser(user) });
 });
@@ -156,13 +167,19 @@ authRoutes.post('/passkey', async (c) => {
   } catch (err) {
     if (err instanceof WebAuthnError) {
       audit(null, 'auth.login_failed', 'passkey', { reason: err.message }, ip);
+      // A passkey registered here that didn't check out: an attempt on that person's account.
+      const owner = get<{ user_id: number }>('SELECT user_id FROM passkeys WHERE credential_id = ?', [input.id]);
+      if (owner) recordSignIn(c, owner.user_id, 'passkey', 'passkey_rejected');
       throw unauthorized(err.message);
     }
     throw err;
   }
   const { user, userVerified, passkeyName } = result;
   if (user.kind === 'shared') throw unauthorized('Shared mailboxes can’t sign in');
-  if (user.status !== 'active') throw forbidden('This account is suspended. Contact your administrator.');
+  if (user.status !== 'active') {
+    recordSignIn(c, user.id, 'passkey', 'suspended');
+    throw forbidden('This account is suspended. Contact your administrator.');
+  }
   // A passkey that checked a PIN or biometric is two factors; one that didn't still needs the 2-step code.
   if (user.totp_enabled && !userVerified) {
     createSession(c, user.id, true, true);
@@ -171,6 +188,7 @@ authRoutes.post('/passkey', async (c) => {
   createSession(c, user.id);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { passkey: passkeyName }, ip);
+  recordSignIn(c, user.id, 'passkey');
   await noteSignIn(c, user, 'a passkey');
   return c.json({ user: sessionUser(user) });
 });
@@ -237,6 +255,7 @@ authRoutes.post('/reset', async (c) => {
   if (user.totp_enabled) return c.json({ ok: true, signedIn: false });
   createSession(c, user.id);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
+  recordSignIn(c, user.id, 'link');
   return c.json({ ok: true, signedIn: true, user: sessionUser(getUser(user.id)!) });
 });
 

@@ -218,7 +218,9 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   for critical ones, and optionally an outside address.
 - Users: roles, suspend, quotas, daily send limits, 2FA and passkey reset, sign out
   everywhere; bulk actions; CSV import with a dry-run check and CSV export; a detail page
-  with storage, addresses, devices and sign-in history. New people get an emailed link to
+  with storage, addresses, devices and sign-in history (the last 50 attempts, failures,
+  country and "new location" flags; the Overview counts failed and new-location sign-ins).
+  New people get an emailed link to
   choose their own password, and an optional welcome message.
   - **Change someone's address** (their sign-in name) on any hosted domain, keeping the
     old one as an alias if you like; they get a note in their inbox.
@@ -253,7 +255,8 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   Email Service). Addresses that hard-bounce or complain go on a suppression list and
   aren't mailed again until removed. See [docs/providers.md](docs/providers.md).
 - Invites, emailed for you; registration policy (closed, invite, open).
-- Security policies: required 2FA, password length, session length, lockout.
+- Security policies: required 2FA, password length, session length, lockout, and an
+  optional IP allowlist for the admin panel (see below if it locks you out).
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
 - Risky attachment types (.exe, .js, … editable): add to the spam score, always go to Spam, or
   refuse the message. Matched on the last extension, so `invoice.pdf.exe` counts.
@@ -273,6 +276,13 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
 - CSP, and sandboxed message rendering with no scripts.
 - Pictures in mail load through an image proxy: only links Wren signed, only images,
   never private addresses.
+
+**Locked out of the admin panel?** Wren won't save an admin IP allowlist that leaves out
+the address you're saving it from, but your address can change later. Set the variable
+`WREN_IGNORE_ADMIN_IP_ALLOWLIST=1` (Cloudflare: `echo 1 | npx wrangler secret put
+WREN_IGNORE_ADMIN_IP_ALLOWLIST`; Docker or `npm run serve`: an environment variable, then
+restart), fix or clear the list in **Admin → Settings → Security**, then remove the
+variable again (`npx wrangler secret delete WREN_IGNORE_ADMIN_IP_ALLOWLIST`).
 
 **Developer API.** `POST /api/v1/send` with `Authorization: Bearer wren_…`.
 

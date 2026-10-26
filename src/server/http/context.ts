@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { get, now, run } from '../db/index.js';
 import { randomToken, sha256 } from '../lib/crypto.js';
 import { badRequest, forbidden, HttpError, tooMany, unauthorized } from '../lib/http.js';
+import { ipInList, parseIpList } from '../lib/ip.js';
 import { getSettings } from '../settings.js';
 import { getUser, mustChangePassword, mustSetup2fa, type UserRow } from '../services/users.js';
 
@@ -327,6 +328,18 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
 export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = c.get('user');
   if (!user || (user.role !== 'admin' && user.role !== 'owner')) throw forbidden('Administrator access required');
+  await next();
+};
+
+/** Whether the admin panel answers this address under an allowlist (by default, the one in Settings → Security). */
+export function adminIpAllowed(ip: string, list: string = getSettings()['security.adminIpAllowlist']): boolean {
+  if (config.ignoreAdminIpAllowlist || !list.trim()) return true;
+  return ipInList(ip, parseIpList(list).ranges);
+}
+
+/** With an admin IP allowlist set, admin routes refuse every other address, whatever the role. */
+export const requireAdminIp: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!adminIpAllowed(clientIp(c))) throw new HttpError(403, 'The admin panel can’t be used from this network. Ask an administrator to add your IP address to the allowlist.', 'admin_ip_blocked');
   await next();
 };
 
