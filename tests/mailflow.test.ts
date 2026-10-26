@@ -242,7 +242,7 @@ describe('sending', () => {
     // Undo before the queue runs turns it back into a draft.
     const d2 = await saveDraft(alice, { to: 'bob@wren.test', subject: 'Oops', html: '<p>wrong</p>' });
     await sendDraft(alice, d2, { undoSeconds: 30 });
-    expect(cancelSend(alice, d2)).toBe(true);
+    expect(await cancelSend(alice, d2)).toBe(true);
     expect(get<any>('SELECT folder, status FROM messages WHERE id = ?', [d2])).toMatchObject({ folder: 'drafts', status: 'draft' });
     // An undone message can't be sent now.
     expect(sendNow(alice, d2)).toBe(false);
@@ -254,7 +254,7 @@ describe('sending', () => {
     expect(sendNow(alice, d3)).toBe(true);
     await processQueue();
     expect(get<any>('SELECT status FROM messages WHERE id = ?', [d3]).status).toBe('sent');
-    expect(cancelSend(alice, d3)).toBe(false);
+    expect(await cancelSend(alice, d3)).toBe(false);
     expect(sendNow(alice, d3)).toBe(true); // already on its way: nothing to do
   });
 

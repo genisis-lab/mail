@@ -305,8 +305,9 @@ method('EmailSubmission/set', CAP.submission, async (args, ctx) => {
         continue;
       }
       if (r.status !== 'queued') throw new SetError('cannotUnsend', 'It has already been sent');
-      if (!cancelSend(userId, r.message_id)) throw new SetError('cannotUnsend', 'It has already been sent');
-      emailOf.set(id, emailId(r.m));
+      if (!(await cancelSend(userId, r.message_id))) throw new SetError('cannotUnsend', 'It has already been sent');
+      // Taking a domain footer off makes it a new email.
+      emailOf.set(id, emailId({ ...r.m, jmap_rev: get<{ jmap_rev: number }>('SELECT jmap_rev FROM messages WHERE id = ?', [r.m.id])!.jmap_rev }));
       updated[id] = null;
     } catch (err) {
       notUpdated[id] = asSetError(err);

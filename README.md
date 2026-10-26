@@ -234,7 +234,9 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   current MX without asking. Catch-all activity lists the addresses the catch-all has
   been taking, so you can block one or make it a real alias. A sending-only subdomain
   (say `contact.example.com`) needs no MX, takes its DMARC from the parent domain, and
-  shows whether your provider has it verified.
+  shows whether your provider has it verified. An optional plain-text footer (a
+  disclaimer, say) goes on the end of mail people send from the domain, but never on
+  signed or encrypted mail, private links or Wren's own system mail.
 - DMARC reports: the daily aggregate reports receivers send to `postmaster@` are read
   as they arrive (gzip, zip or plain XML), showing each domain's pass rate and the
   servers sending as it without passing DKIM or SPF. Kept for 180 days.

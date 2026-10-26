@@ -5,7 +5,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, Cloud, Globe, MinusCirc
 import { api } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
-import { Badge, Button, Card, cx, Empty, Field, IconButton, Input, Modal, Select, Spinner, Switch } from '../../components/ui';
+import { Badge, Button, Card, cx, Empty, Field, IconButton, Input, Modal, Select, Spinner, Switch, Textarea } from '../../components/ui';
 import { CopyField, PageHeader, StatusDot, Table } from './common';
 import { useDomains } from './Users';
 import { useProviders } from './Providers';
@@ -322,6 +322,7 @@ export function DomainDetail() {
                 </Select>
               </Field>
               <DkimField value={d.dkimSelector ?? ''} onSave={(v) => void update({ dkimSelector: v || null })} />
+              <FooterField key={d.footerText ?? ''} value={d.footerText ?? ''} onSave={(v) => void update({ footerText: v })} />
               <SenderStatus domain={d.name} />
             </div>
           </Card>
@@ -484,6 +485,20 @@ function DkimField({ value, onSave }: { value: string; onSave: (v: string) => vo
         <Input value={v} onChange={(e) => setV(e.target.value)} placeholder="Provider default" />
         <Button disabled={v === value} onClick={() => onSave(v)}>
           Save
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+function FooterField({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  return (
+    <Field label="Footer" help="Plain text added to the end of mail sent from this domain, such as a disclaimer. Not added to signed or encrypted mail. Leave empty for none.">
+      <div className="space-y-2">
+        <Textarea value={v} onChange={(e) => setV(e.target.value)} rows={3} maxLength={2000} placeholder="No footer" />
+        <Button disabled={v === value} onClick={() => onSave(v)}>
+          Save footer
         </Button>
       </div>
     </Field>
