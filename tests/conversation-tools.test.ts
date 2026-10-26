@@ -31,6 +31,52 @@ beforeAll(async () => {
 });
 
 describe('one-time codes', () => {
+  const signInAlert = `New sign-in to your account
+Your account was just signed in to from a device we haven't seen before.
+Safari on macOS
+Mon, 26 Oct 2026 03:16:12 GMT
+2605:a200:3000:5bce:bdc2:db5e:c93a:a729, JM
+Signed in with your password`;
+
+  it('does not mistake an IP address in a sign-in alert for a code', () => {
+    expect(findOneTimeCode('New sign-in: Safari on macOS', signInAlert)).toBeNull();
+  });
+
+  it.each([
+    '2605:a200:3000:5bce:bdc2:db5e:c93a:a729',
+    'abcd:1234:5678:abcd:abcd:abcd:abcd:abcd',
+    'fe80::1234',
+    '::1234',
+    '[fe80::1234%eth0]',
+    '::ffff:192.0.2.1',
+    '192.0.2.1',
+  ])('ignores address %s in every code-search path', (address) => {
+    expect(findOneTimeCode(`Sign-in from ${address}`, null)).toBeNull();
+    expect(findOneTimeCode('Account alert', `Security alert from ${address}`)).toBeNull();
+    expect(findOneTimeCode('Your verification code', `${'Details. '.repeat(20)}${address}`)).toBeNull();
+    expect(findOneTimeCode('Your verification code', `IP: ${address}\nCode:4821`)).toBe('4821');
+  });
+
+  it('does not offer an IP fragment in the list, message or notification', async () => {
+    const id = await receive({ from: 'Security <security@ext.example>', subject: 'New sign-in: Safari on macOS', body: signInAlert });
+    expect(msg(id).otp).toBeNull();
+    expect((await inbox()).find((t) => t.subject === 'New sign-in: Safari on macOS').code).toBeNull();
+    expect((await h.call('GET', `/api/mail/messages/${msg(id).id}`)).body.code).toBeNull();
+    expect((await h.call('GET', '/api/me/notifications')).body.items.find((i: any) => i.subject === 'New sign-in: Safari on macOS').code).toBeNull();
+  });
+
+  it.each(['text', 'html'])('repairs a cached false code when an existing %s message is opened', async (format) => {
+    const subject = `Existing ${format} sign-in alert`;
+    const id = await receive({ from: 'Security <security@ext.example>', subject, body: signInAlert });
+    const row = msg(id);
+    run('UPDATE messages SET otp = ? WHERE id = ?', ['2605', row.id]);
+    if (format === 'html') run('UPDATE messages SET text_body = NULL, html_body = ? WHERE id = ?', [`<p>${signInAlert}</p>`, row.id]);
+    expect((await h.call('GET', `/api/mail/messages/${row.id}`)).body.code).toBeNull();
+    expect(msg(id).otp).toBeNull();
+    expect((await inbox()).find((t) => t.subject === subject).code).toBeNull();
+    expect((await h.call('GET', '/api/me/notifications')).body.items.find((i: any) => i.subject === subject).code).toBeNull();
+  });
+
   it('finds sign-in codes and leaves other numbers alone', () => {
     expect(findOneTimeCode('980708 is your Whop sign-in code', 'Use this code to sign in')).toBe('980708');
     expect(findOneTimeCode('Your verification code', 'Enter 4821 to continue.')).toBe('4821');

@@ -2,6 +2,8 @@ import type { Addr, AttachmentInfo, Category, Folder, MessageDetail, ThreadDetai
 import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { userAddresses } from '../services/users.js';
 import { loadBody } from './body.js';
+import { findOneTimeCode } from './otp.js';
+import { htmlToText } from './parse.js';
 import { parcelColumn, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
 import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
@@ -222,6 +224,15 @@ function attachmentsFor(messageIds: number[]): Map<number, AttachmentInfo[]> {
 }
 
 export function toDetail(r: any, atts: AttachmentInfo[], labels: number[]): MessageDetail {
+  // Bodies have been loaded before serializing details. Repair codes cached by
+  // older detectors when a message is opened, including HTML-only messages.
+  if (r.direction === 'in' && r.otp) {
+    const code = findOneTimeCode(r.subject, r.text_body ?? (r.html_body ? htmlToText(r.html_body) : null));
+    if (code !== r.otp) {
+      run('UPDATE messages SET otp = ? WHERE id = ?', [code, r.id]);
+      r.otp = code;
+    }
+  }
   return {
     id: r.id,
     threadId: r.thread_id,

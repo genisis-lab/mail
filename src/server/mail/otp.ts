@@ -10,6 +10,15 @@
 const KEYWORDS =
   /\b(codes?|passcodes?|pass codes?|otp|one[- ]time|verification|verify|confirmation|security|sign[- ]?in|log[- ]?in|2fa|two[- ]factor|authenticat\w*|pin|token|código|code de|bestätigungscode)\b/i;
 const CODE = /(?<![\w.,$£€-])(\d{3}[ -]\d{3}|\d{4,8})(?![\w%]|[.,]\d)/g;
+// Colon-separated address groups are not codes, even in a sign-in email.
+// Include compressed IPv6, IPv4 suffixes and zone IDs. Requiring two colons
+// preserves labels such as "Code:4821". IPv4 is excluded by CODE's dot boundaries.
+const IPV6 = /(?<![\w:])(?:[a-f\d]{0,4}:){2,}[a-f\d:.]*(?:%[\w.-]+)?/gi;
+
+function withoutIpAddresses(text: string): string {
+  // Keep distances intact for the nearby-keyword check below.
+  return text.replace(IPV6, (address) => ' '.repeat(address.length));
+}
 
 /** `before`: the text just before the number. */
 function plausible(code: string, before: string): boolean {
@@ -22,11 +31,12 @@ function plausible(code: string, before: string): boolean {
 
 /** The code, digits only ("980708"), or null. */
 export function findOneTimeCode(subject: string, text: string | null): string | null {
+  subject = withoutIpAddresses(subject);
   // The subject first: "980708 is your Whop sign-in code", "Your code: 4821".
   if (KEYWORDS.test(subject)) {
     for (const m of subject.matchAll(CODE)) if (plausible(m[1], subject.slice(0, m.index))) return m[1].replace(/\D/g, '');
   }
-  const body = (text ?? '').slice(0, 3000);
+  const body = withoutIpAddresses((text ?? '').slice(0, 3000));
   if (!KEYWORDS.test(subject) && !KEYWORDS.test(body)) return null;
   // In the body, prefer a code that sits near one of the words (within a short window)…
   for (const m of body.matchAll(CODE)) {
