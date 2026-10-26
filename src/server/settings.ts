@@ -28,6 +28,11 @@ export const DEFAULT_SETTINGS = {
   'spam.rspamdUrl': '',
   'spam.rspamdPassword': '',
 
+  /** Attachment extensions treated as risky on inbound mail (matched on the final extension). */
+  'attachments.blockedTypes': ['exe', 'scr', 'js', 'vbs', 'bat', 'cmd', 'jar', 'msi', 'com', 'pif'] as string[],
+  /** What a risky attachment does: add to the spam score, always go to Spam, or refuse the message. */
+  'attachments.action': 'score' as 'score' | 'spam' | 'reject',
+
   'mail.localDelivery': true,
   'mail.allowExternalForwarding': true,
   'mail.maxRetries': 6,

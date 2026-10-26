@@ -813,6 +813,16 @@ adminRoutes.put('/settings', async (c) => {
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');
+  if ('attachments.action' in input && !['score', 'spam', 'reject'].includes(String(input['attachments.action']))) throw badRequest('Pick what happens to risky attachments');
+  if ('attachments.blockedTypes' in input) {
+    const list = input['attachments.blockedTypes'];
+    if (!Array.isArray(list)) throw badRequest('Blocked attachment types must be a list');
+    const types = [...new Set(list.map((t) => String(t).trim().replace(/^\.+/, '').toLowerCase()).filter(Boolean))];
+    const bad = types.find((t) => !/^[a-z0-9]{1,16}$/.test(t));
+    if (bad) throw badRequest(`“${bad.slice(0, 20)}” isn’t a file extension: use letters and digits only`);
+    if (types.length > 100) throw badRequest('Block up to 100 attachment types');
+    input['attachments.blockedTypes'] = types;
+  }
   if ('mail.systemFrom' in input) {
     const from = String(input['mail.systemFrom'] ?? '').trim().toLowerCase();
     if (from && !isEmail(from)) throw badRequest('Enter a valid address to send system emails from');

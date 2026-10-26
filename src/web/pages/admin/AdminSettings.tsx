@@ -365,6 +365,7 @@ function SpamTab({ draft, set }: { draft: S; set: (k: string, v: unknown) => voi
           </Field>
         </div>
       </Card>
+      <AttachmentPolicyCard draft={draft} set={set} />
       <Card title="Server-wide blocklist" description="Mail from these senders or domains is rejected for everyone.">
         <form
           className="mb-4 flex max-w-xl gap-2"
@@ -403,5 +404,75 @@ function SpamTab({ draft, set }: { draft: S; set: (k: string, v: unknown) => voi
         )}
       </Card>
     </div>
+  );
+}
+
+/** Risky attachment types on incoming mail, and what happens to a message carrying one. */
+function AttachmentPolicyCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
+  const [ext, setExt] = useState('');
+  const defaults = useQuery({ queryKey: ['admin', 'settings', 'defaults'], queryFn: () => api.get<{ defaults: S }>('/api/admin/settings').then((r) => r.defaults) });
+  const types: string[] = draft['attachments.blockedTypes'] ?? [];
+  const defaultTypes: string[] | undefined = defaults.data?.['attachments.blockedTypes'];
+  const add = () => {
+    const added = ext.split(/[\s,]+/).map((t) => t.replace(/^\.+/, '').toLowerCase()).filter((t) => t && !types.includes(t));
+    if (added.length) set('attachments.blockedTypes', [...new Set([...types, ...added])]);
+    setExt('');
+  };
+  return (
+    <Card title="Risky attachments" description="Incoming mail with an attachment whose last extension is on this list (so invoice.pdf.exe counts as .exe). Archives aren’t opened.">
+      <div className="grid max-w-xl gap-4">
+        <Field label="When a message has one">
+          <Select value={draft['attachments.action']} onChange={(e) => set('attachments.action', e.target.value)}>
+            <option value="score">Add to its spam score</option>
+            <option value="spam">Always put it in Spam</option>
+            <option value="reject">Refuse the message</option>
+          </Select>
+        </Field>
+        <div>
+          <p className="mb-1.5 text-[13px] font-medium">Blocked types</p>
+          {types.length === 0 ? (
+            <p className="mb-3 text-sm text-muted">No types blocked.</p>
+          ) : (
+            <ul className="mb-3 flex flex-wrap gap-1.5" aria-label="Blocked attachment types">
+              {types.map((t) => (
+                <li key={t} className="flex items-center gap-0.5 rounded-lg bg-panel2 py-0.5 pr-0.5 pl-2 text-sm">
+                  .{t}
+                  <IconButton size="sm" label={`Remove .${t}`} onClick={() => set('attachments.blockedTypes', types.filter((x) => x !== t))}>
+                    <Trash2 className="size-3.5" />
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <Input
+              value={ext}
+              onChange={(e) => setExt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  add();
+                }
+              }}
+              placeholder="e.g. iso or .lnk"
+              aria-label="Extension to block"
+            />
+            <Button onClick={add}>Add</Button>
+            {defaultTypes && (
+              <Button
+                variant="ghost"
+                disabled={JSON.stringify(types) === JSON.stringify(defaultTypes) && draft['attachments.action'] === defaults.data?.['attachments.action']}
+                onClick={() => {
+                  set('attachments.blockedTypes', defaultTypes);
+                  set('attachments.action', defaults.data!['attachments.action']);
+                }}
+              >
+                Reset to defaults
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }

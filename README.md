@@ -247,6 +247,8 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
 - Invites, emailed for you; registration policy (closed, invite, open).
 - Security policies: required 2FA, password length, session length, lockout.
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
+- Risky attachment types (.exe, .js, … editable): add to the spam score, always go to Spam, or
+  refuse the message. Matched on the last extension, so `invoice.pdf.exe` counts.
 - System emails (invites, password links, alerts) from the address you choose, plain
   and personal so they stay out of spam; invites reply to the admin who sent them.
 - Branding; announcement emails; audit log.

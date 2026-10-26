@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Attachment policy.** Settings → Spam & blocking has a list of risky attachment types
+(by default the executables that already added to the spam score) and what to do with
+mail carrying one: add to its spam score (as before), always put it in Spam, or refuse it,
+which shows in the inbound log with the reason. Every attachment is checked by its last
+extension, so `invoice.pdf.exe` counts as `.exe`.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential
