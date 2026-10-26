@@ -19,6 +19,8 @@ they can't create new ones; everyone else is unaffected. The Users list marks th
 
 ## Connecting an app
 
+Wren has its own Mac app, which works this way: see [apps/macos](../apps/macos).
+
 1. In Wren, open **Settings → Security → Mail apps** and create an app password, one
    per app or device.
 2. In the app, enter:

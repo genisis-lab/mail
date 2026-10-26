@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Wren for Mac.** A native Mac app (SwiftUI, macOS 14 or later) in `apps/macos`, built
+around Mail's layout: mailboxes, labels and shared mailboxes in a sidebar, conversations,
+and a reader. It signs in with an app password over JMAP and keeps it in the keychain,
+updates live, notifies you of new mail, and shows HTML mail with scripts off and remote
+content blocked until you ask. Archive, Trash, Junk, flag, labels and snooze work from the
+toolbar, menus, swipes and right-click, with undo; compose windows reply, forward, attach,
+send now or later, and save to Drafts when closed. Build it with `apps/macos/bundle.sh`.
+
 **Attachment policy.** Settings → Spam & blocking has a list of risky attachment types
 (by default the executables that already added to the spam score) and what to do with
 mail carrying one: add to its spam score (as before), always put it in Spam, or refuse it,

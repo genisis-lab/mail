@@ -15,3 +15,18 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+  mac-app:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test
+        # Compiler errors are also listed as annotations, so they show on the pull request.
+        run: |
+          set -o pipefail
+          { swift build --build-tests && swift test --skip-build; } 2>&1 | tee build.log || {
+            grep -E '^/[^:]+:[0-9]+:[0-9]+: error: ' build.log | sort -u | sed -E 's|^([^:]+):([0-9]+):([0-9]+): error: (.*)$|::error file=\1,line=\2,col=\3::\4|'
+            exit 1
+          }
