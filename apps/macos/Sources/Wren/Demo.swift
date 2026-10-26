@@ -6,6 +6,7 @@ import WrenKit
 struct Demo: ViewModifier {
     @Environment(MailStore.self) private var store
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     private let env = ProcessInfo.processInfo.environment
 
     func body(content: Content) -> some View {
@@ -66,6 +67,10 @@ struct Demo: ViewModifier {
 
         await select { $0.count > 1 }
         shoot("3-thread", in: dir)
+        let menu = NSApp.mainMenu?.items.first { $0.title == "Message" }?.submenu
+        menu?.update()
+        let states = (menu?.items ?? []).map { "\($0.title): \($0.isEnabled)" }.joined(separator: "\n")
+        try? states.write(to: dir.appending(path: "\(env["WREN_DEMO_TAG"] ?? "light")-menu.txt"), atomically: true, encoding: .utf8)
         await select { $0.email.subject?.contains("variable") == true }
         shoot("4-html", in: dir)
         await select { $0.email.subject?.contains("Quarterly") == true }
@@ -76,7 +81,7 @@ struct Demo: ViewModifier {
         await wait(2.5)
         shoot("6-compose", in: dir)
 
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openSettings()
         await wait(2)
         shoot("7-settings", in: dir)
         exit(0)
