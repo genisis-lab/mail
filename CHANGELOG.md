@@ -39,6 +39,13 @@ addresses and CIDR ranges (IPv4 and IPv6), for every role. Wren shows your curre
 won't save a list that leaves it out. Locked out anyway: set
 `WREN_IGNORE_ADMIN_IP_ALLOWLIST=1`, fix the list, and remove the variable (see README).
 
+- **Sending pauses on unusual activity.** A compromised-account guard pauses someone's
+  sending when they go over an hourly limit (100 messages by default) or when 20% of the
+  last day's mail hard-bounced (once they've sent 20). Sends from the web, mail apps and
+  API keys are refused and queued or scheduled mail is held; reading and receiving keep
+  working and the person sees a notice. Admins get an alert and resume sending, or pause
+  it by hand, from the person's page. Settings → Limits has the switch and thresholds.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

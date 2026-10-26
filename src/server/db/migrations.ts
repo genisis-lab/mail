@@ -870,6 +870,15 @@ export const migrations: string[] = [
   CREATE INDEX idx_sign_ins_user ON sign_ins(user_id, created_at DESC);
   CREATE INDEX idx_sign_ins_created ON sign_ins(created_at);
   `,
+
+  // 30: sending paused (compromised-account guard, or an admin): the person can't send and
+  //     their queued mail is held until an admin resumes it. Reading and receiving go on.
+  //     After a resume the guard counts only what was sent since.
+  `
+  ALTER TABLE users ADD COLUMN send_paused_at INTEGER;
+  ALTER TABLE users ADD COLUMN send_paused_reason TEXT;
+  ALTER TABLE users ADD COLUMN send_resumed_at INTEGER;
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

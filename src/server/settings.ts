@@ -22,6 +22,13 @@ export const DEFAULT_SETTINGS = {
   'limits.defaultSendPerDay': 500,
   'limits.maxRecipients': 100,
 
+  /** Compromised-account guard: pause someone's sending on a burst or many bounces. */
+  'guard.enabled': true,
+  /** Messages one person may send in an hour (counted like the daily limit). */
+  'guard.maxPerHour': 100,
+  /** Hard bounces, as a % of the last 24 hours' messages; checked from 20 messages on. */
+  'guard.bounceRatePercent': 20,
+
   'retention.trashDays': 30,
   'retention.spamDays': 30,
 

@@ -2,7 +2,7 @@ import { all, get, getMeta, now, run, setMeta } from './db/index.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
 import { blobEncryptionDue, collectGarbage, continueBlobEncryption } from './mail/blobs.js';
-import { processQueue } from './mail/outbound.js';
+import { NOT_HELD, processQueue } from './mail/outbound.js';
 import { NOT_ON_HOLD, purgeMessages } from './mail/store.js';
 import { pruneLinks } from './mail/private.js';
 import { dueFollowUps, wakeSnoozed } from './mail/threads.js';
@@ -10,6 +10,7 @@ import { continueSearchRebuild, searchRebuildPending } from './services/backup.j
 import { pruneTokens } from './services/tokens.js';
 import { pruneSignIns } from './services/sign-ins.js';
 import { runAlertChecks } from './services/alerts.js';
+import { checkSendGuard } from './services/send-guard.js';
 import { autoCheckDomains } from './services/dns.js';
 import { jobsDueAt, runJobs } from './services/jobs.js';
 import { pruneJobs } from './services/mail-import.js';
@@ -70,6 +71,7 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
   if (ts - lastRun('alerts') > 10 * 60_000) {
     setMeta('last_alerts', ts);
     await runAlertChecks().catch((err) => log.warn('Alert checks failed', err));
+    await checkSendGuard().catch((err) => log.warn('Sending guard check failed', err));
   }
   if (ts - lastRun('dns') > HOUR) {
     setMeta('last_dns', ts);
@@ -87,7 +89,7 @@ export async function runDueWork(opts: { gc?: boolean } = {}) {
 /** When background work should next run (used to schedule Workers alarms). */
 export function nextWakeAt(): number {
   const ts = now();
-  const queue = get<{ t: number | null }>(`SELECT MIN(next_attempt_at) AS t FROM outbox WHERE status = 'queued'`)?.t ?? Infinity;
+  const queue = get<{ t: number | null }>(`SELECT MIN(next_attempt_at) AS t FROM outbox WHERE status = 'queued' AND ${NOT_HELD}`)?.t ?? Infinity;
   const snooze = get<{ t: number | null }>(`SELECT MIN(snoozed_until) AS t FROM messages WHERE snoozed_until IS NOT NULL`)?.t ?? Infinity;
   const followUp = get<{ t: number | null }>(`SELECT MIN(follow_up_at) AS t FROM threads WHERE follow_up_at IS NOT NULL`)?.t ?? Infinity;
   const maintenance = (lastRun('maintenance') || ts) + HOUR;

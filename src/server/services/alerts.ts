@@ -15,11 +15,12 @@ import { getSettings } from '../settings.js';
 import { appUrl, sendSystemEmail, systemSender, systemTemplate } from './system-mail.js';
 import { quotaBytes } from './users.js';
 import { notifyNewMail } from './push.js';
+import { NOT_HELD } from '../mail/outbound.js';
 
 const log = logger('alerts');
 const RENOTIFY_MS = 24 * 3600_000;
 
-export type AlertKind = 'provider' | 'queue' | 'quota' | 'dns' | 'backup' | 'phishing';
+export type AlertKind = 'provider' | 'queue' | 'quota' | 'dns' | 'backup' | 'phishing' | 'sending';
 export type Severity = 'info' | 'warn' | 'critical';
 
 export interface AlertInput {
@@ -156,8 +157,8 @@ export async function checkProviders() {
 
 export async function checkQueue() {
   const ts = now();
-  const due = get<{ c: number; oldest: number | null }>(`SELECT COUNT(*) AS c, MIN(next_attempt_at) AS oldest FROM outbox WHERE status = 'queued' AND next_attempt_at <= ?`, [ts]);
-  const retrying = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE status = 'queued' AND attempts > 0`)?.c ?? 0;
+  const due = get<{ c: number; oldest: number | null }>(`SELECT COUNT(*) AS c, MIN(next_attempt_at) AS oldest FROM outbox WHERE status = 'queued' AND next_attempt_at <= ? AND ${NOT_HELD}`, [ts]);
+  const retrying = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE status = 'queued' AND attempts > 0 AND ${NOT_HELD}`)?.c ?? 0;
   const threshold = getSettings()['alerts.queueThreshold'];
   const count = due?.c ?? 0;
   const stuckMinutes = due?.oldest ? Math.round((ts - due.oldest) / 60_000) : 0;

@@ -232,6 +232,10 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   - **Legal hold** on a mailbox, with an optional note: until it's released nothing of
     theirs is permanently deleted (no Trash/Spam purge, "Delete forever", private-link
     cleanup or account deletion). Moving to Trash still works, and they aren't told.
+  - **Compromised-account guard:** someone who sends more than an hourly limit, or whose
+    last day of mail hard-bounces too often, has their sending paused automatically.
+    Their queued mail is held, reading and receiving keep working, admins get an alert,
+    and an admin resumes sending (or pauses it by hand) from their page.
   - Only the owner can change, sign out or reset the owner account.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare

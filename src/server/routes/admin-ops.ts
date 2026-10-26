@@ -28,6 +28,7 @@ import { listSuppressions, suppress, unsuppress } from '../services/suppressions
 import { closeUserStreams } from '../jmap/push.js';
 import { dmarcSummary, listDmarcReports, RETENTION_DAYS } from '../mail/dmarc.js';
 import { recentSignIns } from '../services/sign-ins.js';
+import { pauseSending, resumeSending } from '../services/send-guard.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -426,6 +427,8 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       sentToday,
       lockedUntil: lockedUntil(u.email),
       legalHold: u.legal_hold_at ? { since: u.legal_hold_at, note: u.legal_hold_note } : null,
+      sendPausedAt: u.send_paused_at,
+      sendPausedReason: u.send_paused_reason,
     },
     mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
     mailApps: {
@@ -491,6 +494,25 @@ adminOpsRoutes.post('/users/:id/unlock', (c) => {
   const u = managed(c);
   run('DELETE FROM login_attempts WHERE key = ?', [`login:user:${normalizeEmail(u.email)}`]);
   act(c, 'admin.user_unlocked', u.email);
+  return c.json({ ok: true });
+});
+
+// ── Sending paused (the compromised-account guard, or by hand) ──────────────
+
+adminOpsRoutes.post('/users/:id/pause-sending', async (c) => {
+  const u = managed(c);
+  const { reason } = await body(c, z.object({ reason: z.string().trim().max(500).optional() }));
+  const by = c.get('user');
+  if (!(await pauseSending(u, reason || `Paused by ${by.email}`, by.id, clientIp(c)))) throw badRequest('Sending is already paused');
+  return c.json({ ok: true });
+});
+
+adminOpsRoutes.post('/users/:id/resume-sending', (c) => {
+  const u = managed(c);
+  if (!resumeSending(u.id)) throw badRequest('Sending isn’t paused');
+  act(c, 'admin.user_sending_resumed', u.email, { reason: u.send_paused_reason });
+  // Held mail goes out now.
+  void processQueue();
   return c.json({ ok: true });
 });
 

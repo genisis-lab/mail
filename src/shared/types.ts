@@ -102,6 +102,8 @@ export interface SessionUser {
   hasAvatar: boolean;
   /** When the profile picture last changed (for fetching the new one). */
   avatarAt: number | null;
+  /** Sending is paused (unusual activity, or an administrator): sends are refused until an admin resumes it. */
+  sendPaused?: boolean;
 }
 
 export interface Identity {

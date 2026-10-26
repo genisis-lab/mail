@@ -43,6 +43,9 @@ export interface OutboxRow {
   last_error: string | null;
 }
 
+/** Mail from someone whose sending is paused (send-guard.ts) stays queued, untouched, until it's resumed. */
+export const NOT_HELD = `NOT (outbox.kind IN ('user','api') AND EXISTS (SELECT 1 FROM users u WHERE u.id = outbox.user_id AND u.send_paused_at IS NOT NULL))`;
+
 export const providerContext: ProviderContext = { fetch: (...args) => fetch(...args) };
 
 export function loadProvider(id: number | null | undefined): (ProviderRow & { cfg: Record<string, any> }) | null {
@@ -339,7 +342,7 @@ export async function processQueue(limit = 20): Promise<number> {
   running = true;
   let processed = 0;
   try {
-    const due = all<OutboxRow>(`SELECT * FROM outbox WHERE status = 'queued' AND next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?`, [now(), limit]);
+    const due = all<OutboxRow>(`SELECT * FROM outbox WHERE status = 'queued' AND next_attempt_at <= ? AND ${NOT_HELD} ORDER BY next_attempt_at LIMIT ?`, [now(), limit]);
     const claimed = due.filter((j) => run(`UPDATE outbox SET status = 'sending', updated_at = ? WHERE id = ? AND status = 'queued'`, [now(), j.id]).changes === 1);
     for (const j of claimed) if (j.message_id) run(`UPDATE messages SET status = 'sending' WHERE id = ?`, [j.message_id]);
     const concurrency = 4;

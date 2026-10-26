@@ -825,6 +825,8 @@ adminRoutes.put('/settings', async (c) => {
   if ('backups.keep' in input && !(Number(input['backups.keep']) >= 1 && Number(input['backups.keep']) <= 60)) throw badRequest('Keep between 1 and 60 backups');
   if ('backups.hour' in input && !(Number.isInteger(Number(input['backups.hour'])) && Number(input['backups.hour']) >= 0 && Number(input['backups.hour']) <= 23)) throw badRequest('Pick an hour from 0 to 23');
   if ('aliases.maxThrowaway' in input && (Number(input['aliases.maxThrowaway']) < 0 || Number(input['aliases.maxThrowaway']) > 500)) throw badRequest('Throwaway alias limit must be between 0 and 500');
+  if ('guard.maxPerHour' in input && !(Number.isInteger(Number(input['guard.maxPerHour'])) && Number(input['guard.maxPerHour']) >= 1 && Number(input['guard.maxPerHour']) <= 100_000)) throw badRequest('Hourly sending limit must be between 1 and 100000');
+  if ('guard.bounceRatePercent' in input && !(Number(input['guard.bounceRatePercent']) >= 1 && Number(input['guard.bounceRatePercent']) <= 100)) throw badRequest('Bounce rate must be between 1 and 100%');
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');

@@ -4,6 +4,7 @@ import { isEmail, parseAddresses, uniqueAddrs } from '../lib/addr.js';
 import { badRequest, notFound, tooMany } from '../lib/http.js';
 import { getSettings } from '../settings.js';
 import { getPrefs, getUser, identities, sendLimit, sentToday, userAddresses } from '../services/users.js';
+import { guardSend } from '../services/send-guard.js';
 import { getBlob, putBlob } from './blobs.js';
 import { bodyColumns, loadBody, type BodyColumns } from './body.js';
 import { buildMime, quoteHtml, escapeHtml } from './compose.js';
@@ -172,6 +173,8 @@ export interface SendOptions {
 export async function sendDraft(userId: number, draftId: number, opts: SendOptions = {}): Promise<{ id: number; sendAt: number; undoUntil: number | null }> {
   const user = getUser(userId);
   if (!user || user.status !== 'active') throw badRequest('Account is not active');
+  // Sending paused, or about to be (an hourly burst, many bounces): the mailbox and whoever pressed Send.
+  await guardSend([userId, opts.sentBy ?? userId]);
   const d = get<any>(`SELECT * FROM messages WHERE id = ? AND user_id = ? AND folder = 'drafts'`, [draftId, userId]);
   if (!d) throw notFound('Draft not found');
   await loadBody(d);
