@@ -1,0 +1,12 @@
+Reply: false
+Reply All: false
+Forward: false
+: false
+Archive: false
+Move to Trash: false
+Move to Junk: false
+: false
+Mark as Read: false
+Mark as Unread: false
+Flag: false
+Snooze: true
