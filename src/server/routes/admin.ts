@@ -23,6 +23,8 @@ import { blobEncryptionStatus, blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
+import { ipInList, parseIpList } from '../lib/ip.js';
+import { signInSummary } from '../services/sign-ins.js';
 import { systemSender } from '../services/system-mail.js';
 import { closeStreams, closeUserStreams } from '../jmap/push.js';
 
@@ -97,6 +99,7 @@ adminRoutes.get('/overview', async (c) => {
     last24,
     providers: providers.map((p) => ({ ...p, typeName: getProviderDef(p.type)?.name ?? p.type })),
     storage: storage(),
+    signIns: signInSummary(ts),
     warnings,
   });
 });
@@ -797,7 +800,7 @@ function settingsDto() {
   return { ...s, 'cloudflare.apiToken': s['cloudflare.apiToken'] ? MASK : '', 'spam.rspamdPassword': s['spam.rspamdPassword'] ? MASK : '' };
 }
 
-adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS, systemSender: systemSender() }));
+adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS, systemSender: systemSender(), clientIp: clientIp(c) }));
 
 adminRoutes.put('/settings', async (c) => {
   const input = (await c.req.json().catch(() => null)) as Partial<Settings> | null;
@@ -823,6 +826,16 @@ adminRoutes.put('/settings', async (c) => {
     const to = String(input['mail.systemReplyTo'] ?? '').trim().toLowerCase();
     if (to && !isEmail(to)) throw badRequest('Enter a valid address for replies to system emails');
     input['mail.systemReplyTo'] = to;
+  }
+  if ('security.adminIpAllowlist' in input) {
+    const { entries, ranges, invalid } = parseIpList(String(input['security.adminIpAllowlist'] ?? ''));
+    if (invalid.length) throw badRequest(`Not an IP address or CIDR range: ${invalid.slice(0, 3).join(', ')}`);
+    if (entries.length > 200) throw badRequest('List up to 200 addresses and ranges');
+    // Never save a list that would shut out the admin saving it (even while WREN_IGNORE_ADMIN_IP_ALLOWLIST is set).
+    if (entries.length && !ipInList(clientIp(c), ranges)) {
+      throw badRequest(`Your current IP address (${clientIp(c) || 'unknown'}) isn’t in this list, so saving it would lock you out of the admin panel. Add it first.`, 'admin_ip_lockout');
+    }
+    input['security.adminIpAllowlist'] = entries.join('\n');
   }
   if ('mail.systemName' in input) {
     const name = String(input['mail.systemName'] ?? '').trim();

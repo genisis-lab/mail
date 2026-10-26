@@ -8,6 +8,7 @@ import { pruneLinks } from './mail/private.js';
 import { dueFollowUps, wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
 import { pruneTokens } from './services/tokens.js';
+import { pruneSignIns } from './services/sign-ins.js';
 import { runAlertChecks } from './services/alerts.js';
 import { autoCheckDomains } from './services/dns.js';
 import { jobsDueAt, runJobs } from './services/jobs.js';
@@ -38,6 +39,7 @@ export function runMaintenance() {
   run('DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?', [ts - DAY]);
   run('DELETE FROM autoreply_log WHERE sent_at < ?', [ts - 30 * DAY]);
   pruneTokens();
+  pruneSignIns(ts);
   pruneLinks();
   run('DELETE FROM roundtrip_tests WHERE sent_at < ?', [ts - 30 * DAY]);
   pruneChanges();

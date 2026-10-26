@@ -79,6 +79,7 @@ settings and users set up 2FA again (Wren walks you through it).
 | `PUBLIC_URL` | request origin | Public address, used in webhook URLs |
 | `TRUST_PROXY` | off | Use `X-Forwarded-For` for client IPs behind a reverse proxy |
 | `WREN_SECRET` | generated | Encryption key (16+ characters) |
+| `WREN_IGNORE_ADMIN_IP_ALLOWLIST` | off | `1` lets admins in from any IP, to fix an admin IP allowlist that locked you out |
 
 The launcher (`scripts/serve.mjs`) never exposes Wrangler's local `/cdn-cgi/` test
 endpoints, so nobody can inject mail through them.

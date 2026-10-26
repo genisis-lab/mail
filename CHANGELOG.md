@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Sign-in history for admins.** Every sign-in attempt on an existing account (password,
+passkey, 2-step code, reset link; success or failure) is kept for 90 days with its IP,
+country (from Cloudflare) and browser. A user's page lists the last 50, and a successful
+sign-in is marked **new location** when that person hadn't signed in from its country (or,
+without one, its /24 or /48 network) in 90 days. The Overview shows failed sign-ins in the
+last day and new-location ones in the last week, with whose.
+
+**Admin IP allowlist.** **Admin → Settings → Security** can limit the admin panel to IP
+addresses and CIDR ranges (IPv4 and IPv6), for every role. Wren shows your current IP and
+won't save a list that leaves it out. Locked out anyway: set
+`WREN_IGNORE_ADMIN_IP_ALLOWLIST=1`, fix the list, and remove the variable (see README).
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

@@ -805,6 +805,26 @@ export const migrations: string[] = [
     PRIMARY KEY (user_id, sender)
   );
   `,
+
+  // 26: sign-in history for admins: every attempt on an existing account (kept 90 days),
+  //     and whether a successful one came from somewhere new for that person.
+  `
+  CREATE TABLE sign_ins (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ok           INTEGER NOT NULL,
+    method       TEXT NOT NULL,
+    reason       TEXT,
+    ip           TEXT,
+    country      TEXT,
+    location     TEXT NOT NULL DEFAULT '',
+    user_agent   TEXT,
+    new_location INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL
+  );
+  CREATE INDEX idx_sign_ins_user ON sign_ins(user_id, created_at DESC);
+  CREATE INDEX idx_sign_ins_created ON sign_ins(created_at);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

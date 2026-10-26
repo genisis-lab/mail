@@ -34,6 +34,8 @@ export function createProxyHandler(port, trustProxy = false) {
       : (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
     const headers = { ...req.headers, 'cf-connecting-ip': ip };
     delete headers['x-forwarded-for'];
+    // Only Cloudflare's edge may say where a request came from.
+    delete headers['cf-ipcountry'];
     const upstream = http.request({ host: '127.0.0.1', port, method: req.method, path: target, headers }, (up) => {
       res.writeHead(up.statusCode ?? 502, up.headers);
       up.pipe(res);

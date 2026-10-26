@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { HttpError } from './lib/http.js';
 import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
-import { actAsMailbox, requireAdmin, requireApiKey, requireAccountUser, requireUserReady, type AppEnv } from './http/context.js';
+import { actAsMailbox, requireAdmin, requireAdminIp, requireApiKey, requireAccountUser, requireUserReady, type AppEnv } from './http/context.js';
 import { authRoutes, setupRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { attachmentRoutes, blockedRoutes, contactRoutes, filterRoutes, labelRoutes, mailRoutes } from './routes/mail.js';
@@ -119,7 +119,7 @@ export function createApp() {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
-  app.use('/api/admin/*', requireAdmin);
+  app.use('/api/admin/*', requireAdmin, requireAdminIp);
   for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar']) {
     app.use(`${prefix}/*`, actAsMailbox);
     app.use(prefix, actAsMailbox);
