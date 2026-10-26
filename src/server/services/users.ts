@@ -34,6 +34,11 @@ export interface UserRow {
   avatar_at: number | null;
   /** An admin turned mail apps (JMAP) off for this person. */
   mail_apps_blocked: number;
+  /** Sending paused (the compromised-account guard or an admin); see send-guard.ts. */
+  send_paused_at: number | null;
+  send_paused_reason: string | null;
+  /** When an admin last resumed it: the guard only counts what was sent since. */
+  send_resumed_at: number | null;
 }
 
 export function getUser(id: number): UserRow | undefined {
@@ -124,6 +129,7 @@ export function sessionUser(user: UserRow): SessionUser {
     mustChangePassword: mustChangePassword(user),
     hasAvatar: !!user.avatar_blob,
     avatarAt: user.avatar_at,
+    sendPaused: !!user.send_paused_at,
   };
 }
 

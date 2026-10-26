@@ -227,6 +227,10 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   - **When someone is away or leaves:** set their out-of-office reply and forwarding,
     export their mail as `.mbox`, and on delete pass their addresses and catch-alls to
     someone else so nothing bounces.
+  - **Compromised-account guard:** someone who sends more than an hourly limit, or whose
+    last day of mail hard-bounces too often, has their sending paused automatically.
+    Their queued mail is held, reading and receiving keep working, admins get an alert,
+    and an admin resumes sending (or pauses it by hand) from their page.
   - Only the owner can change, sign out or reset the owner account.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare

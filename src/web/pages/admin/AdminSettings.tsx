@@ -163,6 +163,27 @@ export function AdminSettingsPage() {
         </Card>
       )}
 
+      {tab === 'limits' && (
+        <div className="mt-6">
+          <Card
+            title="Compromised-account guard"
+            description="Pauses someone’s sending when it looks like their account is being used for spam. They can still read and receive mail; their queued mail is held and admins get an alert. Resume sending from their page in Users."
+          >
+            <div className="grid max-w-xl gap-4">
+              <Switch checked={draft['guard.enabled']} onChange={(v) => set('guard.enabled', v)} label="Pause sending on unusual activity" />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Messages per hour" help="Sending more than this in an hour pauses the account.">
+                  <Input type="number" min={1} max={100000} disabled={!draft['guard.enabled']} value={draft['guard.maxPerHour']} onChange={num('guard.maxPerHour')} />
+                </Field>
+                <Field label="Bounce rate (%)" help="Hard bounces over the last 24 hours, checked once someone has sent 20 messages.">
+                  <Input type="number" min={1} max={100} disabled={!draft['guard.enabled']} value={draft['guard.bounceRatePercent']} onChange={num('guard.bounceRatePercent')} />
+                </Field>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {tab === 'spam' && <SpamTab draft={draft} set={set} />}
 
       {tab === 'alerts' && (

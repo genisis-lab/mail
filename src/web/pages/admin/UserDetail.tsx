@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AtSign, CheckCircle2, KeyRound, Lock, LogOut, Mail, MonitorSmartphone, Pencil, ShieldCheck, ShieldOff, Trash2, UserX } from 'lucide-react';
+import { ArrowLeft, AtSign, CheckCircle2, KeyRound, Lock, LogOut, Mail, MonitorSmartphone, OctagonPause, Pencil, ShieldCheck, ShieldOff, Trash2, UserX } from 'lucide-react';
 import { api } from '../../lib/api';
 import { fileSize, longDate, number, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
@@ -34,6 +34,9 @@ interface Detail {
     sentToday: number;
     lockedUntil: number | null;
     mustChangePassword: boolean;
+    /** Sending paused by the compromised-account guard or an admin. */
+    sendPausedAt: number | null;
+    sendPausedReason: string | null;
   };
   mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
   /** enabled: the server-wide switch; allowed: this person's own. */
@@ -122,6 +125,7 @@ export function UserDetailPage() {
             {u.email}
             <Badge tone={u.role === 'user' ? 'neutral' : 'accent'}>{u.role}</Badge>
             {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
+            {u.sendPausedAt && <Badge tone="danger">sending paused</Badge>}
             {self && <Badge>you</Badge>}
           </span>
         }
@@ -245,6 +249,31 @@ export function UserDetailPage() {
           <p className="mt-4 border-t border-line pt-3 text-sm">
             Sent today: <b>{number(u.sentToday)}</b> of {number(u.sendLimitPerDay)} a day{u.customSendLimit ? '' : ' (default limit)'}
           </p>
+          {u.sendPausedAt ? (
+            <div role="alert" className="mt-3 flex flex-wrap items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--danger)_40%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-4 py-3 text-[13px]">
+              <OctagonPause className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-danger">Sending paused {relativeTime(u.sendPausedAt)}</p>
+                <p className="mt-0.5 break-words text-muted">{u.sendPausedReason || 'No reason given'}. Their queued mail is held until sending is resumed.</p>
+              </div>
+              <Button size="sm" onClick={() => void call(() => api.post(`/api/admin/users/${u.id}/resume-sending`), 'Sending resumed: held mail goes out now')}>
+                Resume sending
+              </Button>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-2"
+              icon={<OctagonPause className="size-4" />}
+              onClick={() =>
+                window.confirm(`Pause sending for ${u.email}? They can still read and receive mail; anything they send is refused and queued mail is held until you resume it.`) &&
+                void call(() => api.post(`/api/admin/users/${u.id}/pause-sending`, {}), 'Sending paused')
+              }
+            >
+              Pause sending
+            </Button>
+          )}
         </Card>
 
         <Card title="Addresses" description="Where this person receives mail and what they can send as.">

@@ -215,6 +215,7 @@ method('EmailSubmission/queryChanges', CAP.submission, () => {
 function sendError(err: unknown): SetError {
   const msg = (err as Error)?.message ?? '';
   const status = (err as { status?: number }).status;
+  if ((err as { code?: string }).code === 'send_paused') return new SetError('forbiddenToSend', msg);
   if (/at least one recipient/i.test(msg)) return new SetError('noRecipients', msg);
   if (/invalid address/i.test(msg)) return new SetError('invalidRecipients', msg);
   if (/too many recipients/i.test(msg)) return new SetError('tooManyRecipients', msg);

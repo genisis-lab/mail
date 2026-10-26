@@ -31,6 +31,8 @@ beforeAll(async () => {
   await h.login('admin@wren.test', 'a very long password', 'admin');
   admin = get<{ id: number }>(`SELECT id FROM users WHERE email = 'admin@wren.test'`)!.id;
   bob = (await h.call('POST', '/api/admin/users', { email: 'bob@wren.test', name: 'Bob', password: 'bob password 123' })).body.id;
+  // These tests bounce most of what they send, which would pause sending (tests/send-guard.test.ts).
+  await h.call('PUT', '/api/admin/settings', { 'guard.enabled': false });
   h.as('admin');
 });
 

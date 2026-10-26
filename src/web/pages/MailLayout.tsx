@@ -18,6 +18,7 @@ import {
   Menu as MenuIcon,
   MoreVertical,
   OctagonAlert,
+  OctagonPause,
   Pencil,
   Plus,
   Search,
@@ -173,6 +174,7 @@ function MailShell() {
     <div className="flex h-full flex-col bg-bg">
       <TopBar onMenu={() => (window.innerWidth < 768 ? setMobileOpen((o) => !o) : setCollapsed((c) => !c))} onHelp={() => setShortcutsOpen(true)} />
       <OfflineBar />
+      <SendPausedBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
         <main className="min-w-0 flex-1 pr-4 pb-4 max-md:px-2 max-md:pb-2">
@@ -254,6 +256,20 @@ function OfflineBar() {
       <span className="min-w-0 flex-1">
         {online ? 'Back online.' : 'You’re offline. Showing mail saved on this device.'}
         {waiting > 0 && ` ${waiting === 1 ? '1 message is' : `${waiting} messages are`} waiting to send.`}
+      </span>
+    </div>
+  );
+}
+
+/** Sending is paused for this account (unusual activity, or an administrator). */
+function SendPausedBar() {
+  const { user } = useSession();
+  if (!user.sendPaused) return null;
+  return (
+    <div role="alert" className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-[color-mix(in_srgb,var(--danger)_10%,var(--panel))] px-3 py-2 text-[13px] max-md:mx-2">
+      <OctagonPause className="size-4 shrink-0 text-danger" aria-hidden />
+      <span className="min-w-0 flex-1">
+        Sending is paused for your account because of unusual activity. You can still read and receive mail. Contact your administrator to turn sending back on.
       </span>
     </div>
   );
