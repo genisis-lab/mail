@@ -96,7 +96,7 @@ export function AdminSettingsPage() {
             <Field label="Require 2-step verification for">
               <Select value={draft['security.require2fa']} onChange={(e) => set('security.require2fa', e.target.value)}>
                 <option value="none">Nobody (optional)</option>
-                <option value="admins">Administrators</option>
+                <option value="admins">Administrators and helpdesk</option>
                 <option value="all">Everyone</option>
               </Select>
             </Field>

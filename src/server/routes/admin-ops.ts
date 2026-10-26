@@ -20,7 +20,7 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, deleteUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, deleteUser, getPrefs, getUser, mustChangePassword, quotaBytes, roleOf, savePrefs, sendLimit, validatePassword } from '../services/users.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
@@ -413,7 +413,7 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       id: u.id,
       email: u.email,
       name: u.name,
-      role: u.role,
+      role: roleOf(u),
       status: u.status,
       createdAt: u.created_at,
       lastLoginAt: u.last_login_at,

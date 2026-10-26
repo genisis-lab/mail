@@ -29,11 +29,14 @@ const NAV = [
   { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
   { to: '/admin/system', label: 'System & backup', icon: Server },
 ];
+/** The pages helpdesk staff can use (the server refuses them everything else). */
+const HELPDESK_NAV = NAV.filter((n) => n.to === '/admin/users' || n.to === '/admin/invites');
 
 function AdminNav({ wide, alerts }: { wide: boolean; alerts: number }) {
+  const { isHelpdesk } = useSession();
   return (
     <>
-      {NAV.map((n) => (
+      {(isHelpdesk ? HELPDESK_NAV : NAV).map((n) => (
         <NavLink
           key={n.to}
           to={n.to}
@@ -65,10 +68,10 @@ function AdminNav({ wide, alerts }: { wide: boolean; alerts: number }) {
 }
 
 export function AdminLayout() {
-  const { instance } = useSession();
+  const { instance, isHelpdesk } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-  const alerts = useAlerts();
+  const alerts = useAlerts(!isHelpdesk);
   const [drawer, setDrawer] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   useDialogFocus(drawer, drawerRef, () => setDrawer(false));
@@ -118,22 +121,32 @@ export function AdminLayout() {
         <main className="min-w-0 flex-1 pr-4 pb-4 max-md:px-2 max-md:pb-2">
           <div className="h-full overflow-y-auto rounded-2xl bg-panel2/40 shadow-[0_0_0_1px_var(--line)] dark:bg-panel/40">
             <div className="mx-auto max-w-6xl px-8 py-7 max-md:px-4 max-md:py-5">
-              <Routes>
-                <Route index element={<Overview />} />
-                <Route path="users" element={<UsersPage />} />
-                <Route path="users/:id" element={<UserDetailPage />} />
-                <Route path="domains" element={<DomainsPage />} />
-                <Route path="domains/:id" element={<DomainDetail />} />
-                <Route path="addresses" element={<AddressesPage />} />
-                <Route path="providers" element={<ProvidersPage />} />
-                <Route path="queue" element={<QueuePage />} />
-                <Route path="logs" element={<LogsPage />} />
-                <Route path="invites" element={<InvitesPage />} />
-                <Route path="settings/:tab?" element={<AdminSettingsPage />} />
-                <Route path="audit" element={<AuditPage />} />
-                <Route path="system" element={<SystemPage />} />
-                <Route path="*" element={<Navigate to="/admin" replace />} />
-              </Routes>
+              {isHelpdesk ? (
+                <Routes>
+                  <Route index element={<Navigate to="/admin/users" replace />} />
+                  <Route path="users" element={<UsersPage />} />
+                  <Route path="users/:id" element={<UserDetailPage />} />
+                  <Route path="invites" element={<InvitesPage />} />
+                  <Route path="*" element={<Navigate to="/admin/users" replace />} />
+                </Routes>
+              ) : (
+                <Routes>
+                  <Route index element={<Overview />} />
+                  <Route path="users" element={<UsersPage />} />
+                  <Route path="users/:id" element={<UserDetailPage />} />
+                  <Route path="domains" element={<DomainsPage />} />
+                  <Route path="domains/:id" element={<DomainDetail />} />
+                  <Route path="addresses" element={<AddressesPage />} />
+                  <Route path="providers" element={<ProvidersPage />} />
+                  <Route path="queue" element={<QueuePage />} />
+                  <Route path="logs" element={<LogsPage />} />
+                  <Route path="invites" element={<InvitesPage />} />
+                  <Route path="settings/:tab?" element={<AdminSettingsPage />} />
+                  <Route path="audit" element={<AuditPage />} />
+                  <Route path="system" element={<SystemPage />} />
+                  <Route path="*" element={<Navigate to="/admin" replace />} />
+                </Routes>
+              )}
             </div>
           </div>
         </main>

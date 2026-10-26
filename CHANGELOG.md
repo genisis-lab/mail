@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Helpdesk role.** Admins can make someone helpdesk staff in Admin → Users. Helpdesk staff
+open an admin panel with only Users and Invites, and can do account support for ordinary
+users: unlock, sign out, reset 2-step verification and passkeys, send a password reset or
+sign-in link, set a password, and suspend or reactivate. Every other admin route refuses
+them, as does any action on an admin, owner or other helpdesk account. Their actions are
+in the audit log under their name. "Require 2-step verification for administrators" now
+covers helpdesk staff too.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

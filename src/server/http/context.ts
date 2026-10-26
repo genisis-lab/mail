@@ -324,10 +324,45 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/**
+ * What helpdesk staff may do under /api/admin: account support for ordinary
+ * people, and invitations for them. Anything not listed is refused. Routes with
+ * a person's id (target) only reach a person with role 'user' who isn't helpdesk
+ * staff themselves; the routes check what can't be told from the path (PUT
+ * /users/:id: suspend or reactivate only; invites: role 'user' only).
+ */
+const HELPDESK_ROUTES: { method: string; path: RegExp; target?: true }[] = [
+  { method: 'GET', path: /^\/users$/ },
+  { method: 'GET', path: /^\/users\/(\d+)(?:\/detail)?$/, target: true },
+  { method: 'PUT', path: /^\/users\/(\d+)$/, target: true },
+  { method: 'POST', path: /^\/users\/(\d+)\/(?:unlock|signout|reset-2fa|reset-link|setup-link|password)$/, target: true },
+  { method: 'DELETE', path: /^\/users\/(\d+)\/(?:passkeys|sessions\/[a-f0-9]{16})$/, target: true },
+  { method: 'GET', path: /^\/invites$/ },
+  { method: 'POST', path: /^\/invites(?:\/\d+\/resend)?$/ },
+  { method: 'DELETE', path: /^\/invites\/\d+$/ },
+];
+
+/** Whether helpdesk staff may make this request under /api/admin (`path` without the prefix). */
+function helpdeskAllowed(method: string, path: string, me: UserRow): boolean {
+  for (const r of HELPDESK_ROUTES) {
+    const m = method === r.method ? r.path.exec(path) : null;
+    if (!m) continue;
+    if (!r.target) return true;
+    const target = getUser(Number(m[1]));
+    // An unknown id falls through to the route's own 404.
+    return !target || (target.role === 'user' && !target.helpdesk && target.kind === 'person' && target.id !== me.id);
+  }
+  return false;
+}
+
 export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = c.get('user');
-  if (!user || (user.role !== 'admin' && user.role !== 'owner')) throw forbidden('Administrator access required');
-  await next();
+  if (user?.role === 'admin' || user?.role === 'owner') return next();
+  if (user?.helpdesk) {
+    if (!helpdeskAllowed(c.req.method, c.req.path.replace(/^\/api\/admin/, ''), user)) throw forbidden('Helpdesk staff can’t do that');
+    return next();
+  }
+  throw forbidden('Administrator access required');
 };
 
 /** A sign-in on this browser waiting for its 2-step code. */

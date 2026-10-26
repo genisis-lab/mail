@@ -228,6 +228,11 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
     export their mail as `.mbox`, and on delete pass their addresses and catch-alls to
     someone else so nothing bounces.
   - Only the owner can change, sign out or reset the owner account.
+  - **Helpdesk** role (set in Admin → Users) for account support: they see only Users and
+    Invites, and can unlock, sign out, reset 2FA and passkeys, send reset or sign-in
+    links, set a password, and suspend or reactivate ordinary users. Nothing else under
+    the admin API is open to them, and they can't act on admins, owners or other
+    helpdesk staff, change roles, or invite anyone above User.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
   setup (Email Routing and Email Sending). It won't move a domain's mail away from its

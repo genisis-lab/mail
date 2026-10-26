@@ -78,7 +78,8 @@ export function App() {
     return <ForceTwoFactorPage instance={instance} />;
   }
 
-  const isAdmin = user.role === 'admin' || user.role === 'owner';
+  // Helpdesk staff get a smaller admin panel (Users and Invites).
+  const canOpenAdmin = user.role === 'admin' || user.role === 'owner' || user.role === 'helpdesk';
   return (
     <SessionProvider value={{ user, instance }}>
       <ComposeProvider>
@@ -91,7 +92,7 @@ export function App() {
           <Route path="/forgot" element={<ForgotPage instance={instance} />} />
           <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn />} />
           <Route path="/p/:token" element={<PrivateMessagePage instance={instance} />} />
-          <Route path="/admin/*" element={isAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
+          <Route path="/admin/*" element={canOpenAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
           <Route path="/*" element={<MailLayout />} />
         </Routes>
       </ComposeProvider>

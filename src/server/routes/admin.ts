@@ -14,7 +14,7 @@ import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { checkTwoStepCode, createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
+import { checkTwoStepCode, createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, roleOf, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
@@ -166,7 +166,7 @@ function userDto(u: any, locked?: Set<string>) {
     id: u.id,
     email: u.email,
     name: u.name,
-    role: u.role,
+    role: roleOf(u),
     status: u.status,
     usedBytes: u.used_bytes,
     quotaBytes: quotaBytes(u),
@@ -206,7 +206,7 @@ adminRoutes.get('/users/:id', (c) => {
   return c.json({ user: userDto(u), addresses, sessions, folders });
 });
 
-const roleSchema = z.enum(['owner', 'admin', 'user']);
+const roleSchema = z.enum(['owner', 'admin', 'helpdesk', 'user']);
 
 adminRoutes.post('/users', async (c) => {
   const input = await body(
@@ -266,9 +266,12 @@ adminRoutes.put('/users/:id', async (c) => {
     }),
   );
   if (u.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can modify the owner account');
+  // Helpdesk staff only suspend and reactivate (the rest of their access: requireAdmin).
+  if (me.helpdesk && Object.entries(input).some(([k, v]) => k !== 'status' && v !== undefined)) throw forbidden('Helpdesk staff can only suspend or reactivate accounts');
+  if (input.role === 'helpdesk' && u.kind !== 'person') throw badRequest('Only a person can be helpdesk staff');
   if (input.requirePasswordChange && id === me.id) throw badRequest('Change your own password in Settings → Security');
   if (input.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can grant ownership');
-  if (id === me.id && (input.status === 'suspended' || (input.role && input.role !== me.role))) throw badRequest('You cannot change your own role or suspend yourself');
+  if (id === me.id && (input.status === 'suspended' || (input.role && input.role !== roleOf(me)))) throw badRequest('You cannot change your own role or suspend yourself');
   if (u.role === 'owner' && input.role && input.role !== 'owner') {
     const owners = get<{ c: number }>(`SELECT COUNT(*) AS c FROM users WHERE role = 'owner'`)?.c ?? 0;
     if (owners <= 1) throw badRequest('There must be at least one owner');
@@ -278,7 +281,7 @@ adminRoutes.put('/users/:id', async (c) => {
       run('UPDATE users SET name = ? WHERE id = ?', [input.name, id]);
       run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [input.name, id]);
     }
-    if (input.role !== undefined) run('UPDATE users SET role = ? WHERE id = ?', [input.role, id]);
+    if (input.role !== undefined) run('UPDATE users SET role = ?, helpdesk = ? WHERE id = ?', [input.role === 'helpdesk' ? 'user' : input.role, input.role === 'helpdesk' ? 1 : 0, id]);
     if (input.status !== undefined) {
       run('UPDATE users SET status = ? WHERE id = ?', [input.status, id]);
       if (input.status === 'suspended') run('DELETE FROM sessions WHERE user_id = ?', [id]);
@@ -883,6 +886,7 @@ adminRoutes.post('/invites', async (c) => {
       sendTo: z.string().max(254).optional(),
     }),
   );
+  if (input.role !== 'user' && c.get('user').helpdesk) throw forbidden('Helpdesk staff can only invite users');
   if (input.email && !isEmail(input.email)) throw badRequest('Invalid email');
   const sendTo = input.sendTo?.trim().toLowerCase() || null;
   if (sendTo && !isEmail(sendTo)) throw badRequest('Enter a valid address to send the invitation to');
@@ -911,6 +915,7 @@ adminRoutes.post('/invites', async (c) => {
 adminRoutes.post('/invites/:id/resend', async (c) => {
   const inv = get<any>('SELECT * FROM invites WHERE id = ?', [intParam(c, 'id')]);
   if (!inv) throw notFound();
+  if (inv.role !== 'user' && c.get('user').helpdesk) throw forbidden('Helpdesk staff can only invite users');
   if (inv.used_at) throw badRequest('This invitation has already been used');
   const { sendTo } = await body(c, z.object({ sendTo: z.string().max(254).optional() }));
   const to = sendTo?.trim().toLowerCase() || inv.sent_to;
@@ -925,7 +930,9 @@ adminRoutes.post('/invites/:id/resend', async (c) => {
 });
 
 adminRoutes.delete('/invites/:id', (c) => {
-  run('DELETE FROM invites WHERE id = ?', [intParam(c, 'id')]);
+  const id = intParam(c, 'id');
+  if (c.get('user').helpdesk && get('SELECT 1 FROM invites WHERE id = ? AND role != ?', [id, 'user'])) throw forbidden('Helpdesk staff can only invite users');
+  run('DELETE FROM invites WHERE id = ?', [id]);
   return c.json({ ok: true });
 });
 

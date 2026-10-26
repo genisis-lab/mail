@@ -67,7 +67,8 @@ export function UserDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
-  const { user: me } = useSession();
+  // Helpdesk staff get account support only: no editing, address changes, mail handling, exports or deleting.
+  const { user: me, isHelpdesk } = useSession();
   const [editing, setEditing] = useState(false);
   const [password, setPassword] = useState(false);
   const [link, setLink] = useState(false);
@@ -127,15 +128,17 @@ export function UserDetailPage() {
         }
         actions={
           <>
-            <Button icon={<Pencil className="size-4" />} onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            {!isHelpdesk && (
+              <Button icon={<Pencil className="size-4" />} onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
             <Menu
               align="right"
               width="w-72"
               trigger={({ onClick }) => <Button onClick={onClick}>More</Button>}
               items={[
-                { label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) },
+                ...(isHelpdesk ? [] : [{ label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) }]),
                 { label: 'Send a sign-in link…', icon: <Mail className="size-4" />, onClick: () => setLink(true) },
                 ...(u.recoveryEmail
                   ? [
@@ -147,7 +150,7 @@ export function UserDetailPage() {
                     ]
                   : []),
                 { label: 'Set a password…', icon: <KeyRound className="size-4" />, onClick: () => setPassword(true) },
-                ...(self
+                ...(self || isHelpdesk
                   ? []
                   : [
                       u.mustChangePassword
@@ -173,7 +176,7 @@ export function UserDetailPage() {
                 u.status === 'active'
                   ? { label: 'Suspend', icon: <UserX className="size-4" />, disabled: self || u.role === 'owner', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'suspended' }), `${u.email} suspended`) }
                   : { label: 'Reactivate', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'active' }), `${u.email} reactivated`) },
-                { label: 'Delete user…', icon: <Trash2 className="size-4" />, disabled: self || u.role === 'owner', onClick: () => setDeleting(true) },
+                ...(isHelpdesk ? [] : [{ label: 'Delete user…', icon: <Trash2 className="size-4" />, disabled: self || u.role === 'owner', onClick: () => setDeleting(true) }]),
               ]}
             />
           </>
@@ -270,9 +273,11 @@ export function UserDetailPage() {
               ))}
             </ul>
           )}
-          <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent-ink hover:underline">
-            Manage aliases and shared mailboxes
-          </Link>
+          {!isHelpdesk && (
+            <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent-ink hover:underline">
+              Manage aliases and shared mailboxes
+            </Link>
+          )}
         </Card>
 
         <Card title="Signed-in devices" description={d.sessions.length ? undefined : 'Not signed in anywhere right now.'}>
@@ -296,49 +301,53 @@ export function UserDetailPage() {
           )}
         </Card>
 
-        <Card
-          title="Mail apps"
-          description={
-            d.mailApps.enabled ? (
-              'Apps that sign in with an app password over JMAP.'
-            ) : (
-              <>
-                Mail apps are off for everyone. Turn them on in{' '}
-                <Link to="/admin/settings/security" className="text-accent-ink hover:underline">
-                  Settings & policies → Security
-                </Link>
-                .
-              </>
-            )
-          }
-        >
-          <Switch
-            checked={d.mailApps.allowed}
-            disabled={u.role === 'owner' && me.role !== 'owner'}
-            onChange={(v) =>
-              void call(
-                () => api.put(`/api/admin/users/${u.id}`, { mailApps: v }),
-                v ? 'They can use mail apps again' : 'Mail apps turned off for them. Their apps are signed out.',
-              )
-            }
-            label="Allow mail apps"
-            description="When off, their app passwords stop working and they can’t create new ones. Everyone else is unaffected."
-          />
-          {d.mailApps.passwords.length > 0 && (
-            <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
-              {d.mailApps.passwords.map((k) => (
-                <li key={k.id} className="flex items-center gap-3 py-2">
-                  <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{k.name}</span>
-                  <span className="text-xs text-muted">{k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : 'never used'}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        {!isHelpdesk && (
+          <>
+            <Card
+              title="Mail apps"
+              description={
+                d.mailApps.enabled ? (
+                  'Apps that sign in with an app password over JMAP.'
+                ) : (
+                  <>
+                    Mail apps are off for everyone. Turn them on in{' '}
+                    <Link to="/admin/settings/security" className="text-accent-ink hover:underline">
+                      Settings & policies → Security
+                    </Link>
+                    .
+                  </>
+                )
+              }
+            >
+              <Switch
+                checked={d.mailApps.allowed}
+                disabled={u.role === 'owner' && me.role !== 'owner'}
+                onChange={(v) =>
+                  void call(
+                    () => api.put(`/api/admin/users/${u.id}`, { mailApps: v }),
+                    v ? 'They can use mail apps again' : 'Mail apps turned off for them. Their apps are signed out.',
+                  )
+                }
+                label="Allow mail apps"
+                description="When off, their app passwords stop working and they can’t create new ones. Everyone else is unaffected."
+              />
+              {d.mailApps.passwords.length > 0 && (
+                <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
+                  {d.mailApps.passwords.map((k) => (
+                    <li key={k.id} className="flex items-center gap-3 py-2">
+                      <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{k.name}</span>
+                      <span className="text-xs text-muted">{k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : 'never used'}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
 
-        <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
-        <ExportCard userId={u.id} jobs={d.exports} run={call} />
+            <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
+            <ExportCard userId={u.id} jobs={d.exports} run={call} />
+          </>
+        )}
 
         <Card title="Recent sign-in activity" className="lg:col-span-2">
           {d.signIns.length === 0 ? (

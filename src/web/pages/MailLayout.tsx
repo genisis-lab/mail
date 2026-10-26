@@ -268,7 +268,7 @@ function ViewGuard({ element }: { element: ReactNode }) {
 // ── Top bar ─────────────────────────────────────────────────────────────────
 
 function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) {
-  const { user, instance, isAdmin } = useSession();
+  const { user, instance, isAdmin, isHelpdesk } = useSession();
   const installPrompt = useInstallPrompt();
   const navigate = useNavigate();
   const toast = useToast();
@@ -294,7 +294,7 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
         <IconButton label="Settings" onClick={() => navigate('/settings')}>
           <Settings className="size-5" />
         </IconButton>
-        {isAdmin && (
+        {(isAdmin || isHelpdesk) && (
           <IconButton label="Admin panel" onClick={() => navigate('/admin')} className="max-sm:hidden">
             <Shield className="size-5" />
           </IconButton>
@@ -328,7 +328,7 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                     Install app
                   </MenuRow>
                 )}
-                {isAdmin && (
+                {(isAdmin || isHelpdesk) && (
                   <MenuRow icon={<Shield className="size-4" />} onClick={() => (close(), navigate('/admin'))}>
                     Admin panel
                   </MenuRow>
