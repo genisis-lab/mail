@@ -34,6 +34,8 @@ export interface AdminUser {
   locked?: boolean;
   /** An admin turned mail apps (JMAP) off for them. */
   mailAppsBlocked?: boolean;
+  /** On legal hold: none of their mail can be permanently deleted. */
+  legalHold?: boolean;
 }
 
 export function useDomains() {
@@ -61,6 +63,7 @@ export function UsersPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const [q, setQ] = useState('');
+  const [holdOnly, setHoldOnly] = useState(false);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
@@ -69,7 +72,8 @@ export function UsersPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkValue, setBulkValue] = useState<{ action: 'quota' | 'sendLimit' } | null>(null);
   const users = useQuery({ queryKey: ['admin', 'users', q], queryFn: () => api.get<{ users: AdminUser[] }>(`/api/admin/users?q=${encodeURIComponent(q)}`).then((r) => r.users) });
-  const list = users.data ?? [];
+  const anyHeld = (users.data ?? []).some((u) => u.legalHold);
+  const list = (users.data ?? []).filter((u) => !holdOnly || u.legalHold);
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'users'] });
   const call = async (fn: () => Promise<unknown>, msg: string) => {
     try {
@@ -135,6 +139,11 @@ export function UsersPage() {
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
           <Input className="pl-9" placeholder="Search users" aria-label="Search users" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        {(anyHeld || holdOnly) && (
+          <Button size="sm" variant={holdOnly ? 'primary' : 'secondary'} aria-pressed={holdOnly} onClick={() => setHoldOnly(!holdOnly)}>
+            On legal hold
+          </Button>
+        )}
       </div>
       {selected.size > 0 && (
         <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-panel" role="toolbar" aria-label="Bulk actions">
@@ -198,6 +207,7 @@ export function UsersPage() {
                         {u.locked && <Badge tone="warn">locked out</Badge>}
                         {u.mustChangePassword && <Badge>new password required</Badge>}
                         {u.mailAppsBlocked && <Badge>mail apps off</Badge>}
+                        {u.legalHold && <Badge tone="warn">legal hold</Badge>}
                         {u.totpEnabled && <ShieldCheck className="size-3.5 text-ok" aria-label="2-step verification on" />}
                       </p>
                       <p className="truncate text-xs text-muted">

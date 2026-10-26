@@ -10,6 +10,7 @@ import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
 import { checkTwoStepCode, deleteUser, getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword, type UserRow } from '../services/users.js';
 import { sendRecoveryVerification } from '../services/account-links.js';
+import { HOLD_MESSAGE } from '../mail/store.js';
 import { body, clientIp, intParam, rateLimit, signOut, type AppEnv } from '../http/context.js';
 import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
 import { WebAuthnError } from '../lib/webauthn.js';
@@ -350,6 +351,7 @@ accountRoutes.delete('/api-keys/:id', (c) => {
 
 /** Why this person can't delete their own account (null: they can). */
 function deleteBlocked(user: UserRow): string | null {
+  if (user.legal_hold_at) return HOLD_MESSAGE;
   if (!getSettings()['users.selfDelete']) return 'Your administrator has turned this off. Ask an administrator to delete your account for you.';
   const left = get<{ owners: number | null; admins: number | null }>(
     `SELECT SUM(role = 'owner') AS owners, SUM(role != 'user') AS admins FROM users WHERE kind = 'person' AND status = 'active' AND id != ?`,

@@ -19,7 +19,7 @@ import { sendSystemEmail, systemTemplate } from '../services/system-mail.js';
 import { putBlob } from './blobs.js';
 import { loadBody } from './body.js';
 import { buildMime, escapeHtml } from './compose.js';
-import { indexMessage } from './store.js';
+import { indexMessage, NOT_ON_HOLD, onLegalHold } from './store.js';
 import { parseMail } from './parse.js';
 
 const DAY = 86_400_000;
@@ -249,14 +249,16 @@ export function hasPass(link: LinkRow, pass: string | undefined): boolean {
   return !!pass && !!get(`SELECT 1 FROM private_link_access WHERE link_id = ? AND kind = 'pass' AND hash = ? AND expires_at > ?`, [link.id, sha256(pass), now()]);
 }
 
-/** "Stop sharing now": the link stops working and its content is deleted. */
+/** "Stop sharing now": the link stops working and its content is deleted (on legal hold, kept as if expired). */
 export function revokeLink(userId: number, messageId: number): boolean {
   // Only a made link: removing the mark from a message still waiting to go out would send its content in full.
-  return run('DELETE FROM private_links WHERE message_id = ? AND user_id = ? AND token_hash IS NOT NULL', [messageId, userId]).changes > 0;
+  const where = 'message_id = ? AND user_id = ? AND token_hash IS NOT NULL';
+  if (onLegalHold(userId)) return run(`UPDATE private_links SET expires_at = ? WHERE ${where} AND (expires_at IS NULL OR expires_at > ?)`, [now(), messageId, userId, now()]).changes > 0;
+  return run(`DELETE FROM private_links WHERE ${where}`, [messageId, userId]).changes > 0;
 }
 
-/** Expired links go with their content; blob garbage collection then removes the files. */
+/** Expired links go with their content (kept while the mailbox is on legal hold); blob garbage collection then removes the files. */
 export function pruneLinks() {
-  run('DELETE FROM private_links WHERE expires_at < ?', [now()]);
+  run(`DELETE FROM private_links WHERE expires_at < ? AND ${NOT_ON_HOLD}`, [now()]);
   run('DELETE FROM private_link_access WHERE expires_at < ?', [now()]);
 }

@@ -3,7 +3,7 @@ import { logger } from './lib/log.js';
 import { getSettings } from './settings.js';
 import { blobEncryptionDue, collectGarbage, continueBlobEncryption } from './mail/blobs.js';
 import { processQueue } from './mail/outbound.js';
-import { purgeMessages } from './mail/store.js';
+import { NOT_ON_HOLD, purgeMessages } from './mail/store.js';
 import { pruneLinks } from './mail/private.js';
 import { dueFollowUps, wakeSnoozed } from './mail/threads.js';
 import { continueSearchRebuild, searchRebuildPending } from './services/backup.js';
@@ -24,12 +24,12 @@ const DAY = 24 * HOUR;
 // Persisted, because a Durable Object loses its memory whenever it is evicted.
 const lastRun = (job: string) => Number(getMeta(`last_${job}`) ?? 0);
 
-/** Empty trash/spam past retention and drop expired sessions and old logs. */
+/** Empty trash/spam past retention (except mailboxes on legal hold) and drop expired sessions and old logs. */
 export function runMaintenance() {
   const s = getSettings();
   const ts = now();
-  const trash = all<{ id: number }>(`SELECT id FROM messages WHERE folder = 'trash' AND COALESCE(trashed_at, date) < ?`, [ts - s['retention.trashDays'] * DAY]);
-  const spam = all<{ id: number }>(`SELECT id FROM messages WHERE folder = 'spam' AND date < ?`, [ts - s['retention.spamDays'] * DAY]);
+  const trash = all<{ id: number }>(`SELECT id FROM messages WHERE folder = 'trash' AND COALESCE(trashed_at, date) < ? AND ${NOT_ON_HOLD}`, [ts - s['retention.trashDays'] * DAY]);
+  const spam = all<{ id: number }>(`SELECT id FROM messages WHERE folder = 'spam' AND date < ? AND ${NOT_ON_HOLD}`, [ts - s['retention.spamDays'] * DAY]);
   purgeMessages([...trash, ...spam].map((r) => r.id));
   run('DELETE FROM sessions WHERE expires_at < ?', [ts]);
   run('DELETE FROM login_attempts WHERE reset_at < ?', [ts]);

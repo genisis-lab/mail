@@ -19,6 +19,14 @@ extension, so `invoice.pdf.exe` counts as `.exe`.
   text and HTML parts and in the Sent copy, and comes off again on undo send. PGP-signed
   or encrypted mail, private links and system mail never get it.
 
+**Legal hold.** An admin can put a mailbox on legal hold from its page in Admin → Users,
+with an optional note; placing and releasing it are in the audit log. Until it's released,
+none of that person's mail is permanently deleted: Trash and Spam aren't emptied, "Delete
+forever", "Empty trash" and mail apps' deletes are refused, expired or withdrawn private
+links keep their content, and the account can't be deleted by them or by an admin. They
+can still move mail to Trash and discard drafts, and only see "This mailbox can't be
+permanently deleted right now". The users list shows a badge and an "On legal hold" filter.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

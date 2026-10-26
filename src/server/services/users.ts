@@ -2,9 +2,9 @@ import { DEFAULT_PREFS, type Identity, type Role, type SessionUser, type UserPre
 import { all, get, insert, now, run, tx } from '../db/index.js';
 import { decrypt, hashPassword, sha256, verifyTotp } from '../lib/crypto.js';
 import { domainOf, isEmail, localPart, normalizeEmail } from '../lib/addr.js';
-import { badRequest, conflict } from '../lib/http.js';
+import { badRequest, conflict, forbidden } from '../lib/http.js';
 import { getSettings } from '../settings.js';
-import { purgeMessages } from '../mail/store.js';
+import { onLegalHold, purgeMessages } from '../mail/store.js';
 import { closeUserStreams } from '../jmap/push.js';
 import { audit } from './audit.js';
 
@@ -34,7 +34,13 @@ export interface UserRow {
   avatar_at: number | null;
   /** An admin turned mail apps (JMAP) off for this person. */
   mail_apps_blocked: number;
+  /** Since when an admin has this mailbox on legal hold (nothing in it is permanently deleted), or null. */
+  legal_hold_at: number | null;
+  legal_hold_note: string | null;
 }
+
+/** For admins: why a mailbox on legal hold can't be deleted. */
+export const HOLD_BLOCKS_DELETE = 'This mailbox is on legal hold. Release the hold before deleting it.';
 
 export function getUser(id: number): UserRow | undefined {
   return get<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
@@ -190,6 +196,7 @@ export async function createUser(input: {
  * garbage-collected later, as usual. Says how many addresses moved.
  */
 export function deleteUser(id: number, handTo?: UserRow | null): number {
+  if (onLegalHold(id)) throw forbidden(HOLD_BLOCKS_DELETE);
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   const moved = tx(() => {
     // The inbound log has no user id and is kept 90 days: blank what it says about their mail.

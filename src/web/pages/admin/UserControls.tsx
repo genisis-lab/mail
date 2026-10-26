@@ -1,12 +1,12 @@
 /**
  * Admin controls on a user's page: change their address, delete them (handing
- * their addresses to someone), out-of-office and forwarding, and mail export.
+ * their addresses to someone), out-of-office and forwarding, mail export and legal hold.
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Trash2 } from 'lucide-react';
 import { api, linkUrl } from '../../lib/api';
-import { fileSize, number, relativeTime } from '../../lib/format';
+import { fileSize, longDate, number, relativeTime } from '../../lib/format';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Field, IconButton, Input, Modal, Select, Switch, Textarea } from '../../components/ui';
 import { useDomains } from './Users';
@@ -274,6 +274,49 @@ export function ExportCard({ userId, jobs, run }: { userId: number; jobs: Export
             </li>
           ))}
         </ul>
+      )}
+    </Card>
+  );
+}
+
+export interface LegalHold {
+  since: number;
+  note: string | null;
+}
+
+/** Keep everything of theirs: nothing can be permanently deleted until the hold is released. */
+export function LegalHoldCard({ userId, hold, run }: { userId: number; hold: LegalHold | null; run: Run }) {
+  const [note, setNote] = useState('');
+  const set = (on: boolean) => run(() => api.put(`/api/admin/users/${userId}/legal-hold`, on ? { hold: true, note } : { hold: false }), on ? 'Legal hold placed' : 'Legal hold released');
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          Legal hold {hold && <Badge tone="warn">on hold</Badge>}
+        </span>
+      }
+      description="While on hold, none of their mail is permanently deleted: Trash and Spam aren’t emptied, “Delete forever” is refused, and the account can’t be deleted. Moving mail to Trash still works. They aren’t told about the hold."
+      actions={
+        hold ? (
+          <Button size="sm" onClick={() => window.confirm('Release the legal hold? Mail in Trash and Spam is then emptied on the usual schedule again.') && void set(false)}>
+            Release hold
+          </Button>
+        ) : (
+          <Button size="sm" variant="primary" onClick={() => void set(true)}>
+            Place on hold
+          </Button>
+        )
+      }
+    >
+      {hold ? (
+        <div className="space-y-1 text-sm">
+          <p>On hold since {longDate(hold.since)}.</p>
+          {hold.note && <p className="whitespace-pre-wrap break-words text-muted">{hold.note}</p>}
+        </div>
+      ) : (
+        <Field label="Note (optional)" help="Why, for the audit log and other admins: a case or ticket number.">
+          <Textarea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
       )}
     </Card>
   );

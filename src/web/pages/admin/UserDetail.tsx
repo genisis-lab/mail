@@ -10,7 +10,7 @@ import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Empty, Menu, Spinner, Switch } from '../../components/ui';
 import { PageHeader } from './common';
 import { EditUserModal, ResetPasswordModal, SignInLinkModal, type AdminUser } from './Users';
-import { DeleteUserModal, ExportCard, MailHandlingCard, RenameModal } from './UserControls';
+import { DeleteUserModal, ExportCard, LegalHoldCard, MailHandlingCard, RenameModal, type LegalHold } from './UserControls';
 
 interface Detail {
   user: {
@@ -34,6 +34,7 @@ interface Detail {
     sentToday: number;
     lockedUntil: number | null;
     mustChangePassword: boolean;
+    legalHold: LegalHold | null;
   };
   mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
   /** enabled: the server-wide switch; allowed: this person's own. */
@@ -93,7 +94,7 @@ export function UserDetailPage() {
   }
   const d = q.data;
   const u = d.user;
-  const asAdminUser: AdminUser = { ...u, aliases: d.addresses.filter((a) => a.kind === 'alias').length, messages: d.storage.folders.reduce((n, f) => n + f.c, 0) };
+  const asAdminUser: AdminUser = { ...u, legalHold: !!u.legalHold, aliases: d.addresses.filter((a) => a.kind === 'alias').length, messages: d.storage.folders.reduce((n, f) => n + f.c, 0) };
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admin', 'user', id] });
     qc.invalidateQueries({ queryKey: ['admin', 'users'] });
@@ -122,6 +123,7 @@ export function UserDetailPage() {
             {u.email}
             <Badge tone={u.role === 'user' ? 'neutral' : 'accent'}>{u.role}</Badge>
             {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
+            {u.legalHold && <Badge tone="warn">legal hold</Badge>}
             {self && <Badge>you</Badge>}
           </span>
         }
@@ -339,6 +341,7 @@ export function UserDetailPage() {
 
         <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
         <ExportCard userId={u.id} jobs={d.exports} run={call} />
+        <LegalHoldCard key={u.legalHold ? 'held' : 'free'} userId={u.id} hold={u.legalHold} run={call} />
 
         <Card title="Recent sign-in activity" className="lg:col-span-2">
           {d.signIns.length === 0 ? (
