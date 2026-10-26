@@ -4,9 +4,11 @@ import { isEmail, parseAddresses, uniqueAddrs } from '../lib/addr.js';
 import { badRequest, notFound, tooMany } from '../lib/http.js';
 import { getSettings } from '../settings.js';
 import { getPrefs, getUser, identities, sendLimit, sentToday, userAddresses } from '../services/users.js';
+import { guardSend } from '../services/send-guard.js';
 import { getBlob, putBlob } from './blobs.js';
-import { bodyColumns, loadBody } from './body.js';
+import { bodyColumns, loadBody, type BodyColumns } from './body.js';
 import { buildMime, quoteHtml, escapeHtml } from './compose.js';
+import { addFooter, domainFooter, isPgp, removeFooter } from './footer.js';
 import { cancelOutbox, enqueue } from './outbound.js';
 import { htmlToText, makeSnippet } from './parse.js';
 import { isPrivate, linkMade, setPrivate } from './private.js';
@@ -171,6 +173,8 @@ export interface SendOptions {
 export async function sendDraft(userId: number, draftId: number, opts: SendOptions = {}): Promise<{ id: number; sendAt: number; undoUntil: number | null }> {
   const user = getUser(userId);
   if (!user || user.status !== 'active') throw badRequest('Account is not active');
+  // Sending paused, or about to be (an hourly burst, many bounces): the mailbox and whoever pressed Send.
+  await guardSend([userId, opts.sentBy ?? userId]);
   const d = get<any>(`SELECT * FROM messages WHERE id = ? AND user_id = ? AND folder = 'drafts'`, [draftId, userId]);
   if (!d) throw notFound('Draft not found');
   await loadBody(d);
@@ -194,6 +198,18 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
   const refs: string[] = (d.refs || '').split(/\s+/).filter(Boolean);
   // A private message's content never enters the outbox: it's replaced by the notice as it goes out (private.ts).
   const priv = isPrivate(draftId);
+  // The domain's footer goes on the end, the same in the Sent copy; never on signed or encrypted mail.
+  const footer = priv || isPgp(d, atts) ? null : domainFooter(from.address);
+  // A plain-text draft (encrypted or signed) goes out as text/plain alone. The editor's own
+  // class names (quote, forward, signature) stay behind: they'd say which software wrote it.
+  let html: string | null = priv ? '<p></p>' : d.html_body?.replace(/ class="wren-(?:quote|forward|signature)"/g, '') || (d.text_body ? null : '<p></p>');
+  let text: string | null = priv ? '' : d.text_body;
+  let stored: BodyColumns | null = null;
+  if (footer) {
+    ({ html, text } = addFooter({ html, text: text ?? (html ? htmlToText(html) : '') }, footer));
+    const kept = addFooter({ html: d.html_body, text: d.text_body ?? (d.html_body ? htmlToText(d.html_body) : '') }, footer);
+    stored = await bodyColumns(kept.text, kept.html);
+  }
   const { raw, messageId } = await buildMime({
     // Drafts made by a mail app (JMAP) already have their Message-ID.
     messageId: d.message_id || undefined,
@@ -202,10 +218,8 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
     cc,
     bcc,
     subject: d.subject,
-    // A plain-text draft (encrypted or signed) goes out as text/plain alone. The editor's own
-    // class names (quote, forward, signature) stay behind: they'd say which software wrote it.
-    html: priv ? '<p></p>' : d.html_body?.replace(/ class="wren-(?:quote|forward|signature)"/g, '') || (d.text_body ? null : '<p></p>'),
-    text: priv ? '' : d.text_body,
+    html,
+    text,
     inReplyTo: d.in_reply_to,
     references: refs,
     calendar: opts.calendar,
@@ -231,6 +245,16 @@ export async function sendDraft(userId: number, draftId: number, opts: SendOptio
          is_scheduled = ?, from_addr = ?, from_name = ?, last_error = NULL, sent_by = ? WHERE id = ?`,
       [messageId, rawBlob, raw.length, scheduled ? sendAt : ts, sendAt, scheduled ? 1 : 0, from.address, from.name, opts.sentBy ?? userId, draftId],
     );
+    // The body changes, so mail apps (JMAP) see a new email.
+    if (stored) {
+      run('UPDATE messages SET html_body = ?, text_body = ?, body_blob = ?, footer_text = ?, jmap_rev = jmap_rev + 1 WHERE id = ?', [
+        stored.html_body,
+        stored.text_body,
+        stored.body_blob,
+        footer,
+        draftId,
+      ]);
+    }
     // A reply to a thread that is otherwise only a draft keeps the thread subject in sync.
     run('UPDATE threads SET last_date = MAX(last_date, ?) WHERE id = ?', [ts, d.thread_id]);
     // Following up yourself answers a "no reply yet" nudge.
@@ -263,15 +287,26 @@ function addKeyword(userId: number, messageId: string, keyword: string) {
 }
 
 /** Undo send / cancel a scheduled message: turns it back into a draft. */
-export function cancelSend(userId: number, messageId: number): boolean {
-  const m = get<{ id: number; status: string; size: number }>(`SELECT id, status, size FROM messages WHERE id = ? AND user_id = ? AND folder = 'sent'`, [messageId, userId]);
+export async function cancelSend(userId: number, messageId: number): Promise<boolean> {
+  const m = get<any>(`SELECT id, status, size, footer_text, html_body, text_body, body_blob FROM messages WHERE id = ? AND user_id = ? AND folder = 'sent'`, [messageId, userId]);
   if (!m || m.status !== 'queued') return false;
+  // The draft comes back as it was written, without the domain footer.
+  const body = m.footer_text ? await loadBody(m).then((r) => removeFooter({ html: r.html_body, text: r.text_body }, m.footer_text)) : null;
+  const restored = body && (await bodyColumns(body.text, body.html));
   // A private message being retried already has its link (and someone may have it).
   if (linkMade(messageId) || !cancelOutbox(messageId)) return false;
   run(
     `UPDATE messages SET folder = 'drafts', status = 'draft', send_at = NULL, is_scheduled = 0, raw_blob = NULL, message_id = NULL WHERE id = ?`,
     [messageId],
   );
+  if (restored) {
+    run('UPDATE messages SET html_body = ?, text_body = ?, body_blob = ?, footer_text = NULL, jmap_rev = jmap_rev + 1 WHERE id = ?', [
+      restored.html_body,
+      restored.text_body,
+      restored.body_blob,
+      messageId,
+    ]);
+  }
   run('UPDATE users SET used_bytes = MAX(0, used_bytes - ?) WHERE id = ?', [m.size, userId]);
   return true;
 }

@@ -96,7 +96,7 @@ export function AdminSettingsPage() {
             <Field label="Require 2-step verification for">
               <Select value={draft['security.require2fa']} onChange={(e) => set('security.require2fa', e.target.value)}>
                 <option value="none">Nobody (optional)</option>
-                <option value="admins">Administrators</option>
+                <option value="admins">Administrators and helpdesk</option>
                 <option value="all">Everyone</option>
               </Select>
             </Field>
@@ -133,6 +133,8 @@ export function AdminSettingsPage() {
         </Card>
       )}
 
+      {tab === 'security' && <AdminIpCard draft={draft} set={set} />}
+
       {tab === 'limits' && (
         <Card title="Default limits" description="Applied to users without a custom value.">
           <div className="grid max-w-xl gap-4 sm:grid-cols-2">
@@ -161,6 +163,27 @@ export function AdminSettingsPage() {
             />
           </div>
         </Card>
+      )}
+
+      {tab === 'limits' && (
+        <div className="mt-6">
+          <Card
+            title="Compromised-account guard"
+            description="Pauses someone’s sending when it looks like their account is being used for spam. They can still read and receive mail; their queued mail is held and admins get an alert. Resume sending from their page in Users."
+          >
+            <div className="grid max-w-xl gap-4">
+              <Switch checked={draft['guard.enabled']} onChange={(v) => set('guard.enabled', v)} label="Pause sending on unusual activity" />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Messages per hour" help="Sending more than this in an hour pauses the account.">
+                  <Input type="number" min={1} max={100000} disabled={!draft['guard.enabled']} value={draft['guard.maxPerHour']} onChange={num('guard.maxPerHour')} />
+                </Field>
+                <Field label="Bounce rate (%)" help="Hard bounces over the last 24 hours, checked once someone has sent 20 messages.">
+                  <Input type="number" min={1} max={100} disabled={!draft['guard.enabled']} value={draft['guard.bounceRatePercent']} onChange={num('guard.bounceRatePercent')} />
+                </Field>
+              </div>
+            </div>
+          </Card>
+        </div>
       )}
 
       {tab === 'spam' && <SpamTab draft={draft} set={set} />}
@@ -270,6 +293,36 @@ function SystemMailCard({ draft, set }: { draft: S; set: (k: string, v: unknown)
   );
 }
 
+/** Lock the admin panel to known networks. Saving a list that leaves out your own IP is refused by the server. */
+function AdminIpCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
+  const ip = useQuery({ queryKey: ['admin', 'settings', 'ip'], queryFn: () => api.get<{ clientIp: string }>('/api/admin/settings').then((r) => r.clientIp) });
+  const list = String(draft['security.adminIpAllowlist'] ?? '');
+  const mine = ip.data || '';
+  const listed = list.split(/[\s,]+/).includes(mine);
+  return (
+    <Card
+      className="mt-6"
+      title="Admin panel access"
+      description="Only allow the admin panel from these IP addresses or ranges, for every administrator. Leave empty to allow it from anywhere. Mail and everyone’s own settings are not affected."
+    >
+      <div className="grid max-w-xl gap-3">
+        <Field label="Allowed IPs and ranges" help="One per line (or separated by commas). IPv4 and IPv6, single addresses or CIDR ranges such as 203.0.113.0/24 or 2001:db8::/48.">
+          <Textarea value={list} onChange={(e) => set('security.adminIpAllowlist', e.target.value)} rows={4} className="font-mono" placeholder={'203.0.113.7\n198.51.100.0/24'} spellCheck={false} />
+        </Field>
+        <p className="flex flex-wrap items-center gap-2 text-[13px] text-muted">
+          Your current IP address: <b className="font-mono text-fg">{mine || 'unknown'}</b>
+          {mine && !listed && (
+            <Button size="sm" variant="ghost" onClick={() => set('security.adminIpAllowlist', list.trim() ? `${list.trim()}\n${mine}` : mine)}>
+              Add it
+            </Button>
+          )}
+        </p>
+        <p className="text-xs text-muted">Wren won’t save a list that leaves out your current address. If you get locked out anyway (your address changed), see “Locked out of the admin panel” in the README.</p>
+      </div>
+    </Card>
+  );
+}
+
 function RegistrationTab({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
   const domains = useDomains();
   const selected: number[] = draft['registration.domains'] ?? [];
@@ -365,6 +418,7 @@ function SpamTab({ draft, set }: { draft: S; set: (k: string, v: unknown) => voi
           </Field>
         </div>
       </Card>
+      <AttachmentPolicyCard draft={draft} set={set} />
       <Card title="Server-wide blocklist" description="Mail from these senders or domains is rejected for everyone.">
         <form
           className="mb-4 flex max-w-xl gap-2"
@@ -403,5 +457,75 @@ function SpamTab({ draft, set }: { draft: S; set: (k: string, v: unknown) => voi
         )}
       </Card>
     </div>
+  );
+}
+
+/** Risky attachment types on incoming mail, and what happens to a message carrying one. */
+function AttachmentPolicyCard({ draft, set }: { draft: S; set: (k: string, v: unknown) => void }) {
+  const [ext, setExt] = useState('');
+  const defaults = useQuery({ queryKey: ['admin', 'settings', 'defaults'], queryFn: () => api.get<{ defaults: S }>('/api/admin/settings').then((r) => r.defaults) });
+  const types: string[] = draft['attachments.blockedTypes'] ?? [];
+  const defaultTypes: string[] | undefined = defaults.data?.['attachments.blockedTypes'];
+  const add = () => {
+    const added = ext.split(/[\s,]+/).map((t) => t.replace(/^\.+/, '').toLowerCase()).filter((t) => t && !types.includes(t));
+    if (added.length) set('attachments.blockedTypes', [...new Set([...types, ...added])]);
+    setExt('');
+  };
+  return (
+    <Card title="Risky attachments" description="Incoming mail with an attachment whose last extension is on this list (so invoice.pdf.exe counts as .exe). Archives aren’t opened.">
+      <div className="grid max-w-xl gap-4">
+        <Field label="When a message has one">
+          <Select value={draft['attachments.action']} onChange={(e) => set('attachments.action', e.target.value)}>
+            <option value="score">Add to its spam score</option>
+            <option value="spam">Always put it in Spam</option>
+            <option value="reject">Refuse the message</option>
+          </Select>
+        </Field>
+        <div>
+          <p className="mb-1.5 text-[13px] font-medium">Blocked types</p>
+          {types.length === 0 ? (
+            <p className="mb-3 text-sm text-muted">No types blocked.</p>
+          ) : (
+            <ul className="mb-3 flex flex-wrap gap-1.5" aria-label="Blocked attachment types">
+              {types.map((t) => (
+                <li key={t} className="flex items-center gap-0.5 rounded-lg bg-panel2 py-0.5 pr-0.5 pl-2 text-sm">
+                  .{t}
+                  <IconButton size="sm" label={`Remove .${t}`} onClick={() => set('attachments.blockedTypes', types.filter((x) => x !== t))}>
+                    <Trash2 className="size-3.5" />
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <Input
+              value={ext}
+              onChange={(e) => setExt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  add();
+                }
+              }}
+              placeholder="e.g. iso or .lnk"
+              aria-label="Extension to block"
+            />
+            <Button onClick={add}>Add</Button>
+            {defaultTypes && (
+              <Button
+                variant="ghost"
+                disabled={JSON.stringify(types) === JSON.stringify(defaultTypes) && draft['attachments.action'] === defaults.data?.['attachments.action']}
+                onClick={() => {
+                  set('attachments.blockedTypes', defaultTypes);
+                  set('attachments.action', defaults.data!['attachments.action']);
+                }}
+              >
+                Reset to defaults
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }

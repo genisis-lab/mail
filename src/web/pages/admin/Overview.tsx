@@ -18,6 +18,12 @@ interface ChecklistItem {
   optional?: boolean;
 }
 
+interface SignInSummary {
+  failed24h: number;
+  newLocation7d: number;
+  users: { id: number; email: string; failed: number; newLocation: number }[];
+}
+
 interface OverviewData {
   version: string;
   uptime: number;
@@ -28,6 +34,7 @@ interface OverviewData {
   last24: { received: number; sent: number; rejected: number; spam: number };
   providers: { id: number; name: string; type: string; typeName: string; enabled: number; is_default: number; sent_count: number; failed_count: number; received_count: number; last_used_at: number | null; last_error: string | null; last_error_at: number | null }[];
   storage: { database: number; blobs: number };
+  signIns: SignInSummary;
   warnings: { level: 'info' | 'warn'; message: string; link?: string }[];
 }
 
@@ -82,6 +89,8 @@ export function Overview() {
           }
         />
       </div>
+
+      <SignInsCard s={d.signIns} />
 
       <Card title="Mail volume" description="Messages received and sent per day, last 14 days" className="mb-6">
         <VolumeChart series={d.series} />
@@ -154,6 +163,36 @@ export function Overview() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/** Failed sign-ins (last day) and sign-ins from new locations (last week), with whose to look at. */
+function SignInsCard({ s }: { s: SignInSummary }) {
+  return (
+    <Card title="Sign-ins" description="Failed attempts in the last 24 hours and sign-ins from a new location in the last 7 days." className="mb-6">
+      <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+        <p>
+          <span className={cx('text-xl font-semibold tabular-nums', s.failed24h > 0 && 'text-danger')}>{number(s.failed24h)}</span> <span className="text-muted">failed (24h)</span>
+        </p>
+        <p>
+          <span className={cx('text-xl font-semibold tabular-nums', s.newLocation7d > 0 && 'text-warn')}>{number(s.newLocation7d)}</span> <span className="text-muted">from a new location (7 days)</span>
+        </p>
+      </div>
+      {s.users.length > 0 && (
+        <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
+          {s.users.map((u) => (
+            <li key={u.id}>
+              <Link to={`/admin/users/${u.id}`} className="flex items-center gap-3 py-2 hover:text-accent-ink">
+                <span className="min-w-0 flex-1 truncate">{u.email}</span>
+                {u.failed > 0 && <Badge tone="danger">{u.failed} failed</Badge>}
+                {u.newLocation > 0 && <Badge tone="warn">{u.newLocation === 1 ? 'new location' : `${u.newLocation} new locations`}</Badge>}
+                <ArrowRight className="size-3.5 text-muted" aria-hidden />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

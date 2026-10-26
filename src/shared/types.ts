@@ -5,7 +5,8 @@ export interface Addr {
   name?: string;
 }
 
-export type Role = 'owner' | 'admin' | 'user';
+/** helpdesk: account support in the admin panel. Stored as role 'user' with users.helpdesk = 1. */
+export type Role = 'owner' | 'admin' | 'helpdesk' | 'user';
 export type Folder = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash';
 
 /** Virtual mailbox views shown in the sidebar. */
@@ -102,6 +103,8 @@ export interface SessionUser {
   hasAvatar: boolean;
   /** When the profile picture last changed (for fetching the new one). */
   avatarAt: number | null;
+  /** Sending is paused (unusual activity, or an administrator): sends are refused until an admin resumes it. */
+  sendPaused?: boolean;
 }
 
 export interface Identity {

@@ -2,9 +2,9 @@ import { DEFAULT_PREFS, type Identity, type Role, type SessionUser, type UserPre
 import { all, get, insert, now, run, tx } from '../db/index.js';
 import { decrypt, hashPassword, sha256, verifyTotp } from '../lib/crypto.js';
 import { domainOf, isEmail, localPart, normalizeEmail } from '../lib/addr.js';
-import { badRequest, conflict } from '../lib/http.js';
+import { badRequest, conflict, forbidden } from '../lib/http.js';
 import { getSettings } from '../settings.js';
-import { purgeMessages } from '../mail/store.js';
+import { onLegalHold, purgeMessages } from '../mail/store.js';
 import { closeUserStreams } from '../jmap/push.js';
 import { audit } from './audit.js';
 
@@ -13,7 +13,8 @@ export interface UserRow {
   email: string;
   name: string;
   password_hash: string;
-  role: Role;
+  /** As stored; roleOf() gives the role including helpdesk. */
+  role: Exclude<Role, 'helpdesk'>;
   status: 'active' | 'suspended';
   quota_bytes: number | null;
   used_bytes: number;
@@ -34,7 +35,25 @@ export interface UserRow {
   avatar_at: number | null;
   /** An admin turned mail apps (JMAP) off for this person. */
   mail_apps_blocked: number;
+  /** Since when an admin has this mailbox on legal hold (nothing in it is permanently deleted), or null. */
+  legal_hold_at: number | null;
+  legal_hold_note: string | null;
+  /** Sending paused (the compromised-account guard or an admin); see send-guard.ts. */
+  send_paused_at: number | null;
+  send_paused_reason: string | null;
+  /** When an admin last resumed it: the guard only counts what was sent since. */
+  send_resumed_at: number | null;
+  /** Helpdesk staff (always role 'user'). */
+  helpdesk: number;
 }
+
+/** A person's role, with helpdesk staff told apart from other users. */
+export function roleOf(user: Pick<UserRow, 'role' | 'helpdesk'>): Role {
+  return user.helpdesk ? 'helpdesk' : user.role;
+}
+
+/** For admins: why a mailbox on legal hold can't be deleted. */
+export const HOLD_BLOCKS_DELETE = 'This mailbox is on legal hold. Release the hold before deleting it.';
 
 export function getUser(id: number): UserRow | undefined {
   return get<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
@@ -103,7 +122,7 @@ export function sendLimit(user: Pick<UserRow, 'send_limit_per_day'>): number {
 export function mustSetup2fa(user: UserRow): boolean {
   if (user.totp_enabled) return false;
   const policy = getSettings()['security.require2fa'];
-  return policy === 'all' || (policy === 'admins' && (user.role === 'admin' || user.role === 'owner'));
+  return policy === 'all' || (policy === 'admins' && roleOf(user) !== 'user');
 }
 
 /** An admin required a new password, and it hasn't been changed since (any way: settings, reset link, admin). */
@@ -116,7 +135,7 @@ export function sessionUser(user: UserRow): SessionUser {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role,
+    role: roleOf(user),
     totpEnabled: !!user.totp_enabled,
     prefs: parsePrefs(user.prefs),
     identities: identities(user.id),
@@ -124,6 +143,7 @@ export function sessionUser(user: UserRow): SessionUser {
     mustChangePassword: mustChangePassword(user),
     hasAvatar: !!user.avatar_blob,
     avatarAt: user.avatar_at,
+    sendPaused: !!user.send_paused_at,
   };
 }
 
@@ -171,9 +191,9 @@ export async function createUser(input: {
   return tx(() => {
     const ts = now();
     const id = insert(
-      `INSERT INTO users (email, name, password_hash, role, quota_bytes, send_limit_per_day, prefs, created_at, password_changed_at)
-       VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
-      [email, input.name.trim(), hash, input.role ?? 'user', input.quotaBytes ?? null, input.sendLimitPerDay ?? null, ts, ts],
+      `INSERT INTO users (email, name, password_hash, role, helpdesk, quota_bytes, send_limit_per_day, prefs, created_at, password_changed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
+      [email, input.name.trim(), hash, input.role === 'helpdesk' ? 'user' : (input.role ?? 'user'), input.role === 'helpdesk' ? 1 : 0, input.quotaBytes ?? null, input.sendLimitPerDay ?? null, ts, ts],
     );
     insert(
       `INSERT INTO addresses (address, domain_id, kind, user_id, name, created_at) VALUES (?, ?, 'mailbox', ?, ?, ?)`,
@@ -190,6 +210,7 @@ export async function createUser(input: {
  * garbage-collected later, as usual. Says how many addresses moved.
  */
 export function deleteUser(id: number, handTo?: UserRow | null): number {
+  if (onLegalHold(id)) throw forbidden(HOLD_BLOCKS_DELETE);
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   const moved = tx(() => {
     // The inbound log has no user id and is kept 90 days: blank what it says about their mail.

@@ -218,7 +218,9 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   for critical ones, and optionally an outside address.
 - Users: roles, suspend, quotas, daily send limits, 2FA and passkey reset, sign out
   everywhere; bulk actions; CSV import with a dry-run check and CSV export; a detail page
-  with storage, addresses, devices and sign-in history. New people get an emailed link to
+  with storage, addresses, devices and sign-in history (the last 50 attempts, failures,
+  country and "new location" flags; the Overview counts failed and new-location sign-ins).
+  New people get an emailed link to
   choose their own password, and an optional welcome message.
   - **Change someone's address** (their sign-in name) on any hosted domain, keeping the
     old one as an alias if you like; they get a note in their inbox.
@@ -227,14 +229,31 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   - **When someone is away or leaves:** set their out-of-office reply and forwarding,
     export their mail as `.mbox`, and on delete pass their addresses and catch-alls to
     someone else so nothing bounces.
+  - **Legal hold** on a mailbox, with an optional note: until it's released nothing of
+    theirs is permanently deleted (no Trash/Spam purge, "Delete forever", private-link
+    cleanup or account deletion). Moving to Trash still works, and they aren't told.
+  - **Compromised-account guard:** someone who sends more than an hourly limit, or whose
+    last day of mail hard-bounces too often, has their sending paused automatically.
+    Their queued mail is held, reading and receiving keep working, admins get an alert,
+    and an admin resumes sending (or pauses it by hand) from their page.
   - Only the owner can change, sign out or reset the owner account.
+  - **Helpdesk** role (set in Admin → Users) for account support: they see only Users and
+    Invites, and can unlock, sign out, reset 2FA and passkeys, send reset or sign-in
+    links, set a password, and suspend or reactivate ordinary users. Nothing else under
+    the admin API is open to them, and they can't act on admins, owners or other
+    helpdesk staff, change roles, or invite anyone above User.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
   setup (Email Routing and Email Sending). It won't move a domain's mail away from its
   current MX without asking. Catch-all activity lists the addresses the catch-all has
   been taking, so you can block one or make it a real alias. A sending-only subdomain
   (say `contact.example.com`) needs no MX, takes its DMARC from the parent domain, and
-  shows whether your provider has it verified.
+  shows whether your provider has it verified. An optional plain-text footer (a
+  disclaimer, say) goes on the end of mail people send from the domain, but never on
+  signed or encrypted mail, private links or Wren's own system mail.
+- DMARC reports: the daily aggregate reports receivers send to `postmaster@` are read
+  as they arrive (gzip, zip or plain XML), showing each domain's pass rate and the
+  servers sending as it without passing DKIM or SPF. Kept for 180 days.
 - Aliases, groups and shared mailboxes.
 - Providers: verify credentials, send test email, rotate inbound URLs.
 - Mail queue with retry and cancel; delivery logs with search, filters, a timeline and
@@ -245,8 +264,11 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   Email Service). Addresses that hard-bounce or complain go on a suppression list and
   aren't mailed again until removed. See [docs/providers.md](docs/providers.md).
 - Invites, emailed for you; registration policy (closed, invite, open).
-- Security policies: required 2FA, password length, session length, lockout.
+- Security policies: required 2FA, password length, session length, lockout, and an
+  optional IP allowlist for the admin panel (see below if it locks you out).
 - Limits; spam settings (built-in scoring or rspamd) and a server-wide blocklist; retention.
+- Risky attachment types (.exe, .js, … editable): add to the spam score, always go to Spam, or
+  refuse the message. Matched on the last extension, so `invoice.pdf.exe` counts.
 - System emails (invites, password links, alerts) from the address you choose, plain
   and personal so they stay out of spam; invites reply to the admin who sent them.
 - Branding; announcement emails; audit log.
@@ -263,6 +285,13 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
 - CSP, and sandboxed message rendering with no scripts.
 - Pictures in mail load through an image proxy: only links Wren signed, only images,
   never private addresses.
+
+**Locked out of the admin panel?** Wren won't save an admin IP allowlist that leaves out
+the address you're saving it from, but your address can change later. Set the variable
+`WREN_IGNORE_ADMIN_IP_ALLOWLIST=1` (Cloudflare: `echo 1 | npx wrangler secret put
+WREN_IGNORE_ADMIN_IP_ALLOWLIST`; Docker or `npm run serve`: an environment variable, then
+restart), fix or clear the list in **Admin → Settings → Security**, then remove the
+variable again (`npx wrangler secret delete WREN_IGNORE_ADMIN_IP_ALLOWLIST`).
 
 **Developer API.** `POST /api/v1/send` with `Authorization: Bearer wren_…`.
 

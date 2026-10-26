@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+**Attachment policy.** Settings → Spam & blocking has a list of risky attachment types
+(by default the executables that already added to the spam score) and what to do with
+mail carrying one: add to its spam score (as before), always put it in Spam, or refuse it,
+which shows in the inbound log with the reason. Every attachment is checked by its last
+extension, so `invoice.pdf.exe` counts as `.exe`.
+
+**DMARC reports for admins.** The aggregate reports that Gmail, Outlook and others send
+to `postmaster@` your domain (as gzip, zip or XML attachments) are read on arrival.
+Admin → DMARC reports shows each domain's pass rate, DKIM and SPF alignment, and the
+sources failing both. Reports sent twice are kept once and are pruned after 180 days.
+The report email itself is delivered as before.
+
+**Domain footers.** Admins can give a domain a plain-text footer (a disclaimer, say) in
+the domain editor. It is added once to the end of mail sent from that domain, in the
+text and HTML parts and in the Sent copy, and comes off again on undo send. PGP-signed
+or encrypted mail, private links and system mail never get it.
+
+**Legal hold.** An admin can put a mailbox on legal hold from its page in Admin → Users,
+with an optional note; placing and releasing it are in the audit log. Until it's released,
+none of that person's mail is permanently deleted: Trash and Spam aren't emptied, "Delete
+forever", "Empty trash" and mail apps' deletes are refused, expired or withdrawn private
+links keep their content, and the account can't be deleted by them or by an admin. They
+can still move mail to Trash and discard drafts, and only see "This mailbox can't be
+permanently deleted right now". The users list shows a badge and an "On legal hold" filter.
+
+**Sign-in history for admins.** Every sign-in attempt on an existing account (password,
+passkey, 2-step code, reset link; success or failure) is kept for 90 days with its IP,
+country (from Cloudflare) and browser. A user's page lists the last 50, and a successful
+sign-in is marked **new location** when that person hadn't signed in from its country (or,
+without one, its /24 or /48 network) in 90 days. The Overview shows failed sign-ins in the
+last day and new-location ones in the last week, with whose.
+
+**Admin IP allowlist.** **Admin → Settings → Security** can limit the admin panel to IP
+addresses and CIDR ranges (IPv4 and IPv6), for every role. Wren shows your current IP and
+won't save a list that leaves it out. Locked out anyway: set
+`WREN_IGNORE_ADMIN_IP_ALLOWLIST=1`, fix the list, and remove the variable (see README).
+
+**Sending pauses on unusual activity.** A compromised-account guard pauses someone's
+sending when they go over an hourly limit (100 messages by default) or when 20% of the
+last day's mail hard-bounced (once they've sent 20). Sends from the web, mail apps and
+API keys are refused and queued or scheduled mail is held; reading and receiving keep
+working and the person sees a notice. Admins get an alert and resume sending, or pause
+it by hand, from the person's page. Settings → Limits has the switch and thresholds.
+
+**Helpdesk role.** Admins can make someone helpdesk staff in Admin → Users. Helpdesk staff
+open an admin panel with only Users and Invites, and can do account support for ordinary
+users: unlock, sign out, reset 2-step verification and passkeys, send a password reset or
+sign-in link, set a password, and suspend or reactivate. Every other admin route refuses
+them, as does any action on an admin, owner or other helpdesk account. Their actions are
+in the audit log under their name. "Require 2-step verification for administrators" now
+covers helpdesk staff too.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

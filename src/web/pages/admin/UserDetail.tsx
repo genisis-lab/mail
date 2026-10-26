@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AtSign, CheckCircle2, KeyRound, Lock, LogOut, Mail, MonitorSmartphone, Pencil, ShieldCheck, ShieldOff, Trash2, UserX } from 'lucide-react';
+import { ArrowLeft, AtSign, CheckCircle2, KeyRound, Lock, LogOut, Mail, MonitorSmartphone, OctagonPause, Pencil, ShieldCheck, ShieldOff, Trash2, UserX } from 'lucide-react';
 import { api } from '../../lib/api';
 import { fileSize, longDate, number, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
@@ -10,7 +10,7 @@ import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Empty, Menu, Spinner, Switch } from '../../components/ui';
 import { PageHeader } from './common';
 import { EditUserModal, ResetPasswordModal, SignInLinkModal, type AdminUser } from './Users';
-import { DeleteUserModal, ExportCard, MailHandlingCard, RenameModal } from './UserControls';
+import { DeleteUserModal, ExportCard, LegalHoldCard, MailHandlingCard, RenameModal, type LegalHold } from './UserControls';
 
 interface Detail {
   user: {
@@ -34,8 +34,12 @@ interface Detail {
     sentToday: number;
     lockedUntil: number | null;
     mustChangePassword: boolean;
+    legalHold: LegalHold | null;
+    /** Sending paused by the compromised-account guard or an admin. */
+    sendPausedAt: number | null;
+    sendPausedReason: string | null;
   };
-  mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
+  mailHandling: Parameters<typeof MailHandlingCard>[0]['value'] | null;
   /** enabled: the server-wide switch; allowed: this person's own. */
   mailApps: { enabled: boolean; allowed: boolean; passwords: { id: number; name: string; lastUsedAt: number | null; createdAt: number }[] };
   exports: Parameters<typeof ExportCard>[0]['jobs'];
@@ -43,15 +47,22 @@ interface Detail {
   addresses: { id: number; address: string; kind: string; enabled: number; can_send: number; created_by: number | null }[];
   shared: { id: number; email: string; name: string; canSend: boolean }[];
   sessions: { id: string; ip: string | null; userAgent: string | null; createdAt: number; lastSeenAt: number }[];
-  signIns: { action: string; ip: string | null; at: number; mfa: boolean; passkey?: boolean }[];
+  signIns: { id: number; ok: boolean; method: string; reason: string | null; ip: string | null; country: string | null; userAgent: string | null; newLocation: boolean; at: number }[];
 }
 
 const FOLDER_NAMES: Record<string, string> = { inbox: 'Inbox', archive: 'Archive', sent: 'Sent', drafts: 'Drafts', spam: 'Spam', trash: 'Trash' };
-const SIGN_IN: Record<string, string> = {
-  'auth.login': 'Signed in',
-  'auth.login_failed': 'Failed sign-in',
-  'auth.password_reset': 'Reset password',
-  'auth.account_setup': 'Set up account',
+const SIGN_IN_METHOD: Record<string, string> = {
+  password: 'Password',
+  passkey: 'Passkey',
+  'password+2fa': 'Password + 2-step',
+  'passkey+2fa': 'Passkey + 2-step',
+  link: 'Reset or setup link',
+};
+const SIGN_IN_FAILURE: Record<string, string> = {
+  wrong_password: 'Wrong password',
+  wrong_code: 'Wrong 2-step code',
+  passkey_rejected: 'Passkey rejected',
+  suspended: 'Refused: account suspended',
 };
 
 /** "Chrome on macOS" from a user-agent string. */
@@ -67,7 +78,8 @@ export function UserDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
-  const { user: me } = useSession();
+  // Helpdesk staff get account support only: no editing, address changes, mail handling, exports or deleting.
+  const { user: me, isHelpdesk } = useSession();
   const [editing, setEditing] = useState(false);
   const [password, setPassword] = useState(false);
   const [link, setLink] = useState(false);
@@ -93,7 +105,7 @@ export function UserDetailPage() {
   }
   const d = q.data;
   const u = d.user;
-  const asAdminUser: AdminUser = { ...u, aliases: d.addresses.filter((a) => a.kind === 'alias').length, messages: d.storage.folders.reduce((n, f) => n + f.c, 0) };
+  const asAdminUser: AdminUser = { ...u, legalHold: !!u.legalHold, aliases: d.addresses.filter((a) => a.kind === 'alias').length, messages: d.storage.folders.reduce((n, f) => n + f.c, 0) };
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['admin', 'user', id] });
     qc.invalidateQueries({ queryKey: ['admin', 'users'] });
@@ -122,20 +134,24 @@ export function UserDetailPage() {
             {u.email}
             <Badge tone={u.role === 'user' ? 'neutral' : 'accent'}>{u.role}</Badge>
             {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
+            {u.legalHold && <Badge tone="warn">legal hold</Badge>}
+            {u.sendPausedAt && <Badge tone="danger">sending paused</Badge>}
             {self && <Badge>you</Badge>}
           </span>
         }
         actions={
           <>
-            <Button icon={<Pencil className="size-4" />} onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            {!isHelpdesk && (
+              <Button icon={<Pencil className="size-4" />} onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
             <Menu
               align="right"
               width="w-72"
               trigger={({ onClick }) => <Button onClick={onClick}>More</Button>}
               items={[
-                { label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) },
+                ...(isHelpdesk ? [] : [{ label: 'Change address…', icon: <AtSign className="size-4" />, onClick: () => setRenaming(true) }]),
                 { label: 'Send a sign-in link…', icon: <Mail className="size-4" />, onClick: () => setLink(true) },
                 ...(u.recoveryEmail
                   ? [
@@ -147,7 +163,7 @@ export function UserDetailPage() {
                     ]
                   : []),
                 { label: 'Set a password…', icon: <KeyRound className="size-4" />, onClick: () => setPassword(true) },
-                ...(self
+                ...(self || isHelpdesk
                   ? []
                   : [
                       u.mustChangePassword
@@ -173,7 +189,7 @@ export function UserDetailPage() {
                 u.status === 'active'
                   ? { label: 'Suspend', icon: <UserX className="size-4" />, disabled: self || u.role === 'owner', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'suspended' }), `${u.email} suspended`) }
                   : { label: 'Reactivate', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'active' }), `${u.email} reactivated`) },
-                { label: 'Delete user…', icon: <Trash2 className="size-4" />, disabled: self || u.role === 'owner', onClick: () => setDeleting(true) },
+                ...(isHelpdesk ? [] : [{ label: 'Delete user…', icon: <Trash2 className="size-4" />, disabled: self || u.role === 'owner', onClick: () => setDeleting(true) }]),
               ]}
             />
           </>
@@ -245,6 +261,31 @@ export function UserDetailPage() {
           <p className="mt-4 border-t border-line pt-3 text-sm">
             Sent today: <b>{number(u.sentToday)}</b> of {number(u.sendLimitPerDay)} a day{u.customSendLimit ? '' : ' (default limit)'}
           </p>
+          {u.sendPausedAt ? (
+            <div role="alert" className="mt-3 flex flex-wrap items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--danger)_40%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] px-4 py-3 text-[13px]">
+              <OctagonPause className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-danger">Sending paused {relativeTime(u.sendPausedAt)}</p>
+                <p className="mt-0.5 break-words text-muted">{u.sendPausedReason || 'No reason given'}. Their queued mail is held until sending is resumed.</p>
+              </div>
+              {!isHelpdesk && <Button size="sm" onClick={() => void call(() => api.post(`/api/admin/users/${u.id}/resume-sending`), 'Sending resumed: held mail goes out now')}>
+                Resume sending
+              </Button>}
+            </div>
+          ) : isHelpdesk ? null : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-2"
+              icon={<OctagonPause className="size-4" />}
+              onClick={() =>
+                window.confirm(`Pause sending for ${u.email}? They can still read and receive mail; anything they send is refused and queued mail is held until you resume it.`) &&
+                void call(() => api.post(`/api/admin/users/${u.id}/pause-sending`, {}), 'Sending paused')
+              }
+            >
+              Pause sending
+            </Button>
+          )}
         </Card>
 
         <Card title="Addresses" description="Where this person receives mail and what they can send as.">
@@ -270,9 +311,11 @@ export function UserDetailPage() {
               ))}
             </ul>
           )}
-          <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent-ink hover:underline">
-            Manage aliases and shared mailboxes
-          </Link>
+          {!isHelpdesk && (
+            <Link to="/admin/addresses" className="mt-3 inline-block text-sm font-medium text-accent-ink hover:underline">
+              Manage aliases and shared mailboxes
+            </Link>
+          )}
         </Card>
 
         <Card title="Signed-in devices" description={d.sessions.length ? undefined : 'Not signed in anywhere right now.'}>
@@ -296,62 +339,68 @@ export function UserDetailPage() {
           )}
         </Card>
 
-        <Card
-          title="Mail apps"
-          description={
-            d.mailApps.enabled ? (
-              'Apps that sign in with an app password over JMAP.'
-            ) : (
-              <>
-                Mail apps are off for everyone. Turn them on in{' '}
-                <Link to="/admin/settings/security" className="text-accent-ink hover:underline">
-                  Settings & policies → Security
-                </Link>
-                .
-              </>
-            )
-          }
-        >
-          <Switch
-            checked={d.mailApps.allowed}
-            disabled={u.role === 'owner' && me.role !== 'owner'}
-            onChange={(v) =>
-              void call(
-                () => api.put(`/api/admin/users/${u.id}`, { mailApps: v }),
-                v ? 'They can use mail apps again' : 'Mail apps turned off for them. Their apps are signed out.',
-              )
-            }
-            label="Allow mail apps"
-            description="When off, their app passwords stop working and they can’t create new ones. Everyone else is unaffected."
-          />
-          {d.mailApps.passwords.length > 0 && (
-            <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
-              {d.mailApps.passwords.map((k) => (
-                <li key={k.id} className="flex items-center gap-3 py-2">
-                  <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{k.name}</span>
-                  <span className="text-xs text-muted">{k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : 'never used'}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        {!isHelpdesk && (
+          <>
+            <Card
+              title="Mail apps"
+              description={
+                d.mailApps.enabled ? (
+                  'Apps that sign in with an app password over JMAP.'
+                ) : (
+                  <>
+                    Mail apps are off for everyone. Turn them on in{' '}
+                    <Link to="/admin/settings/security" className="text-accent-ink hover:underline">
+                      Settings & policies → Security
+                    </Link>
+                    .
+                  </>
+                )
+              }
+            >
+              <Switch
+                checked={d.mailApps.allowed}
+                disabled={u.role === 'owner' && me.role !== 'owner'}
+                onChange={(v) =>
+                  void call(
+                    () => api.put(`/api/admin/users/${u.id}`, { mailApps: v }),
+                    v ? 'They can use mail apps again' : 'Mail apps turned off for them. Their apps are signed out.',
+                  )
+                }
+                label="Allow mail apps"
+                description="When off, their app passwords stop working and they can’t create new ones. Everyone else is unaffected."
+              />
+              {d.mailApps.passwords.length > 0 && (
+                <ul className="mt-3 -mb-1.5 divide-y divide-line border-t border-line text-sm">
+                  {d.mailApps.passwords.map((k) => (
+                    <li key={k.id} className="flex items-center gap-3 py-2">
+                      <KeyRound className="size-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{k.name}</span>
+                      <span className="text-xs text-muted">{k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : 'never used'}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
 
-        <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
-        <ExportCard userId={u.id} jobs={d.exports} run={call} />
+            {d.mailHandling && <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />}
+            <ExportCard userId={u.id} jobs={d.exports} run={call} />
+            <LegalHoldCard key={u.legalHold ? 'held' : 'free'} userId={u.id} hold={u.legalHold} run={call} />
+          </>
+        )}
 
-        <Card title="Recent sign-in activity" className="lg:col-span-2">
+        <Card title="Sign-ins" description="The last 50 attempts on this account, kept for 90 days. “New location” marks a sign-in from a country (or network) they hadn’t used in that time." className="lg:col-span-2">
           {d.signIns.length === 0 ? (
-            <p className="text-sm text-muted">No sign-ins yet.</p>
+            <p className="text-sm text-muted">No sign-ins in the last 90 days.</p>
           ) : (
             <ul className="-my-1.5 divide-y divide-line text-sm">
-              {d.signIns.map((s, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
-                  {s.action === 'auth.login_failed' ? <UserX className="size-4 text-danger" aria-hidden /> : <CheckCircle2 className="size-4 text-ok" aria-hidden />}
-                  <span className={s.action === 'auth.login_failed' ? 'text-danger' : ''}>{SIGN_IN[s.action] ?? s.action}</span>
-                  {s.mfa && <Badge tone="ok">2-step</Badge>}
-                  {s.passkey && <Badge tone="ok">passkey</Badge>}
-                  <span className="text-muted">{s.ip ?? ''}</span>
+              {d.signIns.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
+                  {s.ok ? <CheckCircle2 className="size-4 text-ok" aria-hidden /> : <UserX className="size-4 text-danger" aria-hidden />}
+                  <span className={s.ok ? '' : 'text-danger'}>{s.ok ? 'Signed in' : (SIGN_IN_FAILURE[s.reason ?? ''] ?? 'Failed')}</span>
+                  <Badge>{SIGN_IN_METHOD[s.method] ?? s.method}</Badge>
+                  {s.newLocation && <Badge tone="warn">new location</Badge>}
+                  <span className="text-muted">{[s.ip, s.country].filter(Boolean).join(' · ')}</span>
+                  {s.userAgent && <span className="text-xs text-muted">{device(s.userAgent)}</span>}
                   <span className="ml-auto text-xs text-muted">{longDate(s.at)}</span>
                 </li>
               ))}

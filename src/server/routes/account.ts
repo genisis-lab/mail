@@ -8,8 +8,9 @@ import { isEmail } from '../lib/addr.js';
 import { config } from '../config.js';
 import { getSettings } from '../settings.js';
 import { audit } from '../services/audit.js';
-import { checkTwoStepCode, deleteUser, getPrefs, getUser, identities, mustChangePassword, savePrefs, sessionUser, userAddresses, validatePassword, type UserRow } from '../services/users.js';
+import { checkTwoStepCode, deleteUser, getPrefs, getUser, identities, mustChangePassword, roleOf, savePrefs, sessionUser, userAddresses, validatePassword, type UserRow } from '../services/users.js';
 import { sendRecoveryVerification } from '../services/account-links.js';
+import { HOLD_MESSAGE } from '../mail/store.js';
 import { body, clientIp, intParam, rateLimit, signOut, type AppEnv } from '../http/context.js';
 import { finishRegistration, listPasskeys, registrationOptions } from '../services/passkeys.js';
 import { WebAuthnError } from '../lib/webauthn.js';
@@ -240,7 +241,7 @@ accountRoutes.post('/2fa/disable', async (c) => {
   const { password } = await body(c, z.object({ password: z.string().min(1) }));
   if (!(await verifyPassword(password, user.password_hash))) throw unauthorized('Password is incorrect');
   const policy = getSettings()['security.require2fa'];
-  if (policy === 'all' || (policy === 'admins' && user.role !== 'user')) throw badRequest('Your administrator requires two-factor authentication');
+  if (policy === 'all' || (policy === 'admins' && roleOf(user) !== 'user')) throw badRequest('Your administrator requires two-factor authentication');
   run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL WHERE id = ?', [user.id]);
   audit(user.id, 'account.2fa_disabled', user.email, undefined, clientIp(c));
   return c.json({ ok: true });
@@ -350,6 +351,7 @@ accountRoutes.delete('/api-keys/:id', (c) => {
 
 /** Why this person can't delete their own account (null: they can). */
 function deleteBlocked(user: UserRow): string | null {
+  if (user.legal_hold_at) return HOLD_MESSAGE;
   if (!getSettings()['users.selfDelete']) return 'Your administrator has turned this off. Ask an administrator to delete your account for you.';
   const left = get<{ owners: number | null; admins: number | null }>(
     `SELECT SUM(role = 'owner') AS owners, SUM(role != 'user') AS admins FROM users WHERE kind = 'person' AND status = 'active' AND id != ?`,

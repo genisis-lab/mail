@@ -14,11 +14,20 @@ export const DEFAULT_SETTINGS = {
   'security.require2fa': 'none' as 'none' | 'admins' | 'all',
   'security.sessionDays': 30,
   'security.maxLoginAttempts': 10,
+  /** IPs and CIDR ranges the admin panel answers from, one per line. Empty: anywhere. */
+  'security.adminIpAllowlist': '',
 
   'limits.defaultQuotaMb': 10240,
   'limits.maxAttachmentMb': 25,
   'limits.defaultSendPerDay': 500,
   'limits.maxRecipients': 100,
+
+  /** Compromised-account guard: pause someone's sending on a burst or many bounces. */
+  'guard.enabled': true,
+  /** Messages one person may send in an hour (counted like the daily limit). */
+  'guard.maxPerHour': 100,
+  /** Hard bounces, as a % of the last 24 hours' messages; checked from 20 messages on. */
+  'guard.bounceRatePercent': 20,
 
   'retention.trashDays': 30,
   'retention.spamDays': 30,
@@ -27,6 +36,11 @@ export const DEFAULT_SETTINGS = {
   'spam.threshold': 6,
   'spam.rspamdUrl': '',
   'spam.rspamdPassword': '',
+
+  /** Attachment extensions treated as risky on inbound mail (matched on the final extension). */
+  'attachments.blockedTypes': ['exe', 'scr', 'js', 'vbs', 'bat', 'cmd', 'jar', 'msi', 'com', 'pif'] as string[],
+  /** What a risky attachment does: add to the spam score, always go to Spam, or refuse the message. */
+  'attachments.action': 'score' as 'score' | 'spam' | 'reject',
 
   'mail.localDelivery': true,
   'mail.allowExternalForwarding': true,

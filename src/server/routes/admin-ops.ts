@@ -20,12 +20,15 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, deleteUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, deleteUser, getPrefs, getUser, HOLD_BLOCKS_DELETE, mustChangePassword, quotaBytes, roleOf, savePrefs, sendLimit, validatePassword } from '../services/users.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
 import { closeUserStreams } from '../jmap/push.js';
+import { dmarcSummary, listDmarcReports, RETENTION_DAYS } from '../mail/dmarc.js';
+import { recentSignIns } from '../services/sign-ins.js';
+import { pauseSending, resumeSending } from '../services/send-guard.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -398,22 +401,17 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
     'SELECT id, ip, user_agent, created_at, last_seen_at FROM sessions WHERE user_id = ? AND expires_at > ? AND mfa_pending = 0 ORDER BY last_seen_at DESC',
     [id, now()],
   ).map((s) => ({ id: s.id.slice(0, 16), ip: s.ip, userAgent: s.user_agent, createdAt: s.created_at, lastSeenAt: s.last_seen_at }));
-  const signIns = all<any>(
-    `SELECT action, ip, created_at, details FROM audit_log WHERE user_id = ? AND action IN ('auth.login','auth.login_failed','auth.password_reset','auth.account_setup') ORDER BY id DESC LIMIT 25`,
-    [id],
-  ).map((r) => {
-    const d = r.details ? JSON.parse(r.details) : {};
-    return { action: r.action, ip: r.ip, at: r.created_at, mfa: !!d.mfa, passkey: typeof d.passkey === 'string' };
-  });
   const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
   const prefs = getPrefs(id);
   const exports = all<JobRow>(`SELECT * FROM jobs WHERE user_id = ? AND kind = 'export' ORDER BY id DESC LIMIT 5`, [id]).map(jobDto);
+  // Helpdesk staff get account support details only: no legal hold, mail handling, mail apps or exports.
+  const helpdesk = !!c.get('user').helpdesk;
   return c.json({
     user: {
       id: u.id,
       email: u.email,
       name: u.name,
-      role: u.role,
+      role: roleOf(u),
       status: u.status,
       createdAt: u.created_at,
       lastLoginAt: u.last_login_at,
@@ -430,23 +428,26 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       customSendLimit: u.send_limit_per_day !== null,
       sentToday,
       lockedUntil: lockedUntil(u.email),
+      legalHold: helpdesk || !u.legal_hold_at ? null : { since: u.legal_hold_at, note: u.legal_hold_note },
+      sendPausedAt: u.send_paused_at,
+      sendPausedReason: u.send_paused_reason,
     },
-    mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
+    mailHandling: helpdesk ? null : { vacation: prefs.vacation, forwarding: prefs.forwarding },
     mailApps: {
       // Server-wide switch (Admin → Settings → Security), then this person's own.
       enabled: !!getSettings()['jmap.enabled'],
       allowed: !u.mail_apps_blocked,
-      passwords: all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
+      passwords: helpdesk ? [] : all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
         `SELECT id, name, last_used_at, created_at FROM api_keys WHERE user_id = ? AND (',' || scopes || ',') LIKE '%,mail,%' ORDER BY created_at DESC`,
         [id],
       ).map((k) => ({ id: k.id, name: k.name, lastUsedAt: k.last_used_at, createdAt: k.created_at })),
     },
-    exports,
+    exports: helpdesk ? [] : exports,
     storage: { folders, attachments },
     addresses,
     shared: shared.map((b) => ({ id: b.id, email: b.email, name: b.name, canSend: !!b.can_send })),
     sessions,
-    signIns,
+    signIns: recentSignIns(id),
   });
 });
 
@@ -467,6 +468,22 @@ adminOpsRoutes.delete('/users/:id/sessions/:sid', (c) => {
   return c.json({ revoked: r.changes });
 });
 
+/**
+ * Legal hold: while it's on, nothing of this mailbox's mail is permanently
+ * deleted (retention purges, "Delete forever", deleting the account). The
+ * person isn't told; what they try just fails with a generic message.
+ */
+adminOpsRoutes.put('/users/:id/legal-hold', async (c) => {
+  const u = managed(c);
+  const input = await body(c, z.object({ hold: z.boolean(), note: z.string().max(1000).optional() }));
+  const note = input.note?.trim() || null;
+  if (input.hold) run('UPDATE users SET legal_hold_at = COALESCE(legal_hold_at, ?), legal_hold_note = ? WHERE id = ?', [now(), note, u.id]);
+  else run('UPDATE users SET legal_hold_at = NULL, legal_hold_note = NULL WHERE id = ?', [u.id]);
+  act(c, input.hold ? 'admin.user_legal_hold_placed' : 'admin.user_legal_hold_released', u.email, note ? { note } : undefined);
+  const r = get<{ legal_hold_at: number | null; legal_hold_note: string | null }>('SELECT legal_hold_at, legal_hold_note FROM users WHERE id = ?', [u.id])!;
+  return c.json({ legalHold: r.legal_hold_at ? { since: r.legal_hold_at, note: r.legal_hold_note } : null });
+});
+
 // ── Lockouts ────────────────────────────────────────────────────────────────
 
 /** When too many failed sign-ins locked this address out, until when (else null). */
@@ -479,6 +496,25 @@ adminOpsRoutes.post('/users/:id/unlock', (c) => {
   const u = managed(c);
   run('DELETE FROM login_attempts WHERE key = ?', [`login:user:${normalizeEmail(u.email)}`]);
   act(c, 'admin.user_unlocked', u.email);
+  return c.json({ ok: true });
+});
+
+// ── Sending paused (the compromised-account guard, or by hand) ──────────────
+
+adminOpsRoutes.post('/users/:id/pause-sending', async (c) => {
+  const u = managed(c);
+  const { reason } = await body(c, z.object({ reason: z.string().trim().max(500).optional() }));
+  const by = c.get('user');
+  if (!(await pauseSending(u, reason || `Paused by ${by.email}`, by.id, clientIp(c)))) throw badRequest('Sending is already paused');
+  return c.json({ ok: true });
+});
+
+adminOpsRoutes.post('/users/:id/resume-sending', (c) => {
+  const u = managed(c);
+  if (!resumeSending(u.id)) throw badRequest('Sending isn’t paused');
+  act(c, 'admin.user_sending_resumed', u.email, { reason: u.send_paused_reason });
+  // Held mail goes out now.
+  void processQueue();
   return c.json({ ok: true });
 });
 
@@ -589,6 +625,10 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
     }
     if (u.role === 'owner' && ['suspend', 'delete'].includes(input.action)) {
       skip('owners can’t be suspended or deleted');
+      continue;
+    }
+    if (input.action === 'delete' && u.legal_hold_at) {
+      skip('on legal hold; release the hold first');
       continue;
     }
     switch (input.action) {
@@ -758,8 +798,21 @@ adminOpsRoutes.delete('/shared-mailboxes/:id', (c) => {
   const b = getUser(id);
   if (!b || b.kind !== 'shared') throw notFound();
   if (c.get('user').role !== 'owner' && c.get('user').role !== 'admin') throw forbidden();
+  if (b.legal_hold_at) throw forbidden(HOLD_BLOCKS_DELETE);
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   run('DELETE FROM users WHERE id = ?', [id]);
   act(c, 'admin.shared_mailbox_deleted', b.email);
   return c.json({ ok: true });
+});
+
+// ── DMARC aggregate reports ─────────────────────────────────────────────────
+
+adminOpsRoutes.get('/dmarc', (c) => {
+  const days = Math.min(Math.max(Math.trunc(Number(c.req.query('days') ?? 30)) || 30, 1), RETENTION_DAYS);
+  return c.json({ days, domains: dmarcSummary(days) });
+});
+
+adminOpsRoutes.get('/dmarc/reports', (c) => {
+  const { before, limit } = page(c);
+  return c.json(listDmarcReports({ domain: c.req.query('domain')?.trim() || undefined, before, limit }));
 });

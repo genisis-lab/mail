@@ -28,7 +28,7 @@ describe('user detail', () => {
     expect(d.user).toMatchObject({ email: 'bea@wren.test', totpEnabled: false, recoveryEmail: null });
     expect(d.addresses.map((a: any) => a.address)).toEqual(['bea@wren.test']);
     expect(d.sessions).toHaveLength(1);
-    expect(d.signIns[0]).toMatchObject({ action: 'auth.login' });
+    expect(d.signIns[0]).toMatchObject({ ok: true, method: 'password' });
     expect(d.storage.folders.some((f: any) => f.folder === 'inbox')).toBe(true); // welcome message
     await h.call('DELETE', `/api/admin/users/${ids.bea}/sessions/${d.sessions[0].id}`);
     h.as('bea');

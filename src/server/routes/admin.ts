@@ -14,15 +14,18 @@ import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
 import { hasEventWebhook } from '../providers/events.js';
 import { backupDto, backupStream, deleteBackup, listBackups, nextBackupAt, startBackup, type BackupRow } from '../services/auto-backup.js';
-import { checkTwoStepCode, createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, sendLimit, validatePassword } from '../services/users.js';
+import { checkTwoStepCode, createUser, deleteUser, getUser, mustChangePassword, quotaBytes, renameUser, roleOf, sendLimit, validatePassword } from '../services/users.js';
 import { checkDomainDns, recommendedRecords } from '../services/dns.js';
 import { checkSendingDomain } from '../services/sending-domains.js';
 import { getProviderDef, listProviderTypes } from '../providers/registry.js';
 import { ProviderError } from '../providers/types.js';
 import { blobEncryptionStatus, blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
+import { FOOTER_MAX } from '../mail/footer.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
+import { ipInList, parseIpList } from '../lib/ip.js';
+import { signInSummary } from '../services/sign-ins.js';
 import { systemSender } from '../services/system-mail.js';
 import { closeStreams, closeUserStreams } from '../jmap/push.js';
 
@@ -97,6 +100,7 @@ adminRoutes.get('/overview', async (c) => {
     last24,
     providers: providers.map((p) => ({ ...p, typeName: getProviderDef(p.type)?.name ?? p.type })),
     storage: storage(),
+    signIns: signInSummary(ts),
     warnings,
   });
 });
@@ -166,7 +170,7 @@ function userDto(u: any, locked?: Set<string>) {
     id: u.id,
     email: u.email,
     name: u.name,
-    role: u.role,
+    role: roleOf(u),
     status: u.status,
     usedBytes: u.used_bytes,
     quotaBytes: quotaBytes(u),
@@ -181,6 +185,7 @@ function userDto(u: any, locked?: Set<string>) {
     recoveryEmail: u.recovery_email ?? null,
     mustChangePassword: mustChangePassword(u),
     mailAppsBlocked: !!u.mail_apps_blocked,
+    legalHold: !!u.legal_hold_at,
   };
 }
 
@@ -206,7 +211,7 @@ adminRoutes.get('/users/:id', (c) => {
   return c.json({ user: userDto(u), addresses, sessions, folders });
 });
 
-const roleSchema = z.enum(['owner', 'admin', 'user']);
+const roleSchema = z.enum(['owner', 'admin', 'helpdesk', 'user']);
 
 adminRoutes.post('/users', async (c) => {
   const input = await body(
@@ -266,9 +271,12 @@ adminRoutes.put('/users/:id', async (c) => {
     }),
   );
   if (u.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can modify the owner account');
+  // Helpdesk staff only suspend and reactivate (the rest of their access: requireAdmin).
+  if (me.helpdesk && Object.entries(input).some(([k, v]) => k !== 'status' && v !== undefined)) throw forbidden('Helpdesk staff can only suspend or reactivate accounts');
+  if (input.role === 'helpdesk' && u.kind !== 'person') throw badRequest('Only a person can be helpdesk staff');
   if (input.requirePasswordChange && id === me.id) throw badRequest('Change your own password in Settings → Security');
   if (input.role === 'owner' && me.role !== 'owner') throw forbidden('Only the owner can grant ownership');
-  if (id === me.id && (input.status === 'suspended' || (input.role && input.role !== me.role))) throw badRequest('You cannot change your own role or suspend yourself');
+  if (id === me.id && (input.status === 'suspended' || (input.role && input.role !== roleOf(me)))) throw badRequest('You cannot change your own role or suspend yourself');
   if (u.role === 'owner' && input.role && input.role !== 'owner') {
     const owners = get<{ c: number }>(`SELECT COUNT(*) AS c FROM users WHERE role = 'owner'`)?.c ?? 0;
     if (owners <= 1) throw badRequest('There must be at least one owner');
@@ -278,7 +286,7 @@ adminRoutes.put('/users/:id', async (c) => {
       run('UPDATE users SET name = ? WHERE id = ?', [input.name, id]);
       run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [input.name, id]);
     }
-    if (input.role !== undefined) run('UPDATE users SET role = ? WHERE id = ?', [input.role, id]);
+    if (input.role !== undefined) run('UPDATE users SET role = ?, helpdesk = ? WHERE id = ?', [input.role === 'helpdesk' ? 'user' : input.role, input.role === 'helpdesk' ? 1 : 0, id]);
     if (input.status !== undefined) {
       run('UPDATE users SET status = ? WHERE id = ?', [input.status, id]);
       if (input.status === 'suspended') run('DELETE FROM sessions WHERE user_id = ?', [id]);
@@ -399,6 +407,7 @@ function domainDto(d: any) {
     catchAllUserId: d.catch_all_user_id,
     catchAllEmail: d.catch_all_email ?? null,
     dkimSelector: d.dkim_selector,
+    footerText: d.footer_text ?? '',
     mailboxes: d.mailboxes ?? 0,
     aliases: d.aliases ?? 0,
     dnsCheckedAt: d.dns_checked_at,
@@ -449,6 +458,14 @@ adminRoutes.put('/domains/:id', async (c) => {
       fallbackProviderId: z.number().int().nullable().optional(),
       catchAllUserId: z.number().int().nullable().optional(),
       dkimSelector: z.string().max(200).nullable().optional(),
+      // Plain text; empty turns the footer off.
+      footerText: z
+        .string()
+        .transform((s) => s.replace(/\r\n?/g, '\n').trim())
+        .pipe(z.string().max(FOOTER_MAX, `Keep the footer under ${FOOTER_MAX} characters`))
+        .transform((s) => s || null)
+        .nullable()
+        .optional(),
     }),
   );
   for (const pid of [input.providerId, input.fallbackProviderId]) {
@@ -463,6 +480,7 @@ adminRoutes.put('/domains/:id', async (c) => {
     ['fallbackProviderId', 'fallback_provider_id'],
     ['catchAllUserId', 'catch_all_user_id'],
     ['dkimSelector', 'dkim_selector'],
+    ['footerText', 'footer_text'],
   ];
   for (const [k, col] of map) {
     if (input[k] !== undefined) {
@@ -797,7 +815,7 @@ function settingsDto() {
   return { ...s, 'cloudflare.apiToken': s['cloudflare.apiToken'] ? MASK : '', 'spam.rspamdPassword': s['spam.rspamdPassword'] ? MASK : '' };
 }
 
-adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS, systemSender: systemSender() }));
+adminRoutes.get('/settings', (c) => c.json({ settings: settingsDto(), defaults: DEFAULT_SETTINGS, systemSender: systemSender(), clientIp: clientIp(c) }));
 
 adminRoutes.put('/settings', async (c) => {
   const input = (await c.req.json().catch(() => null)) as Partial<Settings> | null;
@@ -810,9 +828,21 @@ adminRoutes.put('/settings', async (c) => {
   if ('backups.keep' in input && !(Number(input['backups.keep']) >= 1 && Number(input['backups.keep']) <= 60)) throw badRequest('Keep between 1 and 60 backups');
   if ('backups.hour' in input && !(Number.isInteger(Number(input['backups.hour'])) && Number(input['backups.hour']) >= 0 && Number(input['backups.hour']) <= 23)) throw badRequest('Pick an hour from 0 to 23');
   if ('aliases.maxThrowaway' in input && (Number(input['aliases.maxThrowaway']) < 0 || Number(input['aliases.maxThrowaway']) > 500)) throw badRequest('Throwaway alias limit must be between 0 and 500');
+  if ('guard.maxPerHour' in input && !(Number.isInteger(Number(input['guard.maxPerHour'])) && Number(input['guard.maxPerHour']) >= 1 && Number(input['guard.maxPerHour']) <= 100_000)) throw badRequest('Hourly sending limit must be between 1 and 100000');
+  if ('guard.bounceRatePercent' in input && !(Number(input['guard.bounceRatePercent']) >= 1 && Number(input['guard.bounceRatePercent']) <= 100)) throw badRequest('Bounce rate must be between 1 and 100%');
   if ('instance.accent' in input && !/^#[0-9a-f]{6}$/i.test(String(input['instance.accent']))) throw badRequest('Accent must be a hex colour');
   if ('security.passwordMinLength' in input && Number(input['security.passwordMinLength']) < 8) throw badRequest('Minimum password length is 8');
   if ('spam.rspamdUrl' in input && input['spam.rspamdUrl'] && !/^https?:\/\//.test(String(input['spam.rspamdUrl']))) throw badRequest('rspamd URL must start with http(s)://');
+  if ('attachments.action' in input && !['score', 'spam', 'reject'].includes(String(input['attachments.action']))) throw badRequest('Pick what happens to risky attachments');
+  if ('attachments.blockedTypes' in input) {
+    const list = input['attachments.blockedTypes'];
+    if (!Array.isArray(list)) throw badRequest('Blocked attachment types must be a list');
+    const types = [...new Set(list.map((t) => String(t).trim().replace(/^\.+/, '').toLowerCase()).filter(Boolean))];
+    const bad = types.find((t) => !/^[a-z0-9]{1,16}$/.test(t));
+    if (bad) throw badRequest(`“${bad.slice(0, 20)}” isn’t a file extension: use letters and digits only`);
+    if (types.length > 100) throw badRequest('Block up to 100 attachment types');
+    input['attachments.blockedTypes'] = types;
+  }
   if ('mail.systemFrom' in input) {
     const from = String(input['mail.systemFrom'] ?? '').trim().toLowerCase();
     if (from && !isEmail(from)) throw badRequest('Enter a valid address to send system emails from');
@@ -823,6 +853,16 @@ adminRoutes.put('/settings', async (c) => {
     const to = String(input['mail.systemReplyTo'] ?? '').trim().toLowerCase();
     if (to && !isEmail(to)) throw badRequest('Enter a valid address for replies to system emails');
     input['mail.systemReplyTo'] = to;
+  }
+  if ('security.adminIpAllowlist' in input) {
+    const { entries, ranges, invalid } = parseIpList(String(input['security.adminIpAllowlist'] ?? ''));
+    if (invalid.length) throw badRequest(`Not an IP address or CIDR range: ${invalid.slice(0, 3).join(', ')}`);
+    if (entries.length > 200) throw badRequest('List up to 200 addresses and ranges');
+    // Never save a list that would shut out the admin saving it (even while WREN_IGNORE_ADMIN_IP_ALLOWLIST is set).
+    if (entries.length && !ipInList(clientIp(c), ranges)) {
+      throw badRequest(`Your current IP address (${clientIp(c) || 'unknown'}) isn’t in this list, so saving it would lock you out of the admin panel. Add it first.`, 'admin_ip_lockout');
+    }
+    input['security.adminIpAllowlist'] = entries.join('\n');
   }
   if ('mail.systemName' in input) {
     const name = String(input['mail.systemName'] ?? '').trim();
@@ -883,6 +923,7 @@ adminRoutes.post('/invites', async (c) => {
       sendTo: z.string().max(254).optional(),
     }),
   );
+  if (input.role !== 'user' && c.get('user').helpdesk) throw forbidden('Helpdesk staff can only invite users');
   if (input.email && !isEmail(input.email)) throw badRequest('Invalid email');
   const sendTo = input.sendTo?.trim().toLowerCase() || null;
   if (sendTo && !isEmail(sendTo)) throw badRequest('Enter a valid address to send the invitation to');
@@ -911,6 +952,7 @@ adminRoutes.post('/invites', async (c) => {
 adminRoutes.post('/invites/:id/resend', async (c) => {
   const inv = get<any>('SELECT * FROM invites WHERE id = ?', [intParam(c, 'id')]);
   if (!inv) throw notFound();
+  if (inv.role !== 'user' && c.get('user').helpdesk) throw forbidden('Helpdesk staff can only invite users');
   if (inv.used_at) throw badRequest('This invitation has already been used');
   const { sendTo } = await body(c, z.object({ sendTo: z.string().max(254).optional() }));
   const to = sendTo?.trim().toLowerCase() || inv.sent_to;
@@ -925,7 +967,9 @@ adminRoutes.post('/invites/:id/resend', async (c) => {
 });
 
 adminRoutes.delete('/invites/:id', (c) => {
-  run('DELETE FROM invites WHERE id = ?', [intParam(c, 'id')]);
+  const id = intParam(c, 'id');
+  if (c.get('user').helpdesk && get('SELECT 1 FROM invites WHERE id = ? AND role != ?', [id, 'user'])) throw forbidden('Helpdesk staff can only invite users');
+  run('DELETE FROM invites WHERE id = ?', [id]);
   return c.json({ ok: true });
 });
 

@@ -12,7 +12,7 @@ import { loadBody } from '../mail/body.js';
 import { cancelOutbox } from '../mail/outbound.js';
 import { ftsTerm } from '../mail/search.js';
 import { saveDraft } from '../mail/send.js';
-import { purgeMessages } from '../mail/store.js';
+import { HOLD_MESSAGE, onLegalHold, purgeMessages } from '../mail/store.js';
 import { rememberSenders } from '../mail/sender-verdicts.js';
 import { cleanMessageId, formatAddr } from '../lib/addr.js';
 import { importRaw, QuotaExceeded } from '../services/mail-import.js';
@@ -672,6 +672,8 @@ function updateEmail(ctx: JmapContext, row: any, labels: LabelRef[], patch: Reco
 }
 
 function destroyEmail(row: any) {
+  // On legal hold, only drafts can go (as from the web app); everything else stays.
+  if (row.folder !== 'drafts' && onLegalHold(row.user_id)) throw new SetError('forbidden', HOLD_MESSAGE);
   if (row.status === 'queued') cancelOutbox(row.id);
   purgeMessages([row.id]);
 }

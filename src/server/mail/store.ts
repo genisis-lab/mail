@@ -1,5 +1,6 @@
 import type { Addr, Category, Folder } from '../../shared/types.js';
 import { all, get, IN_LIST, insert, listParam, now, run, tx } from '../db/index.js';
+import { forbidden } from '../lib/http.js';
 import { putBlob } from './blobs.js';
 import { bodyColumns } from './body.js';
 import { makeSnippet, htmlToText, type ParsedAttachment } from './parse.js';
@@ -222,20 +223,36 @@ export function indexMessage(id: number) {
   ]);
 }
 
-/** Permanently delete messages (and their now-empty threads). */
+// ── Legal hold ──────────────────────────────────────────────────────────────
+// While an admin has a mailbox on legal hold, none of its mail is permanently
+// deleted (moving to Trash still works). The person isn't told why.
+
+/** SQL condition on a `user_id` column: rows of mailboxes that aren't on legal hold. */
+export const NOT_ON_HOLD = 'user_id NOT IN (SELECT id FROM users WHERE legal_hold_at IS NOT NULL)';
+export const HOLD_MESSAGE = 'This mailbox can’t be permanently deleted right now';
+
+export const onLegalHold = (userId: number) => !!get('SELECT 1 FROM users WHERE id = ? AND legal_hold_at IS NOT NULL', [userId]);
+
+/** Refuse to permanently delete this mailbox's mail while it's on legal hold. */
+export function assertNotOnHold(userId: number) {
+  if (onLegalHold(userId)) throw forbidden(HOLD_MESSAGE);
+}
+
+/** Permanently delete messages (and their now-empty threads). Mail of mailboxes on legal hold is always kept. */
 export function purgeMessages(ids: number[]) {
   if (!ids.length) return;
   tx(() => {
     for (const chunk of chunks(ids, 500)) {
       const rows = all<{ id: number; user_id: number; size: number; thread_id: number }>(
-        `SELECT id, user_id, size, thread_id FROM messages WHERE id IN ${IN_LIST}`,
+        `SELECT id, user_id, size, thread_id FROM messages WHERE id IN ${IN_LIST} AND ${NOT_ON_HOLD}`,
         [listParam(chunk)],
       );
+      if (!rows.length) continue;
       for (const r of rows) {
         run('DELETE FROM messages_fts WHERE rowid = ?', [r.id]);
         run('UPDATE users SET used_bytes = MAX(0, used_bytes - ?) WHERE id = ?', [r.size, r.user_id]);
       }
-      run(`DELETE FROM messages WHERE id IN ${IN_LIST}`, [listParam(chunk)]);
+      run(`DELETE FROM messages WHERE id IN ${IN_LIST}`, [listParam(rows.map((r) => r.id))]);
       const threads = [...new Set(rows.map((r) => r.thread_id))];
       for (const t of threads) {
         const left = get<{ c: number; d: number | null }>('SELECT COUNT(*) AS c, MAX(date) AS d FROM messages WHERE thread_id = ?', [t]);

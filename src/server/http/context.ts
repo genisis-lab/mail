@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { get, now, run } from '../db/index.js';
 import { randomToken, sha256 } from '../lib/crypto.js';
 import { badRequest, forbidden, HttpError, tooMany, unauthorized } from '../lib/http.js';
+import { ipInList, parseIpList } from '../lib/ip.js';
 import { getSettings } from '../settings.js';
 import { getUser, mustChangePassword, mustSetup2fa, type UserRow } from '../services/users.js';
 
@@ -324,9 +325,56 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/**
+ * What helpdesk staff may do under /api/admin: account support for ordinary
+ * people, and invitations for them. Anything not listed is refused. Routes with
+ * a person's id (target) only reach a person with role 'user' who isn't helpdesk
+ * staff themselves; the routes check what can't be told from the path (PUT
+ * /users/:id: suspend or reactivate only; invites: role 'user' only).
+ */
+const HELPDESK_ROUTES: { method: string; path: RegExp; target?: true }[] = [
+  { method: 'GET', path: /^\/users$/ },
+  { method: 'GET', path: /^\/users\/(\d+)(?:\/detail)?$/, target: true },
+  { method: 'PUT', path: /^\/users\/(\d+)$/, target: true },
+  { method: 'POST', path: /^\/users\/(\d+)\/(?:unlock|signout|reset-2fa|reset-link|setup-link|password)$/, target: true },
+  { method: 'DELETE', path: /^\/users\/(\d+)\/(?:passkeys|sessions\/[a-f0-9]{16})$/, target: true },
+  { method: 'GET', path: /^\/invites$/ },
+  { method: 'POST', path: /^\/invites(?:\/\d+\/resend)?$/ },
+  { method: 'DELETE', path: /^\/invites\/\d+$/ },
+];
+
+/** Whether helpdesk staff may make this request under /api/admin (`path` without the prefix). */
+function helpdeskAllowed(method: string, path: string, me: UserRow): boolean {
+  for (const r of HELPDESK_ROUTES) {
+    const m = method === r.method ? r.path.exec(path) : null;
+    if (!m) continue;
+    if (!r.target) return true;
+    const target = getUser(Number(m[1]));
+    // An unknown id falls through to the route's own 404.
+    return !target || (target.role === 'user' && !target.helpdesk && target.kind === 'person' && target.id !== me.id);
+  }
+  return false;
+}
+
 export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = c.get('user');
-  if (!user || (user.role !== 'admin' && user.role !== 'owner')) throw forbidden('Administrator access required');
+  if (user?.role === 'admin' || user?.role === 'owner') return next();
+  if (user?.helpdesk) {
+    if (!helpdeskAllowed(c.req.method, c.req.path.replace(/^\/api\/admin/, ''), user)) throw forbidden('Helpdesk staff can’t do that');
+    return next();
+  }
+  throw forbidden('Administrator access required');
+};
+
+/** Whether the admin panel answers this address under an allowlist (by default, the one in Settings → Security). */
+export function adminIpAllowed(ip: string, list: string = getSettings()['security.adminIpAllowlist']): boolean {
+  if (config.ignoreAdminIpAllowlist || !list.trim()) return true;
+  return ipInList(ip, parseIpList(list).ranges);
+}
+
+/** With an admin IP allowlist set, admin routes refuse every other address, whatever the role. */
+export const requireAdminIp: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!adminIpAllowed(clientIp(c))) throw new HttpError(403, 'The admin panel can’t be used from this network. Ask an administrator to add your IP address to the allowlist.', 'admin_ip_blocked');
   await next();
 };
 

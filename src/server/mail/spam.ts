@@ -54,6 +54,20 @@ export function parseAuthResults(p: Parsed, opts: { arc?: boolean } = {}): Recor
   return out;
 }
 
+/**
+ * The first attachment whose final extension is on the admin's blocked list ("invoice.pdf.exe" is an exe),
+ * or null. Trailing dots and spaces are ignored, as Windows ignores them when opening the file.
+ */
+export function blockedAttachment(p: Parsed): string | null {
+  const blocked = new Set(getSettings()['attachments.blockedTypes'].map((t) => t.toLowerCase()));
+  if (!blocked.size) return null;
+  for (const a of p.attachments) {
+    const ext = /\.([^.]+)$/.exec(a.filename.replace(/[.\s]+$/, ''))?.[1]?.toLowerCase();
+    if (ext && blocked.has(ext)) return a.filename;
+  }
+  return null;
+}
+
 function builtinScore(p: Parsed, auth: Record<string, string>, providerScore?: number): { score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
@@ -102,9 +116,7 @@ function builtinScore(p: Parsed, auth: Record<string, string>, providerScore?: n
   if (p.replyTo && p.from && domainOf(p.replyTo.split(',')[0]) !== domainOf(p.from.address) && !p.listId) {
     add(0.5, 'Reply-To on different domain');
   }
-  if (/\.(exe|scr|js|vbs|bat|cmd|jar|msi|com|pif)$/i.test(p.attachments.map((a) => a.filename).join(' '))) {
-    add(4, 'executable attachment');
-  }
+  if (getSettings()['attachments.action'] === 'score' && blockedAttachment(p)) add(4, 'executable attachment');
   return { score, reasons };
 }
 

@@ -12,11 +12,12 @@ import { enqueue, setLocalDeliver } from './outbound.js';
 import { getHeader, htmlToText, parseMail, type Parsed } from './parse.js';
 import { findOneTimeCode } from './otp.js';
 import { findParcel } from './parcel.js';
-import { checkSpam, type SpamVerdict } from './spam.js';
+import { blockedAttachment, checkSpam, type SpamVerdict } from './spam.js';
 import { senderVerdict } from './sender-verdicts.js';
 import { storeMessage } from './store.js';
 import { categorize } from './categorize.js';
 import { readReport } from './dsn.js';
+import { readDmarcReports } from './dmarc.js';
 import { recordDeliveryEvents } from '../services/delivery-events.js';
 import { verifyDomainsByRouting } from '../services/dns.js';
 import { markRoundtripReceived, roundtripToken } from '../services/checklist.js';
@@ -93,6 +94,17 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
     return result;
   }
 
+  // The administrator's attachment policy, for mail from outside: refuse it here, or send it to Spam below.
+  const policy = getSettings()['attachments.action'];
+  const risky = opts.localSenderId || opts.skipSpam || policy === 'score' ? null : blockedAttachment(p);
+  if (risky && policy === 'reject') {
+    for (const r of rcpts) {
+      result.rejected.push({ rcpt: r, reason: 'attachment type not allowed' });
+      logInbound(opts, p, r, 'rejected', `blocked attachment type: ${risky.slice(0, 100)}`, raw.length);
+    }
+    return result;
+  }
+
   // Resolve every recipient to local users / external forwards.
   const userTargets = new Map<number, string>(); // userId -> address it was delivered to
   const externalTargets = new Map<string, string>(); // external address -> hosted address it came through
@@ -107,6 +119,11 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
     if (res.catchAll) recordCatchAllHit(r, p.from?.address ?? opts.mailFrom ?? '', p.subject);
     for (const u of res.userIds) if (!userTargets.has(u)) userTargets.set(u, r);
     for (const e of res.external) if (!externalTargets.has(e)) externalTargets.set(e, r);
+  }
+  // DMARC aggregate reports for our domains (sent to postmaster@, which may have no mailbox): keep the data
+  // for the admin's DMARC page. The message itself is still delivered, or refused, like any other.
+  if (!opts.localSenderId && p.attachments.length && rcpts.some((r) => isHostedDomain(domainOf(r)))) {
+    await readDmarcReports(p).catch((err) => log.warn('Could not read DMARC report', err));
   }
   if (!userTargets.size && !externalTargets.size) return result;
   if (opts.source === 'cloudflare-routing') verifyDomainsByRouting(result.accepted);
@@ -132,7 +149,7 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
 
   for (const [userId, rcpt] of userTargets) {
     try {
-      const outcome = await deliverToUser(userId, rcpt, p, raw, rawBlob, spam, opts);
+      const outcome = await deliverToUser(userId, rcpt, p, raw, rawBlob, spam, opts, risky);
       if (outcome.stored) result.delivered++;
       logInbound(opts, p, rcpt, outcome.status, outcome.reason, raw.length);
       if (outcome.status === 'rejected') {
@@ -154,7 +171,7 @@ export async function ingest(raw: Buffer, opts: IngestOptions): Promise<IngestRe
   }
 
   // Group members outside this server.
-  if (externalTargets.size && !(spam?.isSpam ?? false)) {
+  if (externalTargets.size && !(spam?.isSpam ?? false) && !risky) {
     const byVia = new Map<string, string[]>();
     for (const [ext, via] of externalTargets) byVia.set(via, [...(byVia.get(via) ?? []), ext]);
     for (const [via, list] of byVia) {
@@ -174,6 +191,8 @@ async function deliverToUser(
   rawBlob: string,
   spam: SpamVerdict | null,
   opts: IngestOptions,
+  /** An attachment the admin's policy sends to Spam. */
+  riskyAttachment: string | null = null,
 ): Promise<{ stored: boolean; status: string; reason: string }> {
   const user = getUser(userId);
   if (!user) return { stored: false, status: 'rejected', reason: 'no such user' };
@@ -204,6 +223,9 @@ async function deliverToUser(
   if (blocked) {
     folder = 'spam';
     reason = 'sender blocked by user';
+  } else if (riskyAttachment) {
+    folder = 'spam';
+    reason = 'blocked attachment type';
   } else if (a.alwaysSpam) {
     folder = 'spam';
     reason = 'filter';

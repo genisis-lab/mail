@@ -8,7 +8,7 @@ import { isEmail, normalizeEmail } from '../lib/addr.js';
 import { getBlob } from '../mail/blobs.js';
 import { applyThreadAction, counters, getMessage, getThread, listThreads, VIEWS, type ThreadAction } from '../mail/threads.js';
 import { retryOutbox } from '../mail/outbound.js';
-import { purgeMessages } from '../mail/store.js';
+import { assertNotOnHold, purgeMessages } from '../mail/store.js';
 import { unsubscribe } from '../services/unsubscribe.js';
 import { icsDownload, inviteFile, inviteFor, replyToInvite } from '../services/calendar.js';
 import type { Rsvp } from '../../shared/ics.js';
@@ -110,6 +110,7 @@ mailRoutes.post('/messages/:id/actions', async (c) => {
   if (type === 'trash') run(`UPDATE messages SET folder = 'trash', trashed_at = ? WHERE id = ?`, [now(), id]);
   else if (type === 'delete') {
     if (m.folder !== 'trash' && m.folder !== 'spam') throw badRequest('Move the message to Trash first');
+    assertNotOnHold(user.id);
     purgeMessages([id]);
   } else run(`UPDATE messages SET ${set[type]} WHERE id = ?`, [id]);
   return c.json({ ok: true });

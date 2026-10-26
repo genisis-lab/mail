@@ -94,10 +94,10 @@ composeRoutes.post('/send', async (c) => {
 });
 
 /** Undo send / cancel a scheduled send: the message becomes a draft again. */
-composeRoutes.post('/messages/:id/cancel', (c) => {
+composeRoutes.post('/messages/:id/cancel', async (c) => {
   const user = c.get('user');
   const id = intParam(c, 'id');
-  if (!cancelSend(user.id, id)) throw badRequest('Too late — the message has already been sent');
+  if (!(await cancelSend(user.id, id))) throw badRequest('Too late — the message has already been sent');
   return c.json({ draftId: id });
 });
 

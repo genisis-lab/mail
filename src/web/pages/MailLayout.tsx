@@ -18,6 +18,7 @@ import {
   Menu as MenuIcon,
   MoreVertical,
   OctagonAlert,
+  OctagonPause,
   Pencil,
   Plus,
   Search,
@@ -173,6 +174,7 @@ function MailShell() {
     <div className="flex h-full flex-col bg-bg">
       <TopBar onMenu={() => (window.innerWidth < 768 ? setMobileOpen((o) => !o) : setCollapsed((c) => !c))} onHelp={() => setShortcutsOpen(true)} />
       <OfflineBar />
+      <SendPausedBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
         <main className="min-w-0 flex-1 pr-4 pb-4 max-md:px-2 max-md:pb-2">
@@ -259,6 +261,20 @@ function OfflineBar() {
   );
 }
 
+/** Sending is paused for this account (unusual activity, or an administrator). */
+function SendPausedBar() {
+  const { user } = useSession();
+  if (!user.sendPaused) return null;
+  return (
+    <div role="alert" className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-[color-mix(in_srgb,var(--danger)_10%,var(--panel))] px-3 py-2 text-[13px] max-md:mx-2">
+      <OctagonPause className="size-4 shrink-0 text-danger" aria-hidden />
+      <span className="min-w-0 flex-1">
+        Sending is paused for your account because of unusual activity. You can still read and receive mail. Contact your administrator to turn sending back on.
+      </span>
+    </div>
+  );
+}
+
 function ViewGuard({ element }: { element: ReactNode }) {
   const { view } = useParams();
   if (!NAV.some((n) => n.view === view)) return <Navigate to="/inbox" replace />;
@@ -268,7 +284,7 @@ function ViewGuard({ element }: { element: ReactNode }) {
 // ── Top bar ─────────────────────────────────────────────────────────────────
 
 function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) {
-  const { user, instance, isAdmin } = useSession();
+  const { user, instance, isAdmin, isHelpdesk } = useSession();
   const installPrompt = useInstallPrompt();
   const navigate = useNavigate();
   const toast = useToast();
@@ -294,7 +310,7 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
         <IconButton label="Settings" onClick={() => navigate('/settings')}>
           <Settings className="size-5" />
         </IconButton>
-        {isAdmin && (
+        {(isAdmin || isHelpdesk) && (
           <IconButton label="Admin panel" onClick={() => navigate('/admin')} className="max-sm:hidden">
             <Shield className="size-5" />
           </IconButton>
@@ -328,7 +344,7 @@ function TopBar({ onMenu, onHelp }: { onMenu: () => void; onHelp: () => void }) 
                     Install app
                   </MenuRow>
                 )}
-                {isAdmin && (
+                {(isAdmin || isHelpdesk) && (
                   <MenuRow icon={<Shield className="size-4" />} onClick={() => (close(), navigate('/admin'))}>
                     Admin panel
                   </MenuRow>

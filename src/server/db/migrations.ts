@@ -805,6 +805,88 @@ export const migrations: string[] = [
     PRIMARY KEY (user_id, sender)
   );
   `,
+
+  // 26: DMARC aggregate reports sent to postmaster@, one row per report and per sending source in it.
+  `
+  CREATE TABLE dmarc_reports (
+    id               INTEGER PRIMARY KEY,
+    org              TEXT NOT NULL,
+    email            TEXT NOT NULL DEFAULT '',
+    report_id        TEXT NOT NULL,
+    domain           TEXT NOT NULL,
+    policy           TEXT NOT NULL DEFAULT 'none',
+    subdomain_policy TEXT NOT NULL DEFAULT 'none',
+    pct              INTEGER,
+    begin_at         INTEGER NOT NULL,
+    end_at           INTEGER NOT NULL,
+    messages         INTEGER NOT NULL DEFAULT 0,
+    passed           INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL,
+    UNIQUE (org, report_id)
+  );
+  CREATE INDEX idx_dmarc_reports_domain ON dmarc_reports(domain, end_at);
+  CREATE INDEX idx_dmarc_reports_end ON dmarc_reports(end_at);
+  CREATE TABLE dmarc_records (
+    report_id   INTEGER NOT NULL REFERENCES dmarc_reports(id) ON DELETE CASCADE,
+    source_ip   TEXT NOT NULL,
+    count       INTEGER NOT NULL,
+    disposition TEXT NOT NULL,
+    dkim        TEXT NOT NULL,
+    spf         TEXT NOT NULL,
+    header_from TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX idx_dmarc_records_report ON dmarc_records(report_id);
+  `,
+
+  // 27: an optional plain-text footer per domain, added to mail sent from it. A sent message keeps
+  // the footer it got, so undo send can take it off again.
+  `
+  ALTER TABLE domains ADD COLUMN footer_text TEXT;
+  ALTER TABLE messages ADD COLUMN footer_text TEXT;
+  `,
+
+  // 28: legal hold: while an admin has one on a mailbox, none of its mail is permanently deleted.
+  `
+  ALTER TABLE users ADD COLUMN legal_hold_at INTEGER;
+  ALTER TABLE users ADD COLUMN legal_hold_note TEXT;
+  `,
+
+  // 29: sign-in history for admins: every attempt on an existing account (kept 90 days),
+  //     and whether a successful one came from somewhere new for that person.
+  `
+  CREATE TABLE sign_ins (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ok           INTEGER NOT NULL,
+    method       TEXT NOT NULL,
+    reason       TEXT,
+    ip           TEXT,
+    country      TEXT,
+    location     TEXT NOT NULL DEFAULT '',
+    user_agent   TEXT,
+    new_location INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL
+  );
+  CREATE INDEX idx_sign_ins_user ON sign_ins(user_id, created_at DESC);
+  CREATE INDEX idx_sign_ins_created ON sign_ins(created_at);
+  `,
+
+  // 30: sending paused (compromised-account guard, or an admin): the person can't send and
+  //     their queued mail is held until an admin resumes it. Reading and receiving go on.
+  //     After a resume the guard counts only what was sent since.
+  `
+  ALTER TABLE users ADD COLUMN send_paused_at INTEGER;
+  ALTER TABLE users ADD COLUMN send_paused_reason TEXT;
+  ALTER TABLE users ADD COLUMN send_resumed_at INTEGER;
+  `,
+
+  // 31: helpdesk staff: people (role 'user') who may do account support in the admin panel.
+  //     A flag rather than a fourth users.role value: changing that CHECK means rebuilding
+  //     users, and dropping it cascades into every table that references it unless foreign
+  //     keys are switched off, which a migration's transaction can't do.
+  `
+  ALTER TABLE users ADD COLUMN helpdesk INTEGER NOT NULL DEFAULT 0 CHECK (helpdesk = 0 OR (helpdesk = 1 AND role = 'user' AND kind = 'person'));
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */
