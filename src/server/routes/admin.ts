@@ -21,6 +21,7 @@ import { getProviderDef, listProviderTypes } from '../providers/registry.js';
 import { ProviderError } from '../providers/types.js';
 import { blobEncryptionStatus, blobStoreSize, putBlob } from '../mail/blobs.js';
 import { buildMime } from '../mail/compose.js';
+import { FOOTER_MAX } from '../mail/footer.js';
 import { enqueue, loadProvider, processQueue, providerContext, retryOutbox, toOutboundEmail } from '../mail/outbound.js';
 import { body, clientIp, intParam, rateLimit, type AppEnv } from '../http/context.js';
 import { systemSender } from '../services/system-mail.js';
@@ -399,6 +400,7 @@ function domainDto(d: any) {
     catchAllUserId: d.catch_all_user_id,
     catchAllEmail: d.catch_all_email ?? null,
     dkimSelector: d.dkim_selector,
+    footerText: d.footer_text ?? '',
     mailboxes: d.mailboxes ?? 0,
     aliases: d.aliases ?? 0,
     dnsCheckedAt: d.dns_checked_at,
@@ -449,6 +451,14 @@ adminRoutes.put('/domains/:id', async (c) => {
       fallbackProviderId: z.number().int().nullable().optional(),
       catchAllUserId: z.number().int().nullable().optional(),
       dkimSelector: z.string().max(200).nullable().optional(),
+      // Plain text; empty turns the footer off.
+      footerText: z
+        .string()
+        .transform((s) => s.replace(/\r\n?/g, '\n').trim())
+        .pipe(z.string().max(FOOTER_MAX, `Keep the footer under ${FOOTER_MAX} characters`))
+        .transform((s) => s || null)
+        .nullable()
+        .optional(),
     }),
   );
   for (const pid of [input.providerId, input.fallbackProviderId]) {
@@ -463,6 +473,7 @@ adminRoutes.put('/domains/:id', async (c) => {
     ['fallbackProviderId', 'fallback_provider_id'],
     ['catchAllUserId', 'catch_all_user_id'],
     ['dkimSelector', 'dkim_selector'],
+    ['footerText', 'footer_text'],
   ];
   for (const [k, col] of map) {
     if (input[k] !== undefined) {

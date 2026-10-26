@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Domain footers.** Admins can give a domain a plain-text footer (a disclaimer, say) in
+  the domain editor. It is added once to the end of mail sent from that domain, in the
+  text and HTML parts and in the Sent copy, and comes off again on undo send. PGP-signed
+  or encrypted mail, private links and system mail never get it.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

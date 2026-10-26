@@ -805,6 +805,13 @@ export const migrations: string[] = [
     PRIMARY KEY (user_id, sender)
   );
   `,
+
+  // 26: an optional plain-text footer per domain, added to mail sent from it. A sent message keeps
+  // the footer it got, so undo send can take it off again.
+  `
+  ALTER TABLE domains ADD COLUMN footer_text TEXT;
+  ALTER TABLE messages ADD COLUMN footer_text TEXT;
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */
