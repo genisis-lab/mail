@@ -887,6 +887,15 @@ export const migrations: string[] = [
   `
   ALTER TABLE users ADD COLUMN helpdesk INTEGER NOT NULL DEFAULT 0 CHECK (helpdesk = 0 OR (helpdesk = 1 AND role = 'user' AND kind = 'person'));
   `,
+  // 32: optional client-encrypted PGP private-key backup. The passphrase never reaches the server.
+  `
+  CREATE TABLE pgp_backups (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    armored TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

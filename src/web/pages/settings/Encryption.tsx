@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, Download, KeyRound, Plus, Trash2, Upload } from 'lucide-react';
 import { api } from '../../lib/api';
 import { longDate } from '../../lib/format';
-import { createKey, forgetKey, formatFingerprint, importPrivateKey, keyInfo, publicKeyFrom, publicKeyOf, storedKey, storeKey } from '../../lib/pgp';
+import { backupKey, restoreKey, useStoredKey, createKey, forgetKey, formatFingerprint, importPrivateKey, keyInfo, publicKeyFrom, publicKeyOf, storeKey } from '../../lib/pgp';
 import { useSession } from '../../lib/session';
 import { saveFile } from '../../components/Pgp';
 import { useToast } from '../../components/toast';
@@ -19,10 +19,10 @@ interface ServerKey {
 }
 
 function usePgpKeys() {
-  return useQuery({ queryKey: ['pgp'], queryFn: () => api.get<{ published: ServerKey | null; keys: ServerKey[] }>('/api/me/pgp') });
+  return useQuery({ queryKey: ['pgp'], queryFn: () => api.get<{ published: ServerKey | null; keys: ServerKey[]; backup: { fingerprint: string; updatedAt: number } | null }>('/api/me/pgp') });
 }
 
-/** PGP: your own key (kept in this browser) and the public keys of people you write to. */
+/** PGP: your own key (with an encrypted backup) and the public keys of people you write to. */
 export function EncryptionTab() {
   return (
     <div className="space-y-6">
@@ -37,17 +37,10 @@ function YourKeyCard() {
   const toast = useToast();
   const qc = useQueryClient();
   const server = usePgpKeys();
-  const [local, setLocal] = useState(() => storedKey(user.id));
+  const local = useStoredKey(user.id);
   const [dialog, setDialog] = useState<'create' | 'import' | null>(null);
   const [busy, setBusy] = useState(false);
   const info = useQuery({ queryKey: ['pgp-local', local], queryFn: async () => ({ ...(await keyInfo(local!)), publicKey: await publicKeyOf(local!) }), enabled: !!local });
-
-  // Another tab added or removed the key.
-  useEffect(() => {
-    const sync = (e: StorageEvent) => e.key === `wren.pgp.${user.id}` && setLocal(storedKey(user.id));
-    window.addEventListener('storage', sync);
-    return () => window.removeEventListener('storage', sync);
-  }, [user.id]);
 
   const published = server.data?.published ?? null;
   const isPublished = !!info.data && published?.fingerprint === info.data.fingerprint;
@@ -64,17 +57,25 @@ function YourKeyCard() {
     }
   };
 
-  /** Keep a new or imported key here and publish its public half. */
-  const adopt = async (privateKey: string, done: string) => {
+  const saveBackup = async (key: string) => {
+    setBusy(true);
     try {
-      storeKey(user.id, privateKey);
-    } catch {
-      toast({ message: 'This browser won’t store the key (private browsing or storage turned off)', tone: 'error' });
-      return;
-    }
-    setLocal(privateKey);
+      await backupKey(user.id, key);
+      await qc.invalidateQueries({ queryKey: ['pgp'] });
+      toast('Encrypted key backed up. Use your PGP passphrase to unlock it on another browser.');
+      return true;
+    } catch (err) {
+      toast({ message: `Backup failed; keep a downloaded copy of your key. ${(err as Error).message}`, tone: 'error' });
+      return false;
+    } finally { setBusy(false); }
+  };
+
+  /** Keep the protected key, back it up, and publish only its public half. */
+  const adopt = async (privateKey: string, done: string) => {
+    storeKey(user.id, privateKey);
+    const backedUp = await saveBackup(privateKey);
     setDialog(null);
-    if (await publish(await publicKeyOf(privateKey))) toast(done);
+    if (backedUp && await publish(await publicKeyOf(privateKey))) toast(done);
   };
 
   const unpublish = async () => {
@@ -92,7 +93,7 @@ function YourKeyCard() {
           <KeyRound className="size-4 text-muted" aria-hidden /> Encryption (PGP)
         </span>
       }
-      description="Send and read end-to-end encrypted mail, and sign what you send. Your private key stays in this browser and is never sent to the server. To read encrypted mail on another device, import the same key there."
+      description="Send and read encrypted mail, and sign what you send. An encrypted backup lets you use your key in other browsers. Only your PGP passphrase unlocks it, on your device; the server never receives that passphrase. Losing it means losing access, even if you reset your account password."
     >
       {local ? (
         !info.data ? (
@@ -104,6 +105,7 @@ function YourKeyCard() {
               <p className="mt-1 font-mono text-[13px] break-all text-muted">{formatFingerprint(info.data.fingerprint)}</p>
               <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                 created {longDate(info.data.created.getTime())}
+                {server.data?.backup?.fingerprint === info.data.fingerprint ? <Badge tone="ok">encrypted backup saved</Badge> : <Badge tone="warn">no matching server backup</Badge>}
                 {isPublished ? <Badge tone="ok">published on {instance.name}</Badge> : <Badge tone="warn">not published</Badge>}
               </p>
             </div>
@@ -113,6 +115,25 @@ function YourKeyCard() {
                 : `Publish your public key so people on ${instance.name} can send you encrypted mail.`}
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button loading={busy} onClick={() => void saveBackup(local)}>Save encrypted backup</Button>
+              {server.data?.backup && (
+                <Button icon={<Download className="size-4" />} onClick={async () => {
+                  try {
+                    const { backup } = await api.get<{ backup: { armored: string; fingerprint: string } | null }>('/api/me/pgp/backup');
+                    if (backup) saveFile(`${user.email}-${backup.fingerprint}-backup.asc`, backup.armored, 'application/pgp-keys');
+                  } catch (err) { toast({ message: (err as Error).message, tone: 'error' }); }
+                }}>Download server backup</Button>
+              )}
+              {server.data?.backup && (
+                <Button variant="ghost" onClick={async () => {
+                  if (!window.confirm('Delete your encrypted server backup? Download a private-key copy first. Other browsers will need that file to read encrypted mail.')) return;
+                  try {
+                    await api.del('/api/me/pgp/backup');
+                    await qc.invalidateQueries({ queryKey: ['pgp'] });
+                    toast('Server backup deleted. Local copies are unchanged.');
+                  } catch (err) { toast({ message: (err as Error).message, tone: 'error' }); }
+                }}>Delete server backup</Button>
+              )}
               {!isPublished && (
                 <Button
                   variant="primary"
@@ -155,9 +176,8 @@ function YourKeyCard() {
                 variant="ghost"
                 icon={<Trash2 className="size-4" />}
                 onClick={() => {
-                  if (!window.confirm('Remove your private key from this browser? You won’t be able to read encrypted mail or sign here until you import it again. If this is your only copy, back it up first: mail encrypted to it can’t be read without it.')) return;
+                  if (!window.confirm('Remove your private key from this browser? You won’t be able to read encrypted mail or sign here until you restore its encrypted backup or import it again. If this is your only copy, back it up first: mail encrypted to it can’t be read without it.')) return;
                   forgetKey(user.id);
-                  setLocal(null);
                   toast('Key removed from this browser');
                 }}
               >
@@ -181,7 +201,7 @@ function YourKeyCard() {
           {published ? (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-panel2 px-4 py-3 text-[13px]">
               <span className="min-w-0 flex-1">
-                Your public key <span className="font-mono">{formatFingerprint(published.fingerprint).slice(-19)}</span> is published, but its private key isn’t in this browser. Import it to read encrypted mail here.
+                Your public key <span className="font-mono">{formatFingerprint(published.fingerprint).slice(-19)}</span> is published, but its private key isn’t in this browser. Restore its encrypted backup or import it to read encrypted mail here.
               </span>
               <Button size="sm" variant="ghost" onClick={() => void unpublish()}>
                 Stop publishing
@@ -191,7 +211,10 @@ function YourKeyCard() {
             <p className="text-sm text-muted">You don’t have a key in this browser yet. Create one for {user.email}, or import the key you already use.</p>
           )}
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog('create')}>
+            {server.data?.backup && <Button onClick={async () => {
+              try { await restoreKey(user.id); } catch (err) { toast({ message: (err as Error).message, tone: 'error' }); }
+            }}>Restore encrypted backup</Button>}
+            <Button variant="primary" disabled={server.isLoading || !!server.data?.backup} icon={<Plus className="size-4" />} onClick={() => setDialog('create')}>
               Create a key
             </Button>
             <Button icon={<Upload className="size-4" />} onClick={() => setDialog('import')}>
@@ -254,6 +277,7 @@ function KeyDialog({ mode, onClose, onKey }: { mode: 'create' | 'import' | null;
       }
     >
       <div className="grid gap-4">
+        <p className="text-[13px] text-muted">Your passphrase-protected private key will be backed up to your account for use in other browsers. Its passphrase stays on this device. Keep a downloaded copy too.</p>
         {creating ? (
           <p className="text-[13px] text-muted">
             A new key for <b>{user.email}</b>. Choose a passphrase you’ll remember: you type it to read encrypted mail, and nobody can recover it for you.

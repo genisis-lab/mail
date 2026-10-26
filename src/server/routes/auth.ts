@@ -36,6 +36,14 @@ import { WebAuthnError } from '../lib/webauthn.js';
 
 export const authRoutes = new Hono<AppEnv>();
 
+// A new tab must check its current cookies, never reuse a cached signed-out
+// response (or another account's response) from before login.
+authRoutes.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'private, no-store');
+  c.header('Vary', 'Cookie, X-Wren-Account');
+});
+
 function instanceInfo() {
   const s = getSettings();
   const domains = s['registration.mode'] === 'open'

@@ -46,7 +46,9 @@ describe('the helpdesk migration', () => {
 
     expect(get<{ value: string }>(`SELECT value FROM _meta WHERE key = 'schema_version'`)!.value).toBe(String(migrations.length));
     expect(all('SELECT * FROM users ORDER BY id')).toEqual(usersBefore.map((u) => ({ ...(u as object), helpdesk: 0 })));
-    expect(counts()).toEqual(countsBefore);
+    // Later migrations may add tables; every table that existed before must keep its rows.
+    const countsAfter = counts();
+    expect(Object.fromEntries(Object.keys(countsBefore).map((table) => [table, countsAfter[table]]))).toEqual(countsBefore);
     // Only users changed (when this is the latest migration, nothing else in the schema did).
     if (HELPDESK === migrations.length - 1) expect(schema()).toEqual(schemaBefore);
     expect(all('PRAGMA foreign_key_check')).toEqual([]);

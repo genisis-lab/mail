@@ -8,6 +8,7 @@ import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, Forc
 import { MailLayout } from './pages/MailLayout';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { PrivateMessagePage } from './pages/PrivateMessagePage';
+import { lockKeys } from './lib/pgp';
 
 export function App() {
   const me = useMe();
@@ -16,7 +17,7 @@ export function App() {
   useTheme(me.data?.user?.prefs.theme, me.data?.instance.accent);
 
   useEffect(() => {
-    const onUnauthorized = () => qc.invalidateQueries({ queryKey: ['me'] });
+    const onUnauthorized = () => { lockKeys(); qc.invalidateQueries({ queryKey: ['me'] }); };
     window.addEventListener('wren:unauthorized', onUnauthorized);
     window.addEventListener('wren:mfa-required', onUnauthorized);
     return () => {

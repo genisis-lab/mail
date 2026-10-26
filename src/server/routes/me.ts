@@ -403,7 +403,7 @@ meRoutes.get('/export/:id/download', (c) => {
 });
 
 // ── PGP keys ────────────────────────────────────────────────────────────────
-// Public keys only: private keys stay in the browser. Looking up someone's key (to encrypt to them or
+// Public-key lookups never include private backups. Looking up someone's key (to encrypt to them or
 // check their signature) finds the keys a person saved, and the key published by whoever owns that
 // address on this server.
 
@@ -414,7 +414,38 @@ const keyDto = (r: any) => ({ id: r.id, fingerprint: r.fingerprint, name: r.name
 meRoutes.get('/pgp', (c) => {
   const rows = all<any>('SELECT * FROM pgp_keys WHERE user_id = ? ORDER BY name COLLATE NOCASE, id', [c.get('user').id]);
   const own = rows.find((r) => r.own);
-  return c.json({ published: own ? keyDto(own) : null, keys: rows.filter((r) => !r.own).map(keyDto) });
+  const backup = get('SELECT fingerprint, updated_at AS updatedAt FROM pgp_backups WHERE user_id = ?', [c.get('user').id]) ?? null;
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ published: own ? keyDto(own) : null, keys: rows.filter((r) => !r.own).map(keyDto), backup });
+});
+
+/** Only the authenticated owner can retrieve their passphrase-encrypted private key. */
+meRoutes.get('/pgp/backup', (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ backup: get('SELECT fingerprint, armored, updated_at AS updatedAt FROM pgp_backups WHERE user_id = ?', [c.get('user').id]) ?? null });
+});
+
+meRoutes.put('/pgp/backup', async (c) => {
+  const user = c.get('user');
+  const { armored } = await body(c, keySchema);
+  const { readPrivateKeys } = await import('openpgp');
+  const keys = await readPrivateKeys({ armoredKeys: armored }).catch(() => { throw badRequest('Invalid PGP private key'); });
+  if (keys.length !== 1 || keys[0].isDecrypted()) throw badRequest('Back up exactly one passphrase-protected private key. Unencrypted private keys are not accepted.');
+  const key = readPublicKey(keys[0].toPublic().armor());
+  if (!key.emails.some((e) => userAddresses(user.id).includes(e) || e === user.email.toLowerCase())) throw badRequest(`This key isn’t for ${user.email}`, 'pgp_not_yours');
+  const existing = get<{ fingerprint: string }>('SELECT fingerprint FROM pgp_backups WHERE user_id = ?', [user.id]);
+  if (existing && existing.fingerprint !== key.fingerprint) throw conflict('A different key is backed up. Download it before removing its backup and saving another key.');
+  run(`INSERT INTO pgp_backups (user_id, fingerprint, armored, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET armored = excluded.armored, updated_at = excluded.updated_at`, [user.id, key.fingerprint, keys[0].armor(), now()]);
+  audit(user.id, 'account.pgp_backup_saved', key.fingerprint, undefined, clientIp(c));
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ ok: true });
+});
+
+meRoutes.delete('/pgp/backup', (c) => {
+  run('DELETE FROM pgp_backups WHERE user_id = ?', [c.get('user').id]);
+  audit(c.get('user').id, 'account.pgp_backup_removed', undefined, undefined, clientIp(c));
+  return c.json({ ok: true });
 });
 
 /** Publish your own public key to everyone on this server (replacing the one published before). */
