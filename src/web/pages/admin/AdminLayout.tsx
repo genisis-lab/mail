@@ -32,11 +32,14 @@ const NAV = [
   { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
   { to: '/admin/system', label: 'System & backup', icon: Server },
 ];
+/** The pages helpdesk staff can use (the server refuses them everything else). */
+const HELPDESK_NAV = NAV.filter((n) => n.to === '/admin/users' || n.to === '/admin/invites');
 
 function AdminNav({ wide, alerts }: { wide: boolean; alerts: number }) {
+  const { isHelpdesk } = useSession();
   return (
     <>
-      {NAV.map((n) => (
+      {(isHelpdesk ? HELPDESK_NAV : NAV).map((n) => (
         <NavLink
           key={n.to}
           to={n.to}
@@ -68,10 +71,10 @@ function AdminNav({ wide, alerts }: { wide: boolean; alerts: number }) {
 }
 
 export function AdminLayout() {
-  const { instance } = useSession();
+  const { instance, isHelpdesk } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-  const alerts = useAlerts();
+  const alerts = useAlerts(!isHelpdesk);
   const [drawer, setDrawer] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   useDialogFocus(drawer, drawerRef, () => setDrawer(false));
@@ -128,23 +131,33 @@ export function AdminLayout() {
                   <Empty title="Not available from this network">{blocked}</Empty>
                 </Card>
               )}
-              <Routes>
-                <Route index element={<Overview />} />
-                <Route path="users" element={<UsersPage />} />
-                <Route path="users/:id" element={<UserDetailPage />} />
-                <Route path="domains" element={<DomainsPage />} />
-                <Route path="domains/:id" element={<DomainDetail />} />
-                <Route path="dmarc" element={<DmarcPage />} />
-                <Route path="addresses" element={<AddressesPage />} />
-                <Route path="providers" element={<ProvidersPage />} />
-                <Route path="queue" element={<QueuePage />} />
-                <Route path="logs" element={<LogsPage />} />
-                <Route path="invites" element={<InvitesPage />} />
-                <Route path="settings/:tab?" element={<AdminSettingsPage />} />
-                <Route path="audit" element={<AuditPage />} />
-                <Route path="system" element={<SystemPage />} />
-                <Route path="*" element={<Navigate to="/admin" replace />} />
-              </Routes>
+              {isHelpdesk ? (
+                <Routes>
+                  <Route index element={<Navigate to="/admin/users" replace />} />
+                  <Route path="users" element={<UsersPage />} />
+                  <Route path="users/:id" element={<UserDetailPage />} />
+                  <Route path="invites" element={<InvitesPage />} />
+                  <Route path="*" element={<Navigate to="/admin/users" replace />} />
+                </Routes>
+              ) : (
+                <Routes>
+                  <Route index element={<Overview />} />
+                  <Route path="users" element={<UsersPage />} />
+                  <Route path="users/:id" element={<UserDetailPage />} />
+                  <Route path="domains" element={<DomainsPage />} />
+                  <Route path="domains/:id" element={<DomainDetail />} />
+                  <Route path="dmarc" element={<DmarcPage />} />
+                  <Route path="addresses" element={<AddressesPage />} />
+                  <Route path="providers" element={<ProvidersPage />} />
+                  <Route path="queue" element={<QueuePage />} />
+                  <Route path="logs" element={<LogsPage />} />
+                  <Route path="invites" element={<InvitesPage />} />
+                  <Route path="settings/:tab?" element={<AdminSettingsPage />} />
+                  <Route path="audit" element={<AuditPage />} />
+                  <Route path="system" element={<SystemPage />} />
+                  <Route path="*" element={<Navigate to="/admin" replace />} />
+                </Routes>
+              )}
             </div>
           </div>
         </main>

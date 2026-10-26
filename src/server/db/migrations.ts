@@ -879,6 +879,14 @@ export const migrations: string[] = [
   ALTER TABLE users ADD COLUMN send_paused_reason TEXT;
   ALTER TABLE users ADD COLUMN send_resumed_at INTEGER;
   `,
+
+  // 31: helpdesk staff: people (role 'user') who may do account support in the admin panel.
+  //     A flag rather than a fourth users.role value: changing that CHECK means rebuilding
+  //     users, and dropping it cascades into every table that references it unless foreign
+  //     keys are switched off, which a migration's transaction can't do.
+  `
+  ALTER TABLE users ADD COLUMN helpdesk INTEGER NOT NULL DEFAULT 0 CHECK (helpdesk = 0 OR (helpdesk = 1 AND role = 'user' AND kind = 'person'));
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

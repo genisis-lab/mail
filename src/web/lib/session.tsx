@@ -44,18 +44,21 @@ interface SessionValue {
   user: SessionUser;
   instance: Instance;
   isAdmin: boolean;
+  /** Helpdesk staff: the admin panel's Users and Invites, for ordinary users only. */
+  isHelpdesk: boolean;
   prefs: UserPrefs;
   refresh: () => Promise<unknown>;
 }
 
 const SessionCtx = createContext<SessionValue | null>(null);
 
-export function SessionProvider({ value, children }: { value: Omit<SessionValue, 'refresh' | 'isAdmin' | 'prefs'>; children: ReactNode }) {
+export function SessionProvider({ value, children }: { value: Omit<SessionValue, 'refresh' | 'isAdmin' | 'isHelpdesk' | 'prefs'>; children: ReactNode }) {
   const qc = useQueryClient();
   const v: SessionValue = {
     ...value,
     prefs: value.user.prefs,
     isAdmin: value.user.role === 'admin' || value.user.role === 'owner',
+    isHelpdesk: value.user.role === 'helpdesk',
     refresh: () => qc.invalidateQueries({ queryKey: ['me'] }),
   };
   return <SessionCtx.Provider value={v}>{children}</SessionCtx.Provider>;

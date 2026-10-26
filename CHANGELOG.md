@@ -46,6 +46,14 @@ won't save a list that leaves it out. Locked out anyway: set
   working and the person sees a notice. Admins get an alert and resume sending, or pause
   it by hand, from the person's page. Settings → Limits has the switch and thresholds.
 
+**Helpdesk role.** Admins can make someone helpdesk staff in Admin → Users. Helpdesk staff
+open an admin panel with only Users and Invites, and can do account support for ordinary
+users: unlock, sign out, reset 2-step verification and passkeys, send a password reset or
+sign-in link, set a password, and suspend or reactivate. Every other admin route refuses
+them, as does any action on an admin, owner or other helpdesk account. Their actions are
+in the audit log under their name. "Require 2-step verification for administrators" now
+covers helpdesk staff too.
+
 ## v0.5.1 — a code to open private links; security fixes
 
 **Private links need a code.** Opening a private link now works like Gmail's confidential

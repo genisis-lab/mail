@@ -13,7 +13,8 @@ export interface UserRow {
   email: string;
   name: string;
   password_hash: string;
-  role: Role;
+  /** As stored; roleOf() gives the role including helpdesk. */
+  role: Exclude<Role, 'helpdesk'>;
   status: 'active' | 'suspended';
   quota_bytes: number | null;
   used_bytes: number;
@@ -42,6 +43,13 @@ export interface UserRow {
   send_paused_reason: string | null;
   /** When an admin last resumed it: the guard only counts what was sent since. */
   send_resumed_at: number | null;
+  /** Helpdesk staff (always role 'user'). */
+  helpdesk: number;
+}
+
+/** A person's role, with helpdesk staff told apart from other users. */
+export function roleOf(user: Pick<UserRow, 'role' | 'helpdesk'>): Role {
+  return user.helpdesk ? 'helpdesk' : user.role;
 }
 
 /** For admins: why a mailbox on legal hold can't be deleted. */
@@ -114,7 +122,7 @@ export function sendLimit(user: Pick<UserRow, 'send_limit_per_day'>): number {
 export function mustSetup2fa(user: UserRow): boolean {
   if (user.totp_enabled) return false;
   const policy = getSettings()['security.require2fa'];
-  return policy === 'all' || (policy === 'admins' && (user.role === 'admin' || user.role === 'owner'));
+  return policy === 'all' || (policy === 'admins' && roleOf(user) !== 'user');
 }
 
 /** An admin required a new password, and it hasn't been changed since (any way: settings, reset link, admin). */
@@ -127,7 +135,7 @@ export function sessionUser(user: UserRow): SessionUser {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role,
+    role: roleOf(user),
     totpEnabled: !!user.totp_enabled,
     prefs: parsePrefs(user.prefs),
     identities: identities(user.id),
@@ -183,9 +191,9 @@ export async function createUser(input: {
   return tx(() => {
     const ts = now();
     const id = insert(
-      `INSERT INTO users (email, name, password_hash, role, quota_bytes, send_limit_per_day, prefs, created_at, password_changed_at)
-       VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
-      [email, input.name.trim(), hash, input.role ?? 'user', input.quotaBytes ?? null, input.sendLimitPerDay ?? null, ts, ts],
+      `INSERT INTO users (email, name, password_hash, role, helpdesk, quota_bytes, send_limit_per_day, prefs, created_at, password_changed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
+      [email, input.name.trim(), hash, input.role === 'helpdesk' ? 'user' : (input.role ?? 'user'), input.role === 'helpdesk' ? 1 : 0, input.quotaBytes ?? null, input.sendLimitPerDay ?? null, ts, ts],
     );
     insert(
       `INSERT INTO addresses (address, domain_id, kind, user_id, name, created_at) VALUES (?, ?, 'mailbox', ?, ?, ?)`,

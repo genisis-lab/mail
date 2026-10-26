@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MoreVertical, Plus, Send, Ticket } from 'lucide-react';
 import { api } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
+import { useSession } from '../../lib/session';
 import { useToast } from '../../components/toast';
 import { Badge, Button, Card, Empty, Field, Input, Menu, Modal, Select, Spinner } from '../../components/ui';
 import { CopyField, PageHeader, Table } from './common';
@@ -24,7 +25,9 @@ interface Invite {
 export function InvitesPage() {
   const qc = useQueryClient();
   const toast = useToast();
-  const domains = useDomains();
+  // Helpdesk staff invite users only, and can't list domains.
+  const { isHelpdesk } = useSession();
+  const domains = useDomains(!isHelpdesk);
   const invites = useQuery({ queryKey: ['admin', 'invites'], queryFn: () => api.get<{ invites: Invite[] }>('/api/admin/invites').then((r) => r.invites) });
   const empty = { email: '', domainId: '', role: 'user', days: '7', sendTo: '' };
   const [open, setOpen] = useState(false);
@@ -82,26 +85,28 @@ export function InvitesPage() {
                 </td>
                 <td className="text-xs text-muted">{i.emailed_at ? `Emailed ${relativeTime(i.emailed_at)}` : `Link created ${relativeTime(i.created_at)}`}</td>
                 <td className="text-right">
-                  <Menu
-                    align="right"
-                    trigger={({ onClick }) => (
-                      <button onClick={onClick} aria-label="Invite actions" className="rounded-full p-2 text-muted hover:bg-hover hover:text-fg">
-                        <MoreVertical className="size-4" />
-                      </button>
-                    )}
-                    items={[
-                      ...(i.used_at ? [] : [{ label: i.sent_to ? 'Send again…' : 'Email the invitation…', icon: <Send className="size-4" />, onClick: () => setResending(i) }]),
-                      {
-                        label: 'Delete',
-                        danger: true,
-                        onClick: async () => {
-                          await api.del(`/api/admin/invites/${i.id}`);
-                          refresh();
-                          toast('Invite deleted');
+                  {(!isHelpdesk || i.role === 'user') && (
+                    <Menu
+                      align="right"
+                      trigger={({ onClick }) => (
+                        <button onClick={onClick} aria-label="Invite actions" className="rounded-full p-2 text-muted hover:bg-hover hover:text-fg">
+                          <MoreVertical className="size-4" />
+                        </button>
+                      )}
+                      items={[
+                        ...(i.used_at ? [] : [{ label: i.sent_to ? 'Send again…' : 'Email the invitation…', icon: <Send className="size-4" />, onClick: () => setResending(i) }]),
+                        {
+                          label: 'Delete',
+                          danger: true,
+                          onClick: async () => {
+                            await api.del(`/api/admin/invites/${i.id}`);
+                            refresh();
+                            toast('Invite deleted');
+                          },
                         },
-                      },
-                    ]}
-                  />
+                      ]}
+                    />
+                  )}
                 </td>
               </tr>
             );
@@ -179,7 +184,7 @@ export function InvitesPage() {
               <Field label="Role">
                 <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   <option value="user">User</option>
-                  <option value="admin">Administrator</option>
+                  {!isHelpdesk && <option value="admin">Administrator</option>}
                 </Select>
               </Field>
               <Field label="Expires after">

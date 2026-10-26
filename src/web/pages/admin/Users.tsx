@@ -15,7 +15,7 @@ export interface AdminUser {
   id: number;
   email: string;
   name: string;
-  role: 'owner' | 'admin' | 'user';
+  role: 'owner' | 'admin' | 'helpdesk' | 'user';
   status: 'active' | 'suspended';
   usedBytes: number;
   quotaBytes: number;
@@ -38,8 +38,8 @@ export interface AdminUser {
   legalHold?: boolean;
 }
 
-export function useDomains() {
-  return useQuery({ queryKey: ['admin', 'domains'], queryFn: () => api.get<{ domains: any[] }>('/api/admin/domains').then((r) => r.domains) });
+export function useDomains(enabled = true) {
+  return useQuery({ queryKey: ['admin', 'domains'], queryFn: () => api.get<{ domains: any[] }>('/api/admin/domains').then((r) => r.domains), enabled });
 }
 
 type BulkAction = 'suspend' | 'activate' | 'quota' | 'sendLimit' | 'signout' | 'requirePasswordChange' | 'delete';
@@ -58,7 +58,7 @@ function exportUsers(list: AdminUser[]) {
 }
 
 export function UsersPage() {
-  const { user: me } = useSession();
+  const { user: me, isHelpdesk } = useSession();
   const qc = useQueryClient();
   const toast = useToast();
   const navigate = useNavigate();
@@ -84,6 +84,8 @@ export function UsersPage() {
       toast({ message: (err as Error).message, tone: 'error' });
     }
   };
+  // Helpdesk staff support ordinary users only; nothing here acts on anyone else.
+  const manageable = (u: AdminUser) => !isHelpdesk || u.role === 'user';
   const allSelected = list.length > 0 && list.every((u) => selected.has(u.id));
   const toggle = (id: number, v: boolean) =>
     setSelected((s) => {
@@ -122,15 +124,19 @@ export function UsersPage() {
         description="Mailboxes on this server. Each user gets a primary address and can have aliases."
         actions={
           <>
-            <Button icon={<FileUp className="size-4" />} onClick={() => setImporting(true)}>
-              Import CSV
-            </Button>
+            {!isHelpdesk && (
+              <Button icon={<FileUp className="size-4" />} onClick={() => setImporting(true)}>
+                Import CSV
+              </Button>
+            )}
             <Button icon={<FileDown className="size-4" />} disabled={!list.length} onClick={() => exportUsers(list)}>
               Export CSV
             </Button>
-            <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setCreating(true)}>
-              Add user
-            </Button>
+            {!isHelpdesk && (
+              <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setCreating(true)}>
+                Add user
+              </Button>
+            )}
           </>
         }
       />
@@ -179,7 +185,9 @@ export function UsersPage() {
       ) : (
         <Table
           head={[
-            <Checkbox key="all" checked={allSelected} indeterminate={selected.size > 0 && !allSelected} onChange={(v) => setSelected(v ? new Set(list.map((u) => u.id)) : new Set())} label="Select all users" />,
+            ...(isHelpdesk
+              ? []
+              : [<Checkbox key="all" checked={allSelected} indeterminate={selected.size > 0 && !allSelected} onChange={(v) => setSelected(v ? new Set(list.map((u) => u.id)) : new Set())} label="Select all users" />]),
             <span key="user">User</span>,
             'Role',
             'Storage',
@@ -190,18 +198,24 @@ export function UsersPage() {
           {list.map((u) => {
             const pct = Math.min(100, Math.round((u.usedBytes / u.quotaBytes) * 100));
             return (
-              <tr key={u.id} className={cx('cursor-pointer hover:bg-hover', selected.has(u.id) && 'bg-sel')} onClick={() => navigate(`/admin/users/${u.id}`)}>
-                <td className="w-10 !pr-0" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox checked={selected.has(u.id)} onChange={(v) => toggle(u.id, v)} label={`Select ${u.email}`} />
-                </td>
+              <tr key={u.id} className={cx(manageable(u) && 'cursor-pointer hover:bg-hover', selected.has(u.id) && 'bg-sel')} onClick={() => manageable(u) && navigate(`/admin/users/${u.id}`)}>
+                {!isHelpdesk && (
+                  <td className="w-10 !pr-0" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox checked={selected.has(u.id)} onChange={(v) => toggle(u.id, v)} label={`Select ${u.email}`} />
+                  </td>
+                )}
                 <td>
                   <div className="flex items-center gap-3">
                     <Avatar name={u.name} address={u.email} size={34} />
                     <div className="min-w-0">
                       <p className="flex flex-wrap items-center gap-2 font-medium">
-                        <Link to={`/admin/users/${u.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
-                          {u.name || u.email}
-                        </Link>
+                        {manageable(u) ? (
+                          <Link to={`/admin/users/${u.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+                            {u.name || u.email}
+                          </Link>
+                        ) : (
+                          u.name || u.email
+                        )}
                         {u.id === me.id && <Badge>you</Badge>}
                         {u.status === 'suspended' && <Badge tone="danger">suspended</Badge>}
                         {u.locked && <Badge tone="warn">locked out</Badge>}
@@ -230,36 +244,42 @@ export function UsersPage() {
                 </td>
                 <td className="text-xs whitespace-nowrap text-muted">{u.lastLoginAt ? relativeTime(u.lastLoginAt) : 'Never'}</td>
                 <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                  <Menu
-                    align="right"
-                    trigger={({ onClick }) => (
-                      <button onClick={onClick} aria-label={`Actions for ${u.email}`} className="rounded-full p-2 text-muted hover:bg-hover hover:text-fg">
-                        <MoreVertical className="size-4" />
-                      </button>
-                    )}
-                    items={[
-                      { label: 'Open details', onClick: () => navigate(`/admin/users/${u.id}`) },
-                      { label: 'Edit…', onClick: () => setEditing(u) },
-                      { label: 'Send a sign-in link…', onClick: () => setLinkFor(u) },
-                      { label: 'Set a password…', onClick: () => setResetting(u) },
-                      ...(u.totpEnabled ? [{ label: 'Reset 2-step verification', onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/reset-2fa`), '2-step verification reset') }] : []),
-                      { label: 'Sign out everywhere', onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/signout`), 'Signed out of all sessions') },
-                      { divider: true },
-                      u.status === 'active'
-                        ? { label: 'Suspend', disabled: u.id === me.id, onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'suspended' }), `${u.email} suspended`) }
-                        : { label: 'Reactivate', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'active' }), `${u.email} reactivated`) },
-                      {
-                        label: 'Delete user',
-                        danger: true,
-                        disabled: u.id === me.id || u.role === 'owner',
-                        onClick: () => {
-                          if (window.prompt(`This permanently deletes ${u.email} and all of their mail (${u.messages} messages). Type the address to confirm.`) === u.email) {
-                            void call(() => api.del(`/api/admin/users/${u.id}`), 'User deleted');
-                          }
-                        },
-                      },
-                    ]}
-                  />
+                  {manageable(u) && (
+                    <Menu
+                      align="right"
+                      trigger={({ onClick }) => (
+                        <button onClick={onClick} aria-label={`Actions for ${u.email}`} className="rounded-full p-2 text-muted hover:bg-hover hover:text-fg">
+                          <MoreVertical className="size-4" />
+                        </button>
+                      )}
+                      items={[
+                        { label: 'Open details', onClick: () => navigate(`/admin/users/${u.id}`) },
+                        ...(isHelpdesk ? [] : [{ label: 'Edit…', onClick: () => setEditing(u) }]),
+                        { label: 'Send a sign-in link…', onClick: () => setLinkFor(u) },
+                        { label: 'Set a password…', onClick: () => setResetting(u) },
+                        ...(u.totpEnabled ? [{ label: 'Reset 2-step verification', onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/reset-2fa`), '2-step verification reset') }] : []),
+                        { label: 'Sign out everywhere', onClick: () => void call(() => api.post(`/api/admin/users/${u.id}/signout`), 'Signed out of all sessions') },
+                        { divider: true },
+                        u.status === 'active'
+                          ? { label: 'Suspend', disabled: u.id === me.id, onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'suspended' }), `${u.email} suspended`) }
+                          : { label: 'Reactivate', onClick: () => void call(() => api.put(`/api/admin/users/${u.id}`, { status: 'active' }), `${u.email} reactivated`) },
+                        ...(isHelpdesk
+                          ? []
+                          : [
+                              {
+                                label: 'Delete user',
+                                danger: true,
+                                disabled: u.id === me.id || u.role === 'owner',
+                                onClick: () => {
+                                  if (window.prompt(`This permanently deletes ${u.email} and all of their mail (${u.messages} messages). Type the address to confirm.`) === u.email) {
+                                    void call(() => api.del(`/api/admin/users/${u.id}`), 'User deleted');
+                                  }
+                                },
+                              },
+                            ]),
+                      ]}
+                    />
+                  )}
                 </td>
               </tr>
             );
@@ -499,6 +519,7 @@ function CreateUserModal({ open, onClose, onCreated }: { open: boolean; onClose:
             <Field label="Role">
               <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="user">User</option>
+                <option value="helpdesk">Helpdesk</option>
                 <option value="admin">Administrator</option>
               </Select>
             </Field>
@@ -769,6 +790,7 @@ export function EditUserModal({ user, onClose, onSaved }: { user: AdminUser | nu
           <Field label="Role">
             <Select value={form.role} disabled={user.id === me.id} onChange={(e) => setForm({ ...form, role: e.target.value })}>
               <option value="user">User</option>
+              <option value="helpdesk">Helpdesk</option>
               <option value="admin">Administrator</option>
               {me.role === 'owner' && <option value="owner">Owner</option>}
             </Select>
