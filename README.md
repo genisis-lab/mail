@@ -235,6 +235,9 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   been taking, so you can block one or make it a real alias. A sending-only subdomain
   (say `contact.example.com`) needs no MX, takes its DMARC from the parent domain, and
   shows whether your provider has it verified.
+- DMARC reports: the daily aggregate reports receivers send to `postmaster@` are read
+  as they arrive (gzip, zip or plain XML), showing each domain's pass rate and the
+  servers sending as it without passing DKIM or SPF. Kept for 180 days.
 - Aliases, groups and shared mailboxes.
 - Providers: verify credentials, send test email, rotate inbound URLs.
 - Mail queue with retry and cancel; delivery logs with search, filters, a timeline and

@@ -26,6 +26,7 @@ import { deleteJob, exportStream, startExport } from '../services/mail-import.js
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { listSuppressions, suppress, unsuppress } from '../services/suppressions.js';
 import { closeUserStreams } from '../jmap/push.js';
+import { dmarcSummary, listDmarcReports, RETENTION_DAYS } from '../mail/dmarc.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
@@ -762,4 +763,16 @@ adminOpsRoutes.delete('/shared-mailboxes/:id', (c) => {
   run('DELETE FROM users WHERE id = ?', [id]);
   act(c, 'admin.shared_mailbox_deleted', b.email);
   return c.json({ ok: true });
+});
+
+// ── DMARC aggregate reports ─────────────────────────────────────────────────
+
+adminOpsRoutes.get('/dmarc', (c) => {
+  const days = Math.min(Math.max(Math.trunc(Number(c.req.query('days') ?? 30)) || 30, 1), RETENTION_DAYS);
+  return c.json({ days, domains: dmarcSummary(days) });
+});
+
+adminOpsRoutes.get('/dmarc/reports', (c) => {
+  const { before, limit } = page(c);
+  return c.json(listDmarcReports({ domain: c.req.query('domain')?.trim() || undefined, before, limit }));
 });
