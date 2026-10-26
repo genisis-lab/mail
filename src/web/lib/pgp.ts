@@ -1,12 +1,14 @@
 /**
- * PGP (OpenPGP) in the browser. Private keys stay on this device: kept
- * passphrase-protected in this browser, one per account, and unlocked only in
+ * PGP (OpenPGP) in the browser. Private keys are kept passphrase-protected,
+ * with an optional encrypted server backup, and unlocked only in
  * this tab's memory. Encrypting, decrypting, signing and checking signatures
  * all happen here; nothing decrypted is sent to the server. OpenPGP.js loads
  * the first time it's needed, so the app itself doesn't get bigger.
  */
 import type { Key, PrivateKey, VerifyMessageResult } from 'openpgp';
 import type { MessageDetail } from '../../shared/types';
+import { apiFor } from './api';
+import { useSyncExternalStore } from 'react';
 
 const openpgp = () => import('openpgp');
 
@@ -15,29 +17,85 @@ const openpgp = () => import('openpgp');
 const storageKey = (account: number) => `wren.pgp.${account}`;
 /** Unlocked keys, for this tab only (never stored). */
 const unlocked = new Map<number, PrivateKey>();
+/** Encrypted fallback for browsers that block persistent storage. */
+const sessionKeys = new Map<number, string>();
+let lockVersion = 0;
+const keyListeners = new Set<() => void>();
+const changed = () => keyListeners.forEach((notify) => notify());
+const subscribeKeys = (notify: () => void) => {
+  keyListeners.add(notify);
+  const sync = (e: StorageEvent) => {
+    if (e.key === null || e.key.startsWith('wren.pgp.')) {
+      lockKeys();
+      notify();
+    }
+  };
+  window.addEventListener('storage', sync);
+  return () => { keyListeners.delete(notify); window.removeEventListener('storage', sync); };
+};
+
+export function useStoredKey(account: number): string | null {
+  return useSyncExternalStore(subscribeKeys, () => storedKey(account));
+}
+
+export function lockKeys() {
+  lockVersion++;
+  unlocked.clear();
+  sessionKeys.clear();
+  changed();
+}
 
 /** This account's private key in this browser (armored, passphrase-protected). */
 export function storedKey(account: number): string | null {
+  if (sessionKeys.has(account)) return sessionKeys.get(account)!;
   try {
     return localStorage.getItem(storageKey(account));
   } catch {
-    return null;
+    return sessionKeys.get(account) ?? null;
   }
 }
 
-/** Keep a passphrase-protected private key in this browser. Throws when the browser won't store it. */
+/** Keep an encrypted key here, falling back to memory when storage is blocked. */
 export function storeKey(account: number, armored: string) {
-  localStorage.setItem(storageKey(account), armored);
+  sessionKeys.set(account, armored);
+  try { localStorage.setItem(storageKey(account), armored); } catch { /* encrypted backup can restore it next time */ }
   unlocked.delete(account);
+  changed();
+}
+
+/** Restore only when this browser has no key; never silently replace a different local key. */
+export async function restoreKey(account: number): Promise<string | null> {
+  const local = storedKey(account);
+  if (local) return local;
+  const version = lockVersion;
+  const { backup } = await apiFor(null, account).get<{ backup: { armored: string } | null }>('/api/me/pgp/backup');
+  if (!backup || version !== lockVersion) return null;
+  const { readPrivateKey } = await openpgp();
+  const key = await readPrivateKey({ armoredKey: backup.armored });
+  if (key.isDecrypted()) throw new Error('The key backup is not passphrase-protected');
+  if (version !== lockVersion) return null;
+  if (!storedKey(account)) storeKey(account, key.armor());
+  return storedKey(account);
+}
+
+/** Validate locally so an unprotected key is never uploaded. No passphrase is sent. */
+export async function backupKey(account: number, armored: string): Promise<void> {
+  const { readPrivateKey } = await openpgp();
+  const key = await readPrivateKey({ armoredKey: armored });
+  if (key.isDecrypted()) throw new Error('Protect this key with a passphrase before backing it up');
+  await apiFor(null, account).put('/api/me/pgp/backup', { armored: key.armor() });
 }
 
 export function forgetKey(account: number) {
+  lockVersion++;
   try {
     localStorage.removeItem(storageKey(account));
   } catch {
     /* blocked storage: nothing was kept */
   }
   unlocked.delete(account);
+  sessionKeys.delete(account);
+  changed();
 }
 
 export function unlockedKey(account: number): PrivateKey | null {
@@ -46,12 +104,15 @@ export function unlockedKey(account: number): PrivateKey | null {
 
 /** Open this account's key with its passphrase, for the rest of this tab's life. */
 export async function unlockKey(account: number, passphrase: string): Promise<PrivateKey> {
-  const armored = storedKey(account);
+  const version = lockVersion;
+  const armored = await restoreKey(account);
   if (!armored) throw new Error('There’s no PGP key in this browser. Add one in Settings → Encryption.');
   const { readPrivateKey, decryptKey } = await openpgp();
   const key = await decryptKey({ privateKey: await readPrivateKey({ armoredKey: armored }), passphrase }).catch(() => {
     throw new Error('That passphrase didn’t work');
   });
+  if (version !== lockVersion) throw new Error('Your session ended. Sign in again to unlock your key.');
+  if (storedKey(account) !== armored) throw new Error('Your PGP key changed. Unlock the current key again.');
   unlocked.set(account, key);
   return key;
 }

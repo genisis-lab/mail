@@ -225,3 +225,38 @@ describe('PGP keys on the server', () => {
     expect((await decryptText(parsed.text!, bob.unlocked, [])).text).toBe('top secret');
   });
 });
+
+describe('encrypted private-key backups', () => {
+  it('keeps only protected keys, restores after logout, and isolates accounts', async () => {
+    const h = harness();
+    await h.setup();
+    await h.login('admin@wren.test', 'a very long password', 'admin');
+    await h.call('POST', '/api/admin/users', { email: 'ann@wren.test', name: 'Ann', password: 'another long password' });
+    await h.login('ann@wren.test', 'another long password', 'ann');
+    expect((await h.call('PUT', '/api/me/pgp/backup', { armored: ann.unlocked.armor() })).status).toBe(400);
+    expect((await h.call('PUT', '/api/me/pgp/backup', { armored: ann.publicKey })).status).toBe(400);
+    expect((await h.call('PUT', '/api/me/pgp/backup', { armored: bob.privateKey })).body.code).toBe('pgp_not_yours');
+    expect((await h.call('PUT', '/api/me/pgp/backup', { armored: ann.privateKey })).status).toBe(200);
+    const own = await h.call('GET', '/api/me/pgp/backup');
+    expect(own.headers.get('cache-control')).toContain('no-store');
+    expect((await openpgp.readPrivateKey({ armoredKey: own.body.backup.armored })).isDecrypted()).toBe(false);
+    expect(JSON.stringify((await h.call('GET', '/api/me/pgp')).body)).not.toContain('PRIVATE KEY BLOCK');
+    const replacement = await keyPair('Ann', 'ann@wren.test');
+    expect((await h.call('PUT', '/api/me/pgp/backup', { armored: replacement.privateKey })).status).toBe(409);
+    await h.call('POST', '/api/auth/logout');
+    expect((await h.call('GET', '/api/me/pgp/backup')).status).toBe(401);
+    await h.login('ann@wren.test', 'another long password', 'new-browser');
+    const restored = (await h.call('GET', '/api/me/pgp/backup')).body.backup;
+    const key = await openpgp.decryptKey({ privateKey: await openpgp.readPrivateKey({ armoredKey: restored.armored }), passphrase: 'correct horse' });
+    const encrypted = await encryptText('Still readable after logging out', [ann.publicKey]);
+    expect((await decryptText(encrypted, key, [])).text).toBe('Still readable after logging out');
+    h.as('admin');
+    expect((await h.call('GET', '/api/me/pgp/backup')).body.backup).toBeNull();
+    expect(JSON.stringify((await h.call('POST', '/api/me/pgp/lookup', { addresses: ['ann@wren.test'] })).body)).not.toContain('PRIVATE KEY BLOCK');
+    await h.call('DELETE', '/api/me/pgp/backup');
+    h.as('new-browser');
+    expect((await h.call('GET', '/api/me/pgp/backup')).body.backup.fingerprint).toBe(restored.fingerprint);
+    await h.call('DELETE', '/api/me/pgp/backup');
+    expect((await h.call('GET', '/api/me/pgp/backup')).body.backup).toBeNull();
+  });
+});

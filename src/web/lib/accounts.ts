@@ -9,6 +9,7 @@ import { api, getApiAccount } from './api';
 import { forgetMailbox } from './mailbox';
 import { clearOutbox, flushOutbox } from './outbox';
 import { pushEndpoint, pushHere } from './pwa';
+import { lockKeys } from './pgp';
 
 const prefix = /^\/u\/([1-9]\d{0,14})(?=\/|$)/.exec(window.location.pathname);
 /** This tab's address prefix: '' for the first account, /u/<id> for the others. */
@@ -89,6 +90,7 @@ export async function signOut(everyone = false): Promise<void> {
   for (const id of ids) await flushOutbox(id, () => {}).catch(() => {});
   const endpoint = await pushEndpoint();
   const r = await api.post<{ remaining: number }>(`/api/auth/logout${everyone ? '?all=1' : ''}`, endpoint ? { endpoint } : {});
+  lockKeys();
   const who = everyone || !self ? undefined : self;
   clearOutbox(who);
   forgetMailbox(who);

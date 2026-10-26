@@ -319,6 +319,8 @@ The design notes are in [docs/PLAN.md](docs/PLAN.md).
 
 ## Development
 
+For encrypted PGP key backups, profile-picture caching, and private-browsing sessions, see [the account and browser guide](docs/encryption.md).
+
 ```bash
 npm install
 npm run dev         # the Worker on the real Workers runtime (workerd) at http://localhost:8787

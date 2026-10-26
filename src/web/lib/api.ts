@@ -55,7 +55,7 @@ async function request<T>(method: string, url: string, data?: Json | FormData, m
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify(data);
   }
-  const res = await fetch(url, { method, headers, body, credentials: 'same-origin' });
+  const res = await fetch(url, { method, headers, body, credentials: 'same-origin', ...(url.startsWith('/api/auth/') ? { cache: 'no-store' as const } : {}) });
   const text = await res.text();
   let parsed: any = null;
   try {

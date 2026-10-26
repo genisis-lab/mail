@@ -132,3 +132,26 @@ describe('pictures for people who write in', () => {
     run('DELETE FROM login_attempts');
   });
 });
+
+describe('avatar browser caching', () => {
+  it('revalidates unchanged pictures and changes the ETag after an upload', async () => {
+    h.as('admin@wren.test');
+    await upload(PNG);
+    const first = await picture('admin@wren.test');
+    const etag = first.headers.get('etag')!;
+    expect(etag).toBeTruthy();
+    expect(first.headers.get('cache-control')).toBe('private, max-age=300, must-revalidate');
+    const unchanged = await h.request('/api/avatars/admin%40wren.test', { headers: { 'If-None-Match': etag } });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe('');
+    await upload(Buffer.concat([PNG, Buffer.from('new-picture')]));
+    const changed = await h.request('/api/avatars/admin%40wren.test', { headers: { 'If-None-Match': etag } });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get('etag')).not.toBe(etag);
+    await h.request('/api/account/avatar', { method: 'DELETE' });
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
+    const removed = await h.request('/api/avatars/admin%40wren.test', { headers: { 'If-None-Match': changed.headers.get('etag')! } });
+    expect(removed.status).toBe(404);
+    expect(removed.headers.get('cache-control')).toBe('private, max-age=60');
+  });
+});

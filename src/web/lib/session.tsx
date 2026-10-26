@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Label, SessionUser, UserPrefs } from '../../shared/types';
 import { api, getApiAccount, setApiAccount } from './api';
+import { restoreKey, useStoredKey } from './pgp';
 
 export interface Instance {
   name: string;
@@ -54,6 +55,8 @@ const SessionCtx = createContext<SessionValue | null>(null);
 
 export function SessionProvider({ value, children }: { value: Omit<SessionValue, 'refresh' | 'isAdmin' | 'isHelpdesk' | 'prefs'>; children: ReactNode }) {
   const qc = useQueryClient();
+  useStoredKey(value.user.id); // observe changes in other tabs and drop stale unlocked keys
+  useQuery({ queryKey: ['pgp-restore', value.user.id], queryFn: () => restoreKey(value.user.id), staleTime: Infinity, retry: false });
   const v: SessionValue = {
     ...value,
     prefs: value.user.prefs,
