@@ -34,6 +34,7 @@ struct AccountSettings: View {
             }
         }
         .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
         .confirmationDialog("Sign out of Wren?", isPresented: $confirming) {
             Button("Sign Out", role: .destructive) { store.signOut() }
         } message: {
@@ -53,5 +54,6 @@ struct ViewingSettings: View {
                 .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

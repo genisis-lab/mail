@@ -408,6 +408,9 @@ final class MailStore {
 
     var replyTarget: Email? { thread.last { !$0.isDraft } }
 
+    /// Reply and Forward go with the selection, as the other actions do, and answer the newest message once it's loaded.
+    var canReply: Bool { selectedThreads.count == 1 && currentRole != "drafts" }
+
     func newDraft(to: String = "") -> Draft? {
         guard let account = selectedMailbox?.account ?? accounts.first?.id else { return nil }
         return .new(account: account, identity: identities[account]?.first, to: to)

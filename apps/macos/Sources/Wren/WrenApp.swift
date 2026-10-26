@@ -77,13 +77,13 @@ struct MailCommands: Commands {
         CommandMenu("Message") {
             Button("Reply") { if let d = store.replyDraft(all: false) { openWindow(id: "compose", value: d) } }
                 .keyboardShortcut("r")
-                .disabled(store.replyTarget == nil)
+                .disabled(!store.canReply)
             Button("Reply All") { if let d = store.replyDraft(all: true) { openWindow(id: "compose", value: d) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(store.replyTarget == nil)
+                .disabled(!store.canReply)
             Button("Forward") { if let d = store.forwardDraft() { openWindow(id: "compose", value: d) } }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(store.replyTarget == nil)
+                .disabled(!store.canReply)
             Divider()
             Button("Archive") { act { await $0.archive($1) } }
                 .keyboardShortcut("a", modifiers: [.command, .control])
