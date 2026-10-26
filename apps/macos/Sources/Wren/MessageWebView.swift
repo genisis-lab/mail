@@ -5,6 +5,7 @@ import WrenKit
 
 /// An HTML message body, locked down: no scripts, no cookies or storage, nothing from the web unless you ask,
 /// and links open in your browser. Inline images (cid:) come from Wren. It's as tall as its content.
+/// Mail that sets no colors of its own follows light and dark mode; mail that does keeps the white page it was made for.
 struct MessageWebView: NSViewRepresentable {
     let html: String
     let allowRemote: Bool
@@ -20,11 +21,11 @@ struct MessageWebView: NSViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         config.setURLSchemeHandler(context.coordinator, forURLScheme: "cid")
+        // The message's scripts are off; this one runs in the app's own script world and reports the height as it changes.
+        config.userContentController.addUserScript(WKUserScript(source: Self.reportHeight, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        config.userContentController.add(context.coordinator, contentWorld: .defaultClient, name: "height")
         let view = MessageWKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
-        view.onWidthChange = { [weak coordinator = context.coordinator, weak view] in
-            if let view { coordinator?.measure(view) }
-        }
         context.coordinator.load(into: view)
         return view
     }
@@ -34,12 +35,36 @@ struct MessageWebView: NSViewRepresentable {
         context.coordinator.load(into: view)
     }
 
+    private static let reportHeight = """
+    (() => {
+      const m = document.getElementById('wren-message');
+      let last = 0;
+      if (m) new ResizeObserver(() => {
+        const h = Math.ceil(m.getBoundingClientRect().height);
+        if (h > 0 && h !== last) { last = h; webkit.messageHandlers.height.postMessage(h); }
+      }).observe(m);
+    })();
+    """
+
+    /// Whether the message leaves colors to us (most personal mail), so it can be shown in the app's own colors.
+    static func followsAppearance(_ html: String) -> Bool {
+        html.range(of: #"(?i)(color|background)\s*[:=]|bgcolor"#, options: .regularExpression) == nil
+    }
+
     /// The page around the message. The Content-Security-Policy is what keeps remote content out: email can add
     /// its own policies, but policies only ever add up, so it can't loosen this one.
     static func document(_ html: String, allowRemote: Bool) -> String {
         let policy = allowRemote
             ? "script-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'"
             : "default-src 'none'; img-src cid: data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'"
+        // System colors; where one isn’t known, the plain color set before it stays.
+        let adaptive = followsAppearance(html) ? """
+            :root { color-scheme: light dark; }
+            html, body { background: -apple-system-text-background; }
+            body { color: -apple-system-label; }
+            #wren-message { padding: 0; }
+            blockquote { color: -apple-system-secondary-label; border-left-color: -apple-system-separator; }
+            """ : ""
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="\(policy)">
@@ -49,15 +74,18 @@ struct MessageWebView: NSViewRepresentable {
         html, body { margin: 0; padding: 0; background: #fff; }
         body { font: 14px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: #1d1d1f; word-wrap: break-word; }
         #wren-message { display: flow-root; padding: 14px 16px; }
+        #wren-message > :first-child { margin-top: 0; }
+        #wren-message > :last-child { margin-bottom: 0; }
         img { max-width: 100%; height: auto; }
         pre { white-space: pre-wrap; }
         blockquote { margin: 0 0 0 4px; padding-left: 12px; border-left: 2px solid #c7c7cc; color: #555; }
+        \(adaptive)
         </style></head><body><div id="wren-message">\(html)</div></body></html>
         """
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKURLSchemeHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKURLSchemeHandler, WKScriptMessageHandler {
         var parent: MessageWebView
         private var loaded: (html: String, allowRemote: Bool)?
         private var stopped = Set<ObjectIdentifier>()
@@ -73,18 +101,8 @@ struct MessageWebView: NSViewRepresentable {
             view.loadHTMLString(MessageWebView.document(parent.html, allowRemote: parent.allowRemote), baseURL: nil)
         }
 
-        func measure(_ view: WKWebView) {
-            let script = "(() => { const m = document.getElementById('wren-message'); return Math.ceil(m ? m.getBoundingClientRect().height : document.body.scrollHeight) })()"
-            // Runs in the app's own script world, so it works with the page's JavaScript off.
-            view.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] result in
-                if case .success(let value) = result, let height = (value as? NSNumber)?.doubleValue, height > 0 {
-                    self?.parent.height = CGFloat(height)
-                }
-            }
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            measure(webView)
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            if let height = (message.body as? NSNumber)?.doubleValue { parent.height = CGFloat(height) }
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -122,17 +140,9 @@ struct MessageWebView: NSViewRepresentable {
     }
 }
 
-/// Passes scrolling to the conversation around it, and re-measures when its width changes.
+/// Passes scrolling to the conversation around it.
 final class MessageWKWebView: WKWebView {
-    var onWidthChange: (@MainActor () -> Void)?
-
     override func scrollWheel(with event: NSEvent) {
         nextResponder?.scrollWheel(with: event)
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        let widthChanged = newSize.width != frame.width
-        super.setFrameSize(newSize)
-        if widthChanged { onWidthChange?() }
     }
 }

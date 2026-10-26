@@ -8,6 +8,9 @@ struct ReaderPane: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        // Read here, not inside the toolbar, so the buttons change when a conversation finishes loading.
+        let role = store.currentRole ?? "", none = store.selectedThreads.isEmpty
+        let canReply = store.replyTarget != nil, canSnooze = store.canSnooze
         Group {
             switch store.selectedThreads.count {
             case 0: ContentUnavailableView("No Message Selected", systemImage: "envelope")
@@ -18,7 +21,7 @@ struct ReaderPane: View {
         .task(id: store.selectedThreads) {
             await store.open(store.selectedThreads.count == 1 ? store.selectedThreads.first : nil)
         }
-        .toolbar { actions }
+        .toolbar { actions(role: role, none: none, canReply: canReply, canSnooze: canSnooze) }
     }
 
     private func compose(_ draft: Draft?) {
@@ -31,9 +34,7 @@ struct ReaderPane: View {
     }
 
     @ToolbarContentBuilder
-    private var actions: some ToolbarContent {
-        let role = store.currentRole ?? ""
-        let none = store.selectedThreads.isEmpty
+    private func actions(role: String, none: Bool, canReply: Bool, canSnooze: Bool) -> some ToolbarContent {
         ToolbarItemGroup {
             Button { act { await $0.archive($1) } } label: { Label("Archive", systemImage: "archivebox") }
                 .help("Archive")
@@ -48,13 +49,13 @@ struct ReaderPane: View {
         ToolbarItemGroup {
             Button { compose(store.replyDraft(all: false)) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                 .help("Reply")
-                .disabled(store.replyTarget == nil)
+                .disabled(!canReply)
             Button { compose(store.replyDraft(all: true)) } label: { Label("Reply All", systemImage: "arrowshape.turn.up.left.2") }
                 .help("Reply All")
-                .disabled(store.replyTarget == nil)
+                .disabled(!canReply)
             Button { compose(store.forwardDraft()) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
                 .help("Forward")
-                .disabled(store.replyTarget == nil)
+                .disabled(!canReply)
         }
         ToolbarItemGroup {
             Button { act { await $0.toggleFlag($1) } } label: { Label("Flag", systemImage: "flag") }
@@ -68,7 +69,7 @@ struct ReaderPane: View {
                 Label("Snooze", systemImage: "moon.zzz")
             }
             .help("Snooze")
-            .disabled(none || !store.canSnooze)
+            .disabled(none || !canSnooze)
         }
     }
 }
@@ -228,7 +229,8 @@ struct MessageBody: View {
         if let html = email.html {
             MessageWebView(html: html, allowRemote: allowRemote, inline: email.attachments ?? [], download: store.download, openLink: open, height: $height)
                 .frame(height: height)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                // Mail with colors of its own sits on its own page.
+                .clipShape(RoundedRectangle(cornerRadius: MessageWebView.followsAppearance(html) ? 0 : 8))
                 .accessibilityLabel("Message")
         } else {
             Text(linked(email.text))
