@@ -8,16 +8,16 @@ mail carrying one: add to its spam score (as before), always put it in Spam, or 
 which shows in the inbound log with the reason. Every attachment is checked by its last
 extension, so `invoice.pdf.exe` counts as `.exe`.
 
-- **DMARC reports for admins.** The aggregate reports that Gmail, Outlook and others send
-  to `postmaster@` your domain (as gzip, zip or XML attachments) are read on arrival.
-  Admin → DMARC reports shows each domain's pass rate, DKIM and SPF alignment, and the
-  sources failing both. Reports sent twice are kept once and are pruned after 180 days.
-  The report email itself is delivered as before.
+**DMARC reports for admins.** The aggregate reports that Gmail, Outlook and others send
+to `postmaster@` your domain (as gzip, zip or XML attachments) are read on arrival.
+Admin → DMARC reports shows each domain's pass rate, DKIM and SPF alignment, and the
+sources failing both. Reports sent twice are kept once and are pruned after 180 days.
+The report email itself is delivered as before.
 
-- **Domain footers.** Admins can give a domain a plain-text footer (a disclaimer, say) in
-  the domain editor. It is added once to the end of mail sent from that domain, in the
-  text and HTML parts and in the Sent copy, and comes off again on undo send. PGP-signed
-  or encrypted mail, private links and system mail never get it.
+**Domain footers.** Admins can give a domain a plain-text footer (a disclaimer, say) in
+the domain editor. It is added once to the end of mail sent from that domain, in the
+text and HTML parts and in the Sent copy, and comes off again on undo send. PGP-signed
+or encrypted mail, private links and system mail never get it.
 
 **Legal hold.** An admin can put a mailbox on legal hold from its page in Admin → Users,
 with an optional note; placing and releasing it are in the audit log. Until it's released,
@@ -39,12 +39,12 @@ addresses and CIDR ranges (IPv4 and IPv6), for every role. Wren shows your curre
 won't save a list that leaves it out. Locked out anyway: set
 `WREN_IGNORE_ADMIN_IP_ALLOWLIST=1`, fix the list, and remove the variable (see README).
 
-- **Sending pauses on unusual activity.** A compromised-account guard pauses someone's
-  sending when they go over an hourly limit (100 messages by default) or when 20% of the
-  last day's mail hard-bounced (once they've sent 20). Sends from the web, mail apps and
-  API keys are refused and queued or scheduled mail is held; reading and receiving keep
-  working and the person sees a notice. Admins get an alert and resume sending, or pause
-  it by hand, from the person's page. Settings → Limits has the switch and thresholds.
+**Sending pauses on unusual activity.** A compromised-account guard pauses someone's
+sending when they go over an hourly limit (100 messages by default) or when 20% of the
+last day's mail hard-bounced (once they've sent 20). Sends from the web, mail apps and
+API keys are refused and queued or scheduled mail is held; reading and receiving keep
+working and the person sees a notice. Admins get an alert and resume sending, or pause
+it by hand, from the person's page. Settings → Limits has the switch and thresholds.
 
 **Helpdesk role.** Admins can make someone helpdesk staff in Admin → Users. Helpdesk staff
 open an admin panel with only Users and Invites, and can do account support for ordinary

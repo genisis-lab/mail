@@ -39,7 +39,7 @@ interface Detail {
     sendPausedAt: number | null;
     sendPausedReason: string | null;
   };
-  mailHandling: Parameters<typeof MailHandlingCard>[0]['value'];
+  mailHandling: Parameters<typeof MailHandlingCard>[0]['value'] | null;
   /** enabled: the server-wide switch; allowed: this person's own. */
   mailApps: { enabled: boolean; allowed: boolean; passwords: { id: number; name: string; lastUsedAt: number | null; createdAt: number }[] };
   exports: Parameters<typeof ExportCard>[0]['jobs'];
@@ -268,11 +268,11 @@ export function UserDetailPage() {
                 <p className="font-medium text-danger">Sending paused {relativeTime(u.sendPausedAt)}</p>
                 <p className="mt-0.5 break-words text-muted">{u.sendPausedReason || 'No reason given'}. Their queued mail is held until sending is resumed.</p>
               </div>
-              <Button size="sm" onClick={() => void call(() => api.post(`/api/admin/users/${u.id}/resume-sending`), 'Sending resumed: held mail goes out now')}>
+              {!isHelpdesk && <Button size="sm" onClick={() => void call(() => api.post(`/api/admin/users/${u.id}/resume-sending`), 'Sending resumed: held mail goes out now')}>
                 Resume sending
-              </Button>
+              </Button>}
             </div>
-          ) : (
+          ) : isHelpdesk ? null : (
             <Button
               size="sm"
               variant="ghost"
@@ -382,7 +382,7 @@ export function UserDetailPage() {
               )}
             </Card>
 
-            <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />
+            {d.mailHandling && <MailHandlingCard key={JSON.stringify(d.mailHandling)} userId={u.id} value={d.mailHandling} onSaved={refresh} />}
             <ExportCard userId={u.id} jobs={d.exports} run={call} />
             <LegalHoldCard key={u.legalHold ? 'held' : 'free'} userId={u.id} hold={u.legalHold} run={call} />
           </>

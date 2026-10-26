@@ -77,7 +77,19 @@ describe('what helpdesk staff can do for an ordinary user', () => {
     h.as('helen');
     expect((await h.call('GET', '/api/admin/users')).status).toBe(200);
     expect((await h.call('GET', `/api/admin/users/${ids.sam}`)).status).toBe(200);
-    expect((await h.call('GET', `/api/admin/users/${ids.sam}/detail`)).body.user.email).toBe('sam@wren.test');
+    const detail = (await h.call('GET', `/api/admin/users/${ids.sam}/detail`)).body;
+    expect(detail.user.email).toBe('sam@wren.test');
+  });
+
+  it('gets no legal hold, mail handling, mail app or export details', async () => {
+    run('UPDATE users SET legal_hold_at = 1, legal_hold_note = ? WHERE id = ?', ['case 42', ids.sam]);
+    h.as('helen');
+    const d = (await h.call('GET', `/api/admin/users/${ids.sam}/detail`)).body;
+    expect(d.user.legalHold).toBeNull();
+    expect(d.mailHandling).toBeNull();
+    expect(d.mailApps.passwords).toEqual([]);
+    expect(d.exports).toEqual([]);
+    run('UPDATE users SET legal_hold_at = NULL, legal_hold_note = NULL WHERE id = ?', [ids.sam]);
   });
 
   it('unlocks, signs out, resets 2-step and passkeys, sends links, sets a password, suspends, all audited as them', async () => {

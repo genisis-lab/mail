@@ -404,6 +404,8 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
   const sentToday = get<{ c: number }>(`SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND kind IN ('user','api') AND created_at > ?`, [id, now() - 86_400_000])?.c ?? 0;
   const prefs = getPrefs(id);
   const exports = all<JobRow>(`SELECT * FROM jobs WHERE user_id = ? AND kind = 'export' ORDER BY id DESC LIMIT 5`, [id]).map(jobDto);
+  // Helpdesk staff get account support details only: no legal hold, mail handling, mail apps or exports.
+  const helpdesk = !!c.get('user').helpdesk;
   return c.json({
     user: {
       id: u.id,
@@ -426,21 +428,21 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       customSendLimit: u.send_limit_per_day !== null,
       sentToday,
       lockedUntil: lockedUntil(u.email),
-      legalHold: u.legal_hold_at ? { since: u.legal_hold_at, note: u.legal_hold_note } : null,
+      legalHold: helpdesk || !u.legal_hold_at ? null : { since: u.legal_hold_at, note: u.legal_hold_note },
       sendPausedAt: u.send_paused_at,
       sendPausedReason: u.send_paused_reason,
     },
-    mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
+    mailHandling: helpdesk ? null : { vacation: prefs.vacation, forwarding: prefs.forwarding },
     mailApps: {
       // Server-wide switch (Admin → Settings → Security), then this person's own.
       enabled: !!getSettings()['jmap.enabled'],
       allowed: !u.mail_apps_blocked,
-      passwords: all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
+      passwords: helpdesk ? [] : all<{ id: number; name: string; last_used_at: number | null; created_at: number }>(
         `SELECT id, name, last_used_at, created_at FROM api_keys WHERE user_id = ? AND (',' || scopes || ',') LIKE '%,mail,%' ORDER BY created_at DESC`,
         [id],
       ).map((k) => ({ id: k.id, name: k.name, lastUsedAt: k.last_used_at, createdAt: k.created_at })),
     },
-    exports,
+    exports: helpdesk ? [] : exports,
     storage: { folders, attachments },
     addresses,
     shared: shared.map((b) => ({ id: b.id, email: b.email, name: b.name, canSend: !!b.can_send })),
