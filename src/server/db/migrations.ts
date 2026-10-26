@@ -805,6 +805,12 @@ export const migrations: string[] = [
     PRIMARY KEY (user_id, sender)
   );
   `,
+
+  // 26: legal hold: while an admin has one on a mailbox, none of its mail is permanently deleted.
+  `
+  ALTER TABLE users ADD COLUMN legal_hold_at INTEGER;
+  ALTER TABLE users ADD COLUMN legal_hold_note TEXT;
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

@@ -20,7 +20,7 @@ import { forbidden } from '../lib/http.js';
 import { hashPassword, randomToken } from '../lib/crypto.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { purgeMessages } from '../mail/store.js';
-import { createUser, deleteUser, getPrefs, getUser, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
+import { createUser, deleteUser, getPrefs, getUser, HOLD_BLOCKS_DELETE, mustChangePassword, quotaBytes, savePrefs, sendLimit, validatePassword } from '../services/users.js';
 import { jobDto, type JobRow } from '../services/jobs.js';
 import { deleteJob, exportStream, startExport } from '../services/mail-import.js';
 import { sendSetupLink, welcomeUser } from '../services/account-links.js';
@@ -430,6 +430,7 @@ adminOpsRoutes.get('/users/:id/detail', (c) => {
       customSendLimit: u.send_limit_per_day !== null,
       sentToday,
       lockedUntil: lockedUntil(u.email),
+      legalHold: u.legal_hold_at ? { since: u.legal_hold_at, note: u.legal_hold_note } : null,
     },
     mailHandling: { vacation: prefs.vacation, forwarding: prefs.forwarding },
     mailApps: {
@@ -465,6 +466,22 @@ adminOpsRoutes.delete('/users/:id/sessions/:sid', (c) => {
   const r = run('DELETE FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ?', [u.id, sid]);
   act(c, 'admin.user_session_revoked', u.email);
   return c.json({ revoked: r.changes });
+});
+
+/**
+ * Legal hold: while it's on, nothing of this mailbox's mail is permanently
+ * deleted (retention purges, "Delete forever", deleting the account). The
+ * person isn't told; what they try just fails with a generic message.
+ */
+adminOpsRoutes.put('/users/:id/legal-hold', async (c) => {
+  const u = managed(c);
+  const input = await body(c, z.object({ hold: z.boolean(), note: z.string().max(1000).optional() }));
+  const note = input.note?.trim() || null;
+  if (input.hold) run('UPDATE users SET legal_hold_at = COALESCE(legal_hold_at, ?), legal_hold_note = ? WHERE id = ?', [now(), note, u.id]);
+  else run('UPDATE users SET legal_hold_at = NULL, legal_hold_note = NULL WHERE id = ?', [u.id]);
+  act(c, input.hold ? 'admin.user_legal_hold_placed' : 'admin.user_legal_hold_released', u.email, note ? { note } : undefined);
+  const r = get<{ legal_hold_at: number | null; legal_hold_note: string | null }>('SELECT legal_hold_at, legal_hold_note FROM users WHERE id = ?', [u.id])!;
+  return c.json({ legalHold: r.legal_hold_at ? { since: r.legal_hold_at, note: r.legal_hold_note } : null });
 });
 
 // ── Lockouts ────────────────────────────────────────────────────────────────
@@ -589,6 +606,10 @@ adminOpsRoutes.post('/users/bulk', async (c) => {
     }
     if (u.role === 'owner' && ['suspend', 'delete'].includes(input.action)) {
       skip('owners can’t be suspended or deleted');
+      continue;
+    }
+    if (input.action === 'delete' && u.legal_hold_at) {
+      skip('on legal hold; release the hold first');
       continue;
     }
     switch (input.action) {
@@ -758,6 +779,7 @@ adminOpsRoutes.delete('/shared-mailboxes/:id', (c) => {
   const b = getUser(id);
   if (!b || b.kind !== 'shared') throw notFound();
   if (c.get('user').role !== 'owner' && c.get('user').role !== 'admin') throw forbidden();
+  if (b.legal_hold_at) throw forbidden(HOLD_BLOCKS_DELETE);
   purgeMessages(all<{ id: number }>('SELECT id FROM messages WHERE user_id = ?', [id]).map((r) => r.id));
   run('DELETE FROM users WHERE id = ?', [id]);
   act(c, 'admin.shared_mailbox_deleted', b.email);

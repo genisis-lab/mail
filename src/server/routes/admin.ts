@@ -181,6 +181,7 @@ function userDto(u: any, locked?: Set<string>) {
     recoveryEmail: u.recovery_email ?? null,
     mustChangePassword: mustChangePassword(u),
     mailAppsBlocked: !!u.mail_apps_blocked,
+    legalHold: !!u.legal_hold_at,
   };
 }
 

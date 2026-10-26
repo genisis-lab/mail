@@ -5,7 +5,7 @@ import { loadBody } from './body.js';
 import { parcelColumn, parcelFor, parcelRows, readFacts, type ParcelRow } from './parcel.js';
 import { proxiedImage, signedImages } from '../services/image-proxy.js';
 import { buildSearch } from './search.js';
-import { purgeMessages } from './store.js';
+import { assertNotOnHold, purgeMessages } from './store.js';
 import { rememberSenders } from './sender-verdicts.js';
 
 export const VIEWS: View[] = ['inbox', 'starred', 'snoozed', 'important', 'sent', 'scheduled', 'drafts', 'all', 'spam', 'trash'];
@@ -424,6 +424,7 @@ export function applyThreadAction(userId: number, threadIds: number[], action: T
       }
       case 'delete': {
         const list = ids(`AND folder IN ('trash','spam')`);
+        if (list.length) assertNotOnHold(userId);
         purgeMessages(list);
         return list.length;
       }

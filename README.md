@@ -227,6 +227,9 @@ with recovery codes, sign-in alerts, active sessions, app passwords for mail app
   - **When someone is away or leaves:** set their out-of-office reply and forwarding,
     export their mail as `.mbox`, and on delete pass their addresses and catch-alls to
     someone else so nothing bounces.
+  - **Legal hold** on a mailbox, with an optional note: until it's released nothing of
+    theirs is permanently deleted (no Trash/Spam purge, "Delete forever", private-link
+    cleanup or account deletion). Moving to Trash still works, and they aren't told.
   - Only the owner can change, sign out or reset the owner account.
 - Domains: DNS records that match the sending provider, a DNS checker with health
   badges, provider and fallback, catch-all, DKIM selectors, and one-click Cloudflare
