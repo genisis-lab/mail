@@ -47,7 +47,8 @@ struct RootView: View {
             case .signedIn: MainView()
             }
         }
-        .onAppear { store.restore() }
+        .onAppear { if ProcessInfo.processInfo.environment["WREN_DEMO_OUT"] == nil { store.restore() } else { store.phase = .signedOut } }
+        .modifier(Demo())
     }
 }
 

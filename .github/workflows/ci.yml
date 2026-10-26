@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches-ignore: [claude/mac-app-screens]
   pull_request:
 jobs:
   test:

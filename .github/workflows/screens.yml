@@ -1,0 +1,45 @@
+name: Screens
+on:
+  push:
+    branches: [claude/mac-app-screens]
+permissions:
+  contents: write
+jobs:
+  screens:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Start Wren with sample mail
+        run: |
+          nohup npx vitest run --config .github/screens/vitest.config.mjs > server.log 2>&1 &
+          for i in $(seq 1 120); do [ -f .github/screens/creds.json ] && break; sleep 1; done
+          sleep 3
+          cat server.log
+          test -f .github/screens/creds.json
+      - name: Build the app
+        working-directory: apps/macos
+        run: ./bundle.sh
+      - name: Take screenshots
+        timeout-minutes: 8
+        run: |
+          KEY=$(node -e 'console.log(require("./.github/screens/creds.json").key)')
+          mkdir -p shots
+          for mode in light dark; do
+            dark=0; [ $mode = dark ] && dark=1
+            WREN_DEMO_OUT=$PWD/shots WREN_DEMO_TAG=$mode WREN_DEMO_DARK=$dark WREN_DEMO_SERVER=http://127.0.0.1:8787 \
+              WREN_DEMO_USER=admin@wren.test WREN_DEMO_PASSWORD=$KEY apps/macos/build/Wren.app/Contents/MacOS/Wren || echo "app exited with $?"
+          done
+          ls -la shots
+      - name: Save screenshots to the branch
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f shots
+          git commit -m "Screenshots" && git push origin HEAD:claude/mac-app-screens || true

@@ -126,7 +126,7 @@ final class MailStore {
         phase = .signedOut
     }
 
-    private func begin(_ client: JMAPClient) {
+    func begin(_ client: JMAPClient) {
         self.client = client
         phase = .signedIn
         listening?.cancel()
