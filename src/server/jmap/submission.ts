@@ -10,6 +10,7 @@
 import { all, get, IN_LIST, listParam, now, run } from '../db/index.js';
 import { sha256 } from '../lib/crypto.js';
 import { htmlToText } from '../mail/parse.js';
+import { setPrivate } from '../mail/private.js';
 import { cancelSend, sendDraft } from '../mail/send.js';
 import { getPrefs, identities } from '../services/users.js';
 import { emailSet, loadRows } from './email.js';
@@ -238,6 +239,11 @@ async function createSubmission(ctx: JmapContext, obj: Record<string, any>): Pro
   if (row.folder !== 'drafts') throw new SetError('invalidEmail', 'Only drafts can be sent', { properties: ['emailId'] });
   if (obj.sendAt !== undefined && obj.sendAt !== null) throw new SetError('invalidProperties', 'The server sets sendAt; hold the message with HOLDUNTIL or HOLDFOR', { properties: ['sendAt'] });
   const hold = holdUntil(obj.envelope);
+  // Wren's extension: send it as a private link that works for 1, 7 or 30 days, like the web's compose option.
+  const days = (obj.privateLinkDays ?? null) as number | null;
+  if (days !== null && (!ctx.using.has(CAP.wren) || ![1, 7, 30].includes(days))) {
+    throw new SetError('invalidProperties', 'privateLinkDays is 1, 7 or 30, with Wren’s capability', { properties: ['privateLinkDays'] });
+  }
 
   if (isObject(obj.envelope)) {
     const env = obj.envelope as { mailFrom?: { email?: string }; rcptTo?: { email?: string }[] };
@@ -255,6 +261,7 @@ async function createSubmission(ctx: JmapContext, obj: Record<string, any>): Pro
     }
   }
 
+  if (days !== null) setPrivate(userId, row.id, days);
   let res: { sendAt: number };
   try {
     // Over 30 seconds away it's a scheduled send; a shorter hold waits like undo send does.

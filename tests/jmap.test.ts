@@ -458,6 +458,156 @@ describe('blobs', () => {
   });
 });
 
+// ── Contacts and Wren's additions ─────────────────────────────────────────────
+
+describe('contacts and Wren’s additions', () => {
+  const CONTACTS = 'urn:ietf:params:jmap:contacts';
+  const WREN = 'https://github.com/genisis-lab/mail/jmap';
+  const using = [...USING, CONTACTS, WREN];
+  const callWith = async (name: string, args: Record<string, unknown>) => {
+    const { responses } = await jmap([[name, { accountId: account, ...args }, 'c']], using);
+    return responses[0];
+  };
+
+  it('offers them in the session', async () => {
+    const s = (await (await h.app.request('/jmap/session', { headers: auth() })).json()) as any;
+    expect(Object.keys(s.capabilities)).toEqual(expect.arrayContaining([CONTACTS, WREN]));
+    expect(s.accounts[account].accountCapabilities[CONTACTS]).toEqual({ mayCreateAddressBook: false });
+    expect(s.primaryAccounts[CONTACTS]).toBe(account);
+  });
+
+  it('lists saved contacts and people you wrote to, best match first', async () => {
+    run('DELETE FROM contacts WHERE user_id = ?', [userId]);
+    const t = Date.now();
+    run(`INSERT INTO contacts (user_id, email, name, company, saved, times_contacted, created_at) VALUES (?, 'ada@example.com', 'Ada Lovelace', 'Analytical', 1, 0, ?)`, [userId, t]);
+    run(`INSERT INTO contacts (user_id, email, name, saved, times_contacted, created_at) VALUES (?, 'adam@example.com', 'Adam', 0, 5, ?)`, [userId, t]);
+    run(`INSERT INTO contacts (user_id, email, name, saved, times_contacted, created_at) VALUES (?, 'zed@example.com', '', 0, 9, ?)`, [userId, t]);
+
+    const [, books] = await callWith('AddressBook/get', { ids: null });
+    expect(books.list.map((b: any) => [b.id, b.isDefault, b.myRights.mayWrite])).toEqual([
+      ['contacts', true, false],
+      ['recent', false, false],
+    ]);
+
+    const [, q] = await callWith('ContactCard/query', { filter: { text: 'ada' }, limit: 10 });
+    expect(q.ids).toHaveLength(2);
+    const [, got] = await callWith('ContactCard/get', { ids: [...q.ids, 'K999C1'] });
+    expect(got.notFound).toEqual(['K999C1']);
+    expect(got.list[0]).toMatchObject({
+      '@type': 'Card',
+      version: '1.0',
+      kind: 'individual',
+      addressBookIds: { contacts: true },
+      name: { full: 'Ada Lovelace' },
+      emails: { e1: { '@type': 'EmailAddress', address: 'ada@example.com' } },
+      organizations: { o1: { name: 'Analytical' } },
+    });
+    expect(got.list[0].uid).toMatch(/^urn:uuid:[0-9a-f-]{36}$/);
+    expect(got.list[1]).toMatchObject({ addressBookIds: { recent: true }, emails: { e1: { address: 'adam@example.com' } } });
+
+    const [, recent] = await callWith('ContactCard/query', { filter: { inAddressBook: 'recent' }, calculateTotal: true });
+    expect(recent.total).toBe(2);
+    // Wildcards in a search are just characters.
+    expect((await callWith('ContactCard/query', { filter: { text: '%' } }))[1].ids).toEqual([]);
+    expect((await callWith('ContactCard/query', { filter: { kind: 'group' } }))[1].type).toBe('unsupportedFilter');
+
+    // States change when contacts do, and /changes asks apps to fetch again.
+    const [, changes] = await callWith('ContactCard/changes', { sinceState: got.state });
+    expect(changes.created).toEqual([]);
+    run(`UPDATE contacts SET name = 'Ada King' WHERE user_id = ? AND email = 'ada@example.com'`, [userId]);
+    expect((await callWith('ContactCard/changes', { sinceState: got.state }))[1].type).toBe('cannotCalculateChanges');
+
+    // Without the capability in "using", the methods aren't there.
+    expect((await jmap([['ContactCard/query', { accountId: account }, 'c']])).responses[0][1].type).toBe('unknownMethod');
+  });
+
+  it('takes "id" among the properties asked for', async () => {
+    const [, got] = await callWith('Mailbox/get', { ids: ['inbox'], properties: ['id', 'name'] });
+    expect(got.list[0]).toEqual({ id: 'inbox', name: 'Inbox' });
+  });
+
+  it('shows and answers calendar invitations', async () => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'METHOD:REQUEST',
+      'BEGIN:VEVENT',
+      'UID:jmap-invite@northwind.example',
+      'DTSTART:20261216T170000Z',
+      'DTEND:20261216T173000Z',
+      'ORGANIZER;CN=Maya Chen:mailto:maya@northwind.example',
+      'ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:admin@wren.test',
+      'SUMMARY:Planning',
+      'STATUS:CONFIRMED',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const { raw } = await buildMime({
+      from: { address: 'maya@northwind.example', name: 'Maya Chen' },
+      to: [{ address: 'admin@wren.test' }],
+      subject: 'Invitation: Planning',
+      text: 'You are invited',
+      calendar: { method: 'REQUEST', content: ics },
+    });
+    await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'test' });
+    const [id] = (await call('Email/query', { filter: { subject: 'Invitation: Planning' } })).ids;
+
+    const [, got] = await callWith('Email/get', { ids: [id], properties: ['subject', 'invite'] });
+    expect(got.list[0].invite).toMatchObject({ method: 'REQUEST', summary: 'Planning', start: '2026-12-16T17:00:00Z', canReply: true, me: { email: 'admin@wren.test' } });
+    // Only with Wren's capability.
+    expect((await jmap([['Email/get', { accountId: account, ids: [id], properties: ['invite'] }, 'c']])).responses[0][1].type).toBe('invalidArguments');
+
+    const [, reply] = await callWith('Invite/reply', { emailId: id, status: 'accepted' });
+    expect(reply).toMatchObject({ emailId: id, status: 'accepted', to: 'maya@northwind.example' });
+    expect((await outbox('user')).some((j) => j.subject === 'Accepted: Planning')).toBe(true);
+    expect((await callWith('Invite/reply', { emailId: id, status: 'maybe' }))[1].type).toBe('invalidArguments');
+  });
+
+  it('sends a message as a private link', async () => {
+    const me = (await call('Identity/get', { ids: null })).list.find((i: any) => i.email === 'admin@wren.test');
+    const draft = {
+      mailboxIds: { drafts: true },
+      keywords: { $draft: true, $seen: true },
+      from: [{ email: 'admin@wren.test' }],
+      to: [{ email: 'kim@example.com' }],
+      subject: 'Private numbers',
+      textBody: [{ partId: 'b', type: 'text/plain' }],
+      bodyValues: { b: { value: 'SECRET-123' } },
+    };
+    const { responses } = await jmap(
+      [
+        ['Email/set', { accountId: account, create: { d: draft, e: { ...draft, subject: 'Not sent' } } }, 'd'],
+        ['EmailSubmission/set', { accountId: account, create: { s: { identityId: me.id, emailId: '#d', privateLinkDays: 7 } } }, 's'],
+        ['EmailSubmission/set', { accountId: account, create: { t: { identityId: me.id, emailId: '#e', privateLinkDays: 3 } } }, 't'],
+      ],
+      using,
+    );
+    expect(responses[1][1].created.s).toBeTruthy();
+    expect(responses[2][1].notCreated.t.type).toBe('invalidProperties');
+    const msg = get<{ id: number }>(`SELECT id FROM messages WHERE subject = 'Private numbers'`)!;
+    expect(get('SELECT days FROM private_links WHERE message_id = ?', [msg.id])).toEqual({ days: 7 });
+    const job = (await outbox('user')).find((j) => j.subject === 'Private numbers')!;
+    expect(job.text).not.toContain('SECRET-123');
+  });
+
+  it('finds PGP keys and the passphrase-protected key backup', async () => {
+    const armored = '-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nxx\n-----END PGP PUBLIC KEY BLOCK-----';
+    run(`INSERT INTO pgp_keys (user_id, own, fingerprint, name, emails, armored, created_at) VALUES (?, 0, 'F1', 'Kim', '["kim@example.com"]', ?, ?)`, [userId, armored, Date.now()]);
+    const [, found] = await callWith('PgpKey/lookup', { addresses: ['KIM@example.com', 'nobody@example.com'] });
+    expect(found.keys).toEqual({ 'kim@example.com': [{ fingerprint: 'F1', armored }] });
+
+    expect((await callWith('PgpBackup/get', { ids: null }))[1].list).toEqual([]);
+    run(`INSERT INTO pgp_backups (user_id, fingerprint, armored, updated_at) VALUES (?, 'F2', 'ENCRYPTED KEY', ?)`, [userId, Date.UTC(2026, 10, 1)]);
+    const [, backup] = await callWith('PgpBackup/get', { ids: null });
+    expect(backup.list).toEqual([{ id: 'singleton', fingerprint: 'F2', armored: 'ENCRYPTED KEY', updatedAt: '2026-11-01T00:00:00Z' }]);
+  });
+
+  it('tells the web app how much storage is used', async () => {
+    const me = (await h.call('GET', '/api/auth/me')).body.user;
+    expect(me.storage.used).toBeGreaterThan(0);
+    expect(me.storage.limit).toBeGreaterThan(me.storage.used);
+  });
+});
+
 // ── Push ──────────────────────────────────────────────────────────────────────
 
 describe('push', () => {
@@ -614,7 +764,7 @@ describe('shared mailboxes', () => {
   it('shows up as another account, only for its members', async () => {
     const mine = await sessionOf(auth());
     expect(mine.accounts[shared]).toMatchObject({ name: 'support@wren.test', isPersonal: false, isReadOnly: false });
-    expect(Object.keys(mine.accounts[shared].accountCapabilities).sort()).toEqual([SNOOZE, 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission']);
+    expect(Object.keys(mine.accounts[shared].accountCapabilities).sort()).toEqual([SNOOZE, 'https://github.com/genisis-lab/mail/jmap', 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission']);
     expect(mine.primaryAccounts['urn:ietf:params:jmap:mail']).toBe(account);
     expect((await sessionOf(bobAuth())).accounts[shared]).toBeUndefined();
 
@@ -624,9 +774,16 @@ describe('shared mailboxes', () => {
     expect((await call('Email/get', { accountId: shared, ids, properties: ['subject', 'mailboxIds'] })).list[0]).toMatchObject({ subject: 'Where is my order?', mailboxIds: { inbox: true } });
     expect((await call('Email/get', { ids, properties: ['subject'] })).notFound).toEqual(ids);
     expect((await call('Mailbox/get', { accountId: shared, ids: ['inbox'] })).list[0]).toMatchObject({ totalEmails: 1, unreadEmails: 1 });
-    // No quota or vacation reply of its own.
-    const { responses } = await jmap([['Quota/get', { accountId: shared, ids: null }, 'q']]);
-    expect(responses[0][1].type).toBe('accountNotSupportedByMethod');
+    // No quota, vacation reply, contacts or PGP key backup of its own.
+    const { responses } = await jmap(
+      [
+        ['Quota/get', { accountId: shared, ids: null }, 'q'],
+        ['ContactCard/query', { accountId: shared }, 'c'],
+        ['PgpBackup/get', { accountId: shared, ids: null }, 'p'],
+      ],
+      [...USING, 'urn:ietf:params:jmap:contacts', 'https://github.com/genisis-lab/mail/jmap'],
+    );
+    expect(responses.map((r) => r[1].type)).toEqual(['accountNotSupportedByMethod', 'accountNotSupportedByMethod', 'accountNotSupportedByMethod']);
   });
 
   it('keeps everyone else out, whatever they ask for', async () => {

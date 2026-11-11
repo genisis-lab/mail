@@ -23,10 +23,14 @@ export const CAP = {
    * "FM extensions"). Wren supports only its Email "snoozed" property; see email.ts.
    */
   snooze: 'https://cyrusimap.org/ns/jmap/mail',
+  /** JMAP Contacts (RFC 9610), read only; see contacts.ts. */
+  contacts: 'urn:ietf:params:jmap:contacts',
+  /** Wren's own additions (calendar invites, private links, PGP keys); see wren.ts and docs/jmap.md. */
+  wren: 'https://github.com/genisis-lab/mail/jmap',
 } as const;
 
-/** What a shared mailbox's account offers (it has no quota or vacation reply of its own here). */
-export const SHARED_CAPS: readonly string[] = [CAP.mail, CAP.submission, CAP.snooze];
+/** What a shared mailbox's account offers (it has no quota, vacation reply or contacts of its own here). */
+export const SHARED_CAPS: readonly string[] = [CAP.mail, CAP.submission, CAP.snooze, CAP.wren];
 
 export const LIMITS = {
   maxSizeRequest: 10_000_000,
@@ -227,13 +231,13 @@ export function getIds(args: Record<string, any>, ctx: JmapContext, allowAll: bo
   return args.ids.map((i: string) => String(resolveId(ctx, i)));
 }
 
-/** properties for /get, checked against the type's known properties. "id" is always returned. */
+/** properties for /get, checked against the type's known properties. "id" is always returned, and may be asked for. */
 export function getProperties(args: Record<string, any>, known: readonly string[], defaults: readonly string[] = known): Set<string> {
   if (args.properties === undefined || args.properties === null) return new Set(['id', ...defaults]);
   if (!Array.isArray(args.properties)) throw new MethodError('invalidArguments', 'properties must be an array');
   const props = new Set<string>(['id']);
   for (const p of args.properties) {
-    if (typeof p !== 'string' || (!known.includes(p) && !p.startsWith('header:'))) throw new MethodError('invalidArguments', `Unknown property ${String(p)}`);
+    if (typeof p !== 'string' || (p !== 'id' && !known.includes(p) && !p.startsWith('header:'))) throw new MethodError('invalidArguments', `Unknown property ${String(p)}`);
     props.add(p);
   }
   return props;
