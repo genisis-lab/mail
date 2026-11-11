@@ -193,7 +193,7 @@ Contacts import from Google/Outlook CSV or vCard and export to both.
 **Mail apps.** Wren speaks JMAP, the modern open protocol for mail apps, so apps that
 support it can read, organize and send your mail with live push. Each app signs in
 with its own app password, never your account password. An admin turns it on. See
-[docs/jmap.md](docs/jmap.md). There's a native Mac app too: [apps/macos](apps/macos).
+[docs/jmap.md](docs/jmap.md). There's a native Mac app too: [Wren for Mac](https://github.com/genisis-lab/wren-mac).
 
 **Search.** Full text (SQLite FTS5) plus `from:` `to:` `cc:` `subject:` `label:`
 `has:attachment` `has:package` `filename:` `is:unread|starred|important|snoozed`
