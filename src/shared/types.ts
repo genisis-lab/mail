@@ -105,6 +105,8 @@ export interface SessionUser {
   avatarAt: number | null;
   /** Sending is paused (unusual activity, or an administrator): sends are refused until an admin resumes it. */
   sendPaused?: boolean;
+  /** Bytes of mail stored, and the most allowed. */
+  storage?: { used: number; limit: number };
 }
 
 export interface Identity {

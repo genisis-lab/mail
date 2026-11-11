@@ -144,6 +144,7 @@ export function sessionUser(user: UserRow): SessionUser {
     hasAvatar: !!user.avatar_blob,
     avatarAt: user.avatar_at,
     sendPaused: !!user.send_paused_at,
+    storage: { used: user.used_bytes, limit: quotaBytes(user) },
   };
 }
 

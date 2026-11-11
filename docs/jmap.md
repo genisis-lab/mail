@@ -19,6 +19,8 @@ they can't create new ones; everyone else is unaffected. The Users list marks th
 
 ## Connecting an app
 
+Wren has its own Mac app, which works this way: see [Wren for Mac](https://github.com/genisis-lab/wren-mac).
+
 1. In Wren, open **Settings → Security → Mail apps** and create an app password, one
    per app or device.
 2. In the app, enter:
@@ -49,6 +51,8 @@ app passwords, and app passwords can't be used with the send API.
 | Out-of-office reply | `VacationResponse` |
 | Storage used and allowed | `Quota` (RFC 9425) |
 | Your addresses and signatures | `Identity` (read only; manage them in Wren) |
+| Contacts | JMAP Contacts (RFC 9610), read only: a `contacts` address book (the ones you saved) and `recent` (people you've written to) |
+| Calendar invitations, private links, PGP keys | Wren's own extension (below) |
 
 Apps can read mail, search, flag and move it, manage labels, write drafts with
 attachments, send (now or later), snooze, and import messages. Changes made anywhere
@@ -86,6 +90,29 @@ change there whenever something changes, encrypted for the app (RFC 8291) when i
 keys, and only after the app has confirmed the subscription. Subscriptions last up to 7
 days and the app renews them. Apps can also hold an `EventSource` stream open; Wren
 ends each stream after 15 minutes and the app reconnects.
+
+**Contacts.** With `urn:ietf:params:jmap:contacts`, apps can suggest addresses as you
+type: `ContactCard/query` (filters `text`, `name`, `email` and `inAddressBook`; saved
+contacts first, then the people you write to most) and `ContactCard/get` return JSContact
+cards with a name, email, phone, company and notes. Edit contacts in the web app; shared
+mailboxes have none of their own here.
+
+**Wren's extension.** The capability `https://github.com/genisis-lab/mail/jmap` (in every
+account, except where noted) adds what the web app has and JMAP doesn't:
+
+- **Calendar invitations.** Email/get's `invite` property is the invitation in an email,
+  or `null`: `method`, `summary`, `start` and `end` (UTCDate), `allDay`, `location`,
+  `organizer`, `attendees`, `me` (your address and answer), `rsvp` (the answer sent from
+  Wren) and `canReply`. `Invite/reply` with `{ emailId, status: "accepted" | "tentative" |
+  "declined", comment? }` sends your answer to the organizer, as the web's invite card does.
+- **Private links.** `privateLinkDays: 1 | 7 | 30` on an EmailSubmission you create sends
+  the message as a private link that stops working after that many days, like the web's
+  compose option.
+- **PGP.** `PgpKey/lookup` with `{ addresses }` returns the public keys Wren knows for
+  them, as `{ keys: { address: [{ fingerprint, armored }] } }`. `PgpBackup/get` returns
+  your private key backup (`singleton`: `fingerprint`, `armored`, `updatedAt`), still
+  encrypted with the passphrase you chose in the browser; Wren never has the passphrase.
+  Your own account only. The backup is still set up in the web app.
 
 **Not yet:** inbox tabs are web-only. Mailboxes don't nest, and `queryChanges` isn't
 supported, so apps re-run their queries.

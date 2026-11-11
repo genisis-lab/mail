@@ -26,6 +26,8 @@ import './mailbox.js';
 import './email.js';
 import './submission.js';
 import './extras.js';
+import './contacts.js';
+import './wren.js';
 
 type JmapEnv = { Variables: { user: UserRow; keyId: number } };
 
@@ -129,23 +131,33 @@ function session(user: UserRow) {
       [CAP.quota]: {},
       [CAP.vacation]: {},
       [CAP.snooze]: {},
+      [CAP.contacts]: {},
+      [CAP.wren]: {},
     },
     accounts: {
       [id]: {
         name: user.email,
         isPersonal: true,
         isReadOnly: false,
-        accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.quota]: {}, [CAP.vacation]: {}, [CAP.snooze]: {} },
+        accountCapabilities: {
+          [CAP.mail]: mail,
+          [CAP.submission]: submission,
+          [CAP.quota]: {},
+          [CAP.vacation]: {},
+          [CAP.snooze]: {},
+          [CAP.contacts]: { mayCreateAddressBook: false },
+          [CAP.wren]: {},
+        },
       },
       // Each shared mailbox they belong to is another account. Members who can't send still read and write drafts, so none is read-only.
       ...Object.fromEntries(
         sharedAccounts(user.id).map(({ box }) => [
           accountId(box.id),
-          { name: box.email, isPersonal: false, isReadOnly: false, accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.snooze]: {} } },
+          { name: box.email, isPersonal: false, isReadOnly: false, accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.snooze]: {}, [CAP.wren]: {} } },
         ]),
       ),
     },
-    primaryAccounts: { [CAP.mail]: id, [CAP.submission]: id, [CAP.quota]: id, [CAP.vacation]: id },
+    primaryAccounts: { [CAP.mail]: id, [CAP.submission]: id, [CAP.quota]: id, [CAP.vacation]: id, [CAP.contacts]: id, [CAP.wren]: id },
     username: user.email,
     apiUrl: `${base()}/jmap/api`,
     downloadUrl: `${base()}/jmap/download/{accountId}/{blobId}/{name}?accept={type}`,

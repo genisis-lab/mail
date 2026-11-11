@@ -11,7 +11,10 @@
  *   admin pages are never kept.
  * - Shows new-mail notifications. A push only says which accounts have new
  *   mail: this then asks Wren what's new over each account's session, so
- *   nothing about your mail passes through the browser's push service.
+ *   nothing about your mail passes through the browser's push service. A
+ *   notification about one message has Archive and Mark as read buttons.
+ * - Takes what other apps share with Wren (the manifest's share_target) and
+ *   keeps it until the page opens it as a new message.
  */
 const SHELL = 'wren-shell-v1';
 /** One offline copy per account: MAIL + the account's id ("default": which account /inbox showed last). */
@@ -20,6 +23,8 @@ const MAIL = 'wren-mail-v2:';
 const OFFLINE_API = /^\/api\/(auth\/me|mail\/threads(\/\d+)?|mail\/counters|labels|me\/saved-searches)$/;
 /** At most this many opened conversations are kept per account. */
 const MAX_THREADS = 150;
+/** Shares from other apps, until the page picks them up (lib/share.ts reads the same cache). */
+const SHARE = 'wren-share';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -48,7 +53,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL && !k.startsWith(MAIL)).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL && k !== SHARE && !k.startsWith(MAIL)).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -61,6 +66,13 @@ self.addEventListener('fetch', (event) => {
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
     const account = accountOf(req, url);
     event.waitUntil(url.searchParams.get('all') === '1' || !account ? dropMail() : caches.delete(MAIL + account));
+    return;
+  }
+  // Shared from another app: keep it (files and all) and open a new message with it.
+  if (req.method === 'POST' && url.pathname === '/api/share') {
+    const copy = req.clone();
+    // If it can't be kept here, the server opens its text instead.
+    event.respondWith(keepShare(req).catch(() => fetch(copy)));
     return;
   }
   if (req.method !== 'GET') return;
@@ -115,6 +127,14 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+async function keepShare(req) {
+  const form = await req.formData();
+  const id = String(Date.now());
+  // A Response holding the form keeps its files; the page reads it back with formData().
+  await caches.open(SHARE).then((cache) => cache.put(`/share/${id}`, new Response(form)));
+  return Response.redirect(`/inbox?share=${id}`, 303);
+}
 
 /** Store the latest page and drop build assets it no longer uses (each deploy has new file names). */
 async function keepShell(response) {
@@ -252,6 +272,8 @@ function showNewMail(data) {
   const path = (account && account.path) || '';
   const forAccount = account && data.accounts > 1 ? `\n${account.address}` : '';
   const open = (i) => (i.mailbox ? `${path}/inbox` : `${path}/inbox/${i.threadId}`);
+  // One message: buttons to archive it or mark it read without opening Wren.
+  const one = data.total === 1 ? { threadId: top.threadId, account: account && account.id, mailbox: top.mailbox && top.mailbox.id } : null;
   const show = (title, body, url) =>
     self.registration.showNotification(title, {
       body: body + forAccount,
@@ -260,7 +282,8 @@ function showNewMail(data) {
       renotify: true,
       icon: ICON,
       badge: BADGE,
-      data: { url },
+      data: { url, one },
+      actions: one ? [{ action: 'archive', title: 'Archive' }, { action: 'read', title: 'Mark as read' }] : [],
     });
   // A sign-in code: put it where it can be read at a glance.
   if (top.code) return show(`${top.code} · ${who(top)}`, `${top.subject || 'Sign-in code'}\nTap to open; the code can be copied from the message.`, open(top));
@@ -299,8 +322,25 @@ self.addEventListener('push', (event) => {
 /** Pages of an account added after the first (/u/<id>/…); the first account's have no prefix. */
 const ACCOUNT_PREFIX = /^\/u\/[1-9]\d*(?=\/|$)/;
 
+/** A notification's Archive or Mark as read: done over the account's session, like the app would. */
+async function actOn(one, type) {
+  const headers = { 'X-Wren': '1', 'Content-Type': 'application/json' };
+  if (one.account) headers['X-Wren-Account'] = String(one.account);
+  if (one.mailbox) headers['X-Wren-Mailbox'] = String(one.mailbox);
+  const res = await fetch('/api/mail/threads/actions', { method: 'POST', credentials: 'same-origin', headers, body: JSON.stringify({ threadIds: [one.threadId], action: { type } }) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const found = await describeNewMail(one.account);
+  if (found) await updateBadge([found]);
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const one = event.notification.data && event.notification.data.one;
+  if (one && (event.action === 'archive' || event.action === 'read')) {
+    // If it fails (signed out, offline), say so rather than lose the tap silently.
+    event.waitUntil(actOn(one, event.action).catch(() => self.registration.showNotification('Couldn’t do that', { body: 'Open Wren to try again.', tag: 'wren-mail-failed', icon: ICON, badge: BADGE, data: { url: event.notification.data.url } })));
+    return;
+  }
   const url = (event.notification.data && event.notification.data.url) || '/inbox';
   const prefixOf = (path) => {
     const m = ACCOUNT_PREFIX.exec(path);

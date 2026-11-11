@@ -64,7 +64,8 @@ export function createApp() {
   app.use('/api/*', async (c, next) => {
     const m = c.req.method;
     const path = c.req.path;
-    if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS' && !path.startsWith('/api/inbound/') && !path.startsWith('/api/v1/')) {
+    // A share from another app (/api/share) is a plain form post that only opens a new message.
+    if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS' && !path.startsWith('/api/inbound/') && !path.startsWith('/api/v1/') && path !== '/api/share') {
       if (c.req.header('x-wren') !== '1') return c.json({ error: 'Missing X-Wren header' }, 403);
     }
     await next();
@@ -101,8 +102,31 @@ export function createApp() {
           { name: 'Compose', short_name: 'Compose', url: '/inbox?compose=1', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
           { name: 'Starred', url: '/starred', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
         ],
+        // Wren in the share sheet: the service worker takes the post (sw.js), or /api/share below if it isn't running.
+        share_target: {
+          action: '/api/share',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: { title: 'title', text: 'text', url: 'url', files: [{ name: 'files', accept: ['*/*'] }] },
+        },
+        protocol_handlers: [{ protocol: 'mailto', url: '/inbox?mailto=%s' }],
+        // Shares and mailto: links open in the Wren window already open.
+        launch_handler: { client_mode: ['navigate-existing', 'auto'] },
       }),
     );
+  });
+
+  // A share that arrived before the service worker could take it: its text opens as a new message
+  // (shortcut: its files are dropped; the service worker keeps them, and it's running almost always).
+  app.post('/api/share', async (c) => {
+    const form = await c.req.formData().catch(() => null);
+    const field = (k: string) => {
+      const v = form?.get(k);
+      return typeof v === 'string' ? v.trim().slice(0, 2000) : '';
+    };
+    const body = [field('text'), field('url')].filter(Boolean).join('\n');
+    const mailto = `mailto:?subject=${encodeURIComponent(field('title'))}&body=${encodeURIComponent(body)}`;
+    return c.redirect(`/inbox?mailto=${encodeURIComponent(mailto)}`, 303);
   });
 
   app.route('/api/setup', setupRoutes);

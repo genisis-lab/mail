@@ -15,6 +15,7 @@ import { saveDraft } from '../mail/send.js';
 import { HOLD_MESSAGE, onLegalHold, purgeMessages } from '../mail/store.js';
 import { rememberSenders } from '../mail/sender-verdicts.js';
 import { cleanMessageId, formatAddr } from '../lib/addr.js';
+import { inviteFor } from '../services/calendar.js';
 import { importRaw, QuotaExceeded } from '../services/mail-import.js';
 import { rawMessage, readBlob } from './blobs.js';
 import { changesSince, checkState, currentState } from './changes.js';
@@ -264,9 +265,16 @@ async function toEmail(row: any, labels: LabelRef[], props: Set<string>, args: R
   return out;
 }
 
+/** Wren's "invite" property (CAP.wren): the calendar invitation in an email, as the web app's invite card shows it, or null. */
+async function invite(userId: number, messageId: number) {
+  const v = await inviteFor(userId, messageId);
+  return v && { ...v, start: v.start === null ? null : utcDate(v.start), end: v.end === null ? null : utcDate(v.end) };
+}
+
 method('Email/get', CAP.mail, async (args, ctx) => {
   const wanted = getIds(args, ctx, false)!;
-  const props = getProperties(args, ctx.using.has(CAP.snooze) ? [...ALL_PROPS, 'snoozed'] : ALL_PROPS, DEFAULT_PROPS);
+  const known = [...ALL_PROPS, ...(ctx.using.has(CAP.snooze) ? ['snoozed'] : []), ...(ctx.using.has(CAP.wren) ? ['invite'] : [])];
+  const props = getProperties(args, known, DEFAULT_PROPS);
   for (const p of props) if (p.startsWith('header:') && !parseHeaderProperty(p)) throw new MethodError('invalidArguments', `Bad header property ${p}`);
   const state = currentState(ctx.user.id);
   const rows = loadRows(ctx.user.id, wanted);
@@ -276,7 +284,11 @@ method('Email/get', CAP.mail, async (args, ctx) => {
   for (const id of wanted) {
     const r = rows.get(id);
     if (!r) notFound.push(id);
-    else list.push(await toEmail(r, labels.get(r.id) ?? [], props, args));
+    else {
+      const email = await toEmail(r, labels.get(r.id) ?? [], props, args);
+      if (props.has('invite')) email.invite = await invite(ctx.user.id, r.id);
+      list.push(email);
+    }
   }
   return { accountId: ctx.accountId, state, list, notFound };
 });

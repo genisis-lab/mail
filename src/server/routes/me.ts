@@ -14,6 +14,7 @@ import { ImapError } from '../mail/imap-client.js';
 import { HttpError } from '../lib/http.js';
 import { parcelNote, parcelRowsOnce } from '../mail/parcel.js';
 import { readPublicKey } from '../lib/pgp.js';
+import { lookupKeys } from '../services/pgp.js';
 import { userAddresses } from '../services/users.js';
 
 export const meRoutes = new Hono<AppEnv>();
@@ -500,19 +501,6 @@ meRoutes.delete('/pgp/keys/:id', (c) => {
 
 /** The public keys known for some addresses: { address: [{ fingerprint, armored }] }, only for addresses that have one. */
 meRoutes.post('/pgp/lookup', async (c) => {
-  const user = c.get('user');
   const { addresses } = await body(c, z.object({ addresses: z.array(z.string().trim().toLowerCase().max(254)).max(100) }));
-  const keys: Record<string, { fingerprint: string; armored: string }[]> = {};
-  for (const address of new Set(addresses)) {
-    const rows = all<{ fingerprint: string; armored: string }>(
-      `SELECT fingerprint, armored FROM pgp_keys
-        WHERE (user_id = ? AND own = 0 AND EXISTS (SELECT 1 FROM json_each(pgp_keys.emails) WHERE value = ?))
-           OR (own = 1 AND user_id IN (SELECT user_id FROM addresses WHERE address = ? AND kind IN ('mailbox', 'alias') AND enabled = 1))
-        ORDER BY own DESC, id`,
-      [user.id, address, address],
-    );
-    const unique = rows.filter((r, i) => rows.findIndex((o) => o.fingerprint === r.fingerprint) === i);
-    if (unique.length) keys[address] = unique;
-  }
-  return c.json({ keys });
+  return c.json({ keys: lookupKeys(c.get('user').id, addresses) });
 });

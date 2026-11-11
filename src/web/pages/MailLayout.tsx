@@ -36,10 +36,12 @@ import {
   CloudOff,
   MailMinus,
   Package,
+  Layers,
 } from 'lucide-react';
 import type { Label, View } from '../../shared/types';
 import { openAccount, signOut, useAccounts } from '../lib/accounts';
 import { flushOutbox, queuedSends } from '../lib/outbox';
+import { mailtoMessage, sharedMessage } from '../lib/share';
 import { api } from '../lib/api';
 import { useHotkeys } from '../lib/hotkeys';
 import { MailboxProvider, useMailbox } from '../lib/mailbox';
@@ -53,6 +55,7 @@ import { useToast } from '../components/toast';
 import { Button, Checkbox, cx, Field, IconButton, Input, Kbd, Menu, Modal, Select, useDialogFocus } from '../components/ui';
 import { ThreadList } from './mail/ThreadList';
 import { ThreadView } from './mail/ThreadView';
+import { AllInboxes } from './mail/AllInboxes';
 import { SettingsPage } from './settings/SettingsPage';
 import { ContactsPage } from './ContactsPage';
 import { CalendarPage } from './CalendarPage';
@@ -114,6 +117,7 @@ function MailShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const compose = useCompose();
+  const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const { user, prefs, instance } = useSession();
@@ -130,14 +134,24 @@ function MailShell() {
   useNewMailNotifications(prefs.notifications, user.id, mailbox.current?.id ?? null, several ? user.email : undefined);
   useOtherAccountNotifications(accounts, user.id);
 
-  // The installed app's "Compose" shortcut opens /inbox?compose=1.
+  // A new message from outside: the installed app's "Compose" shortcut (?compose=1), a mailto: link (?mailto=),
+  // or something shared from another app (?share=, kept by the service worker).
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.get('compose') !== '1') return;
-    params.delete('compose');
+    const [isNew, mailto, share] = [params.get('compose') === '1', params.get('mailto'), params.get('share')];
+    if (!isNew && mailto === null && share === null) return;
+    for (const k of ['compose', 'mailto', 'share']) params.delete(k);
     navigate({ pathname: location.pathname, search: params.toString() ? `?${params}` : '' }, { replace: true });
-    compose.open();
-  }, [location.search, location.pathname, navigate, compose]);
+    if (mailto !== null) compose.open(mailtoMessage(mailto) ?? {});
+    else if (share !== null && /^\d{1,20}$/.test(share)) {
+      sharedMessage(share)
+        .then((init) => compose.open(init ?? {}))
+        .catch((e: Error) => {
+          compose.open();
+          toast({ message: `Couldn’t attach what you shared: ${e.message}`, tone: 'error' });
+        });
+    } else compose.open();
+  }, [location.search, location.pathname, navigate, compose, toast]);
 
   useEffect(() => setMobileOpen(false), [location.pathname]);
   useEffect(() => localStorage.setItem('wren.sidebar', collapsed ? 'collapsed' : 'open'), [collapsed]);
@@ -186,6 +200,7 @@ function MailShell() {
               <Route path="calendar" element={<CalendarPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="subscriptions" element={<SubscriptionsPage />} />
+              <Route path="all-inboxes" element={<AllInboxes />} />
               <Route path="label/:labelId" element={<ThreadList />} />
               <Route path="label/:labelId/:threadId" element={<ThreadView />} />
               <Route path="search/:q" element={<ThreadList />} />
@@ -640,6 +655,11 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
   const toast = useToast();
   const navigate = useNavigate();
   const c = counters.data;
+  // Several accounts signed in here (and this tab showing its own mail, not a shared mailbox): All Inboxes.
+  const accounts = useAccounts().data?.accounts ?? [];
+  const inShared = !!useMailbox().current;
+  const several = accounts.length > 1 && !inShared;
+  const allUnread = accounts.reduce((n, a) => n + a.unread, 0);
 
   const fmtCount = (n: number | undefined) => (n ? (n > 9999 ? '9,999+' : n.toLocaleString()) : '');
 
@@ -666,6 +686,22 @@ function Sidebar({ collapsed, mobileOpen, onCloseMobile }: { collapsed: boolean;
       <div className={drawer ? 'px-2' : ''}>
         <MailboxSwitcher wide={wide} />
       </div>
+      {several && (
+        <NavLink
+          to="/all-inboxes"
+          title="All Inboxes"
+          className={({ isActive }) => cx('group flex shrink-0 items-center gap-4 text-sm transition-colors', item, isActive ? 'bg-sel font-semibold text-fg' : 'text-fg hover:bg-hover')}
+        >
+          <Layers className="size-[18px]" />
+          {wide && <span className="flex-1 truncate">All Inboxes</span>}
+          {wide && allUnread > 0 && (
+            <span className="text-xs font-bold">
+              {fmtCount(allUnread)}
+              <span className="sr-only"> unread</span>
+            </span>
+          )}
+        </NavLink>
+      )}
       {NAV.map((n) => {
         const count = (n.count && c ? (n.view === 'inbox' ? inboxCount(c, prefs.inboxTabs) : c[n.count]) : 0) ?? 0;
         return (

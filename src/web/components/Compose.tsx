@@ -27,6 +27,8 @@ export interface ComposeInit {
   bcc?: Addr[];
   subject?: string;
   html?: string;
+  /** Plain text to start a new message with (shared from another app, or a mailto: link's body), above the signature. */
+  text?: string;
   attachments?: AttachmentInfo[];
   replyToId?: number | null;
   forwardOfId?: number | null;
@@ -165,7 +167,8 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
         }
         const from = mailbox ? undefined : init.from || prefs.defaultFrom || user.identities[0]?.address || user.email;
         const sig = signatureFor(prefs, from);
-        const html = init.html ?? (sig ? `<p><br></p>${signatureHtml(sig)}` : '');
+        const start = init.text ? `<p>${plainToHtml(init.text)}</p>` : '';
+        const html = init.html ?? (sig ? `${start || '<p><br></p>'}${signatureHtml(sig)}` : start);
         const next = [...ws.map((w) => ({ ...w, minimized: ws.length >= 1 ? true : w.minimized })), { ...init, mailbox, html, key: ++seq.current, minimized: false, maximized: false }];
         return next.slice(-3);
       });
