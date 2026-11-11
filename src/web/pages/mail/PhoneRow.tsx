@@ -11,6 +11,7 @@ import { shortDate, relativeTime } from '../../lib/format';
 import { useSession } from '../../lib/session';
 import { Avatar } from '../../components/Avatar';
 import { CodeChip } from '../../components/CodeChip';
+import { Highlight } from '../../components/Highlight';
 import { ParcelChip } from './ParcelCard';
 import { cx } from '../../components/ui';
 import { NudgeChip } from './NudgeChip';
@@ -43,6 +44,7 @@ export function PhoneRow({
   onSelect,
   onOpen,
   onAction,
+  terms,
 }: {
   thread: ThreadSummary;
   labels: Label[];
@@ -50,6 +52,8 @@ export function PhoneRow({
   currentLabel?: number;
   selected: boolean;
   selecting: boolean;
+  /** Search words to mark in the subject and preview. */
+  terms?: string[];
   onSelect: (v: boolean) => void;
   onOpen: () => void;
   onAction: (a: ThreadAction) => void;
@@ -195,7 +199,7 @@ export function PhoneRow({
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className={cx('min-w-0 flex-1 truncate text-sm', t.unread && 'font-bold')}>{t.subject || '(no subject)'}</span>
+            <span className={cx('min-w-0 flex-1 truncate text-sm', t.unread && 'font-bold')}>{t.subject ? <Highlight text={t.subject} terms={terms} /> : '(no subject)'}</span>
             {t.hasAttachments && <Paperclip className="size-3.5 shrink-0 text-muted" aria-label="Has attachments" />}
           </div>
           <div className="flex items-center gap-1.5">
@@ -210,7 +214,9 @@ export function PhoneRow({
                 {l.name}
               </span>
             ))}
-            <span className="min-w-0 flex-1 truncate text-[13px] text-muted">{t.snippet}</span>
+            <span className="min-w-0 flex-1 truncate text-[13px] text-muted">
+              <Highlight text={t.snippet} terms={terms} />
+            </span>
             <button
               type="button"
               aria-label={t.starred ? 'Remove star' : 'Add star'}

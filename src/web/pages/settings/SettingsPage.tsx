@@ -5,7 +5,7 @@ import { ArrowLeft, Bell, Copy, Download, Fingerprint, KeyRound, Laptop, LifeBuo
 import type { FilterActions, FilterCriteria, Label, SwipeAction, UserPrefs } from '../../../shared/types';
 import { accountDeleted, useAccounts } from '../../lib/accounts';
 import { api } from '../../lib/api';
-import { longDate, relativeTime } from '../../lib/format';
+import { fileSize, longDate, relativeTime } from '../../lib/format';
 import { useLabels, useSession } from '../../lib/session';
 import { RichEditor } from '../../components/RichEditor';
 import { TwoFactorSetup } from '../../components/TwoFactorSetup';
@@ -289,8 +289,10 @@ function GeneralTab() {
       <Row title="Keyboard shortcuts" help="Press ? anywhere to see them.">
         <Switch checked={draft.keyboardShortcuts} onChange={(v) => set('keyboardShortcuts', v)} label={draft.keyboardShortcuts ? 'On' : 'Off'} />
       </Row>
+      <StorageRow />
       <NotificationsRow />
       <InstallRow />
+      <EmailLinksRow />
       <Row title="Swipe actions" help="On a phone, swipe a conversation in the list.">
         <div className="grid max-w-md gap-3 sm:grid-cols-2">
           <Field label="Swipe right">
@@ -465,6 +467,52 @@ function InstallRow() {
       ) : (
         <p className="text-sm text-muted">Use your browser’s “Install app” or “Add to Home Screen” menu item.</p>
       )}
+    </Row>
+  );
+}
+
+function StorageRow() {
+  const { user } = useSession();
+  const s = user.storage;
+  if (!s?.limit) return null;
+  const pct = Math.min(100, Math.round((s.used / s.limit) * 100));
+  return (
+    <Row title="Storage" help="All your mail and attachments, including Trash and Spam.">
+      <div className="max-w-sm">
+        <div className="h-1.5 overflow-hidden rounded-full bg-accent-soft" role="progressbar" aria-label="Storage used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <div className={`h-full rounded-full ${pct > 90 ? 'bg-danger' : pct > 75 ? 'bg-warn' : 'bg-accent'}`} style={{ width: `${Math.max(pct, 1)}%` }} />
+        </div>
+        <p className="mt-2 text-sm tabular-nums">
+          {fileSize(s.used)} of {fileSize(s.limit)} used ({pct}%)
+        </p>
+        {pct > 90 && (
+          <p className="mt-1 text-sm text-danger">
+            Almost full. When it’s full, new mail is turned away. Empty Trash, delete large messages (search <b>larger:10M</b>), or ask your administrator for more space.
+          </p>
+        )}
+      </div>
+    </Row>
+  );
+}
+
+/** Make Wren open mailto: links (registerProtocolHandler; installed apps also get it from the manifest). */
+function EmailLinksRow() {
+  const toast = useToast();
+  if (!('registerProtocolHandler' in navigator)) return null;
+  return (
+    <Row title="Email links" help="Open “mailto:” links on websites as a new message in Wren.">
+      <Button
+        onClick={() => {
+          try {
+            navigator.registerProtocolHandler('mailto', `${window.location.origin}/inbox?mailto=%s`);
+            toast('Your browser will ask to confirm. Choose Allow.');
+          } catch {
+            toast({ message: 'This browser didn’t let Wren handle email links', tone: 'error' });
+          }
+        }}
+      >
+        Make Wren your email app
+      </Button>
     </Row>
   );
 }

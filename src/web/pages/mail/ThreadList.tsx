@@ -32,7 +32,7 @@ import {
 import type { Category, Label, ThreadSummary, View } from '../../../shared/types';
 import { api, qs } from '../../lib/api';
 import { snoozeOptions, useThreadActions, type ThreadAction } from '../../lib/actions';
-import { shortDate, number, relativeTime } from '../../lib/format';
+import { shortDate, number, relativeTime, searchTerms } from '../../lib/format';
 import { useHotkeys } from '../../lib/hotkeys';
 import { PHONE, useMediaQuery } from '../../lib/media';
 import { useCounters, useLabels, useSession } from '../../lib/session';
@@ -45,6 +45,7 @@ import { PhoneRow } from './PhoneRow';
 import { ViaChip } from './Via';
 import { NudgeChip } from './NudgeChip';
 import { CodeChip } from '../../components/CodeChip';
+import { Highlight } from '../../components/Highlight';
 import { ParcelChip } from './ParcelCard';
 
 export const TABS: { id: Category; label: string; icon: React.ReactNode; empty: string }[] = [
@@ -105,6 +106,7 @@ export function ThreadList() {
   const view = (params.view as View | undefined) ?? (params.labelId || params.q ? undefined : 'inbox');
   const labelId = params.labelId ? Number(params.labelId) : undefined;
   const q = params.q ? decodeURIComponent(params.q) : undefined;
+  const terms = useMemo(() => (q ? searchTerms(q) : []), [q]);
   const page = Math.max(1, Number(search.get('page') ?? 1));
   const base = location.pathname;
   const tabbed = view === 'inbox' && prefs.inboxTabs;
@@ -515,6 +517,7 @@ export function ThreadList() {
               <PhoneRow
                 key={t.id}
                 thread={t}
+                terms={terms}
                 labels={labels.data ?? []}
                 view={view}
                 currentLabel={labelId}
@@ -539,6 +542,7 @@ export function ThreadList() {
             <ThreadRow
               key={t.id}
               thread={t}
+              terms={terms}
               labels={labels.data ?? []}
               view={view}
               currentLabel={labelId}
@@ -588,6 +592,7 @@ function ThreadRow({
   onSelect,
   onOpen,
   onAction,
+  terms,
 }: {
   thread: ThreadSummary;
   labels: Label[];
@@ -596,6 +601,8 @@ function ThreadRow({
   selected: boolean;
   cursor: boolean;
   compact: boolean;
+  /** Search words to mark in the subject and preview. */
+  terms?: string[];
   onSelect: (v: boolean) => void;
   onOpen: () => void;
   onAction: (a: ThreadAction) => void;
@@ -686,8 +693,13 @@ function ThreadRow({
         {t.code && <CodeChip code={t.code} />}
         {t.parcel && <ParcelChip parcel={t.parcel} />}
         <span className="min-w-0 truncate">
-          <span className={t.unread ? 'font-bold' : ''}>{t.subject || '(no subject)'}</span>
-          {t.snippet && <span className="text-muted"> – {t.snippet}</span>}
+          <span className={t.unread ? 'font-bold' : ''}>{t.subject ? <Highlight text={t.subject} terms={terms} /> : '(no subject)'}</span>
+          {t.snippet && (
+            <span className="text-muted">
+              {' – '}
+              <Highlight text={t.snippet} terms={terms} />
+            </span>
+          )}
         </span>
       </div>
 

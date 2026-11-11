@@ -168,7 +168,10 @@ notifications through Web Push. A push only says which account has new mail (enc
 for your device): the app then asks Wren what's new, so nothing about your mail passes
 through the push service. Gmail-style rows with swipe actions, pull down to refresh,
 press and hold to select, a floating Compose button, and the unread count in the tab
-title and app badge.
+title and app badge. Installed on Android or in desktop Chrome and Edge, Wren is in the
+share sheet (a shared photo, file, link or text opens a new message with it), opens
+`mailto:` links (also in Settings → General for any browser), and new-mail notifications
+have **Archive** and **Mark as read** buttons.
 
 **Several accounts.** Like Gmail, sign in to more than one account in the same browser
 (up to 10) and switch from your picture: it lists your other accounts with their unread
@@ -177,6 +180,7 @@ account has its own address (the first at `/inbox`, the others at `/u/<id>/inbox
 tabs of different accounts can sit side by side, and a tab always acts as its own
 account. Each account gets its own notifications on the device, saying which account the
 mail is for, and keeps its own offline copy. Sign out of one account or of all of them.
+**All Inboxes** in the sidebar lists every account's inbox together, newest first.
 An alias is another address on the same account; this is for separate accounts.
 
 **Offline.** Mail you've opened recently (your inbox and up to 150 conversations) stays
@@ -191,7 +195,8 @@ there are skipped. Export everything as one `.mbox` that imports back as it was.
 Contacts import from Google/Outlook CSV or vCard and export to both.
 
 **Mail apps.** Wren speaks JMAP, the modern open protocol for mail apps, so apps that
-support it can read, organize and send your mail with live push. Each app signs in
+support it can read, organize and send your mail with live push, suggest your contacts,
+answer invitations and send private links. Each app signs in
 with its own app password, never your account password. An admin turns it on. See
 [docs/jmap.md](docs/jmap.md). There's a native Mac app too: [Wren for Mac](https://github.com/genisis-lab/wren-mac).
 
@@ -199,8 +204,8 @@ with its own app password, never your account password. An admin turns it on. Se
 `has:attachment` `has:package` `filename:` `is:unread|starred|important|snoozed`
 `in:inbox|sent|spam|trash|anywhere` `before:` `after:` `older_than:` `newer_than:`
 `larger:` `smaller:` `deliveredto:` `category:primary|updates|promotions`,
-"exact phrases" and `-negation`. Includes an advanced search form and "create filter
-from search".
+"exact phrases" and `-negation`. Matching words are highlighted in the results. Includes
+an advanced search form and "create filter from search".
 
 **Settings.** Profile picture, theme, density, page size, default From, signatures, vacation responder
 (dates, contacts only, one reply per sender per 4 days), forwarding, filters (label,

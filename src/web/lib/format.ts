@@ -59,3 +59,14 @@ export function formatAddr(a: { name?: string; address: string }): string {
 export function plural(n: number, word: string, pluralWord = `${word}s`): string {
   return `${number(n)} ${n === 1 ? word : pluralWord}`;
 }
+
+/** The words a search looks for in subjects and previews: free text, "phrases" and subject:, not other operators or -excluded words. */
+export function searchTerms(q: string): string[] {
+  const out: string[] = [];
+  for (const [, minus, key, phrase, word] of q.matchAll(/(-)?(?:([a-z_]+):)?(?:"([^"]*)"|(\S+))/gi)) {
+    const term = (phrase ?? word).trim();
+    if (minus || (key && key.toLowerCase() !== 'subject') || term.length < 2 || term === 'OR') continue;
+    out.push(term);
+  }
+  return out;
+}

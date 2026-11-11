@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+**Wren as an installed app.** On Android and in desktop Chrome and Edge, the installed
+app is in the system share sheet: sharing a photo, file, link or text opens a new message
+with it attached or filled in. It also opens `mailto:` links as a new message, and
+Settings → General has **Make Wren your email app** for browsers without installing.
+Shares and links open in the Wren window you already have. New-mail notifications about
+one message have **Archive** and **Mark as read** buttons that work without opening Wren.
+(Safari on iPhone and iPad supports none of these for web apps.)
+
+**All Inboxes.** With several accounts signed in, All Inboxes at the top of the sidebar
+lists every account's inbox together, newest first; a conversation opens in its account.
+
+**Storage and search.** Settings → General shows how much of your storage is used, with
+a warning when it's nearly full. Search results highlight the words you searched for.
+
+**More for mail apps (JMAP).** Contacts over JMAP (RFC 9610, read only): your saved
+contacts and the people you've written to, for address suggestions. Wren's own extension
+adds calendar invitations (an `invite` property on emails and `Invite/reply`), sending as
+a private link (`privateLinkDays`), and PGP keys (`PgpKey/lookup`, and `PgpBackup/get` for
+your passphrase-protected key backup). Apps may now ask for `id` among the properties.
+See docs/jmap.md.
+
 **Wren for Mac.** A native Mac app (SwiftUI, macOS 14 or later) in its own repository,
 [genisis-lab/wren-mac](https://github.com/genisis-lab/wren-mac), built around Mail's
 layout: mailboxes, labels and shared mailboxes in a sidebar, conversations, and a reader.
