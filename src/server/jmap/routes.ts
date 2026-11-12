@@ -146,14 +146,14 @@ function session(user: UserRow) {
           [CAP.vacation]: {},
           [CAP.snooze]: {},
           [CAP.contacts]: { mayCreateAddressBook: false },
-          [CAP.wren]: { canSend: true },
+          [CAP.wren]: { canSend: true, unsubscribe: true },
         },
       },
       // Each shared mailbox they belong to is another account. Members who can't send still read and write drafts, so none is read-only.
       ...Object.fromEntries(
         sharedAccounts(user.id).map(({ box, canSend }) => [
           accountId(box.id),
-          { name: box.email, isPersonal: false, isReadOnly: false, accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.snooze]: {}, [CAP.wren]: { canSend } } },
+          { name: box.email, isPersonal: false, isReadOnly: false, accountCapabilities: { [CAP.mail]: mail, [CAP.submission]: submission, [CAP.snooze]: {}, [CAP.wren]: { canSend, unsubscribe: true } } },
         ]),
       ),
     },

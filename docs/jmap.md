@@ -99,8 +99,10 @@ mailboxes have none of their own here.
 
 **Wren's extension.** The capability `https://github.com/genisis-lab/mail/jmap` (in every
 account, except where noted) adds what the web app has and JMAP doesn't. Its value in each
-account is `{ canSend }`: `false` in a shared mailbox you can read but not send from, so an
-app can hide Reply there instead of finding out when sending fails.
+account is `{ canSend, unsubscribe }`: `canSend` is `false` in a shared mailbox you can read
+but not send from, so an app can hide Reply there instead of finding out when sending fails,
+and `unsubscribe: true` says this server has the unsubscribe additions below (asking an older
+one for their properties is an error).
 
 - **Calendar invitations.** Email/get's `invite` property is the invitation in an email,
   or `null`: `method`, `summary`, `start` and `end` (UTCDate), `allDay`, `location`,

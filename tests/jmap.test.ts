@@ -822,7 +822,7 @@ describe('shared mailboxes', () => {
   it('shows up as another account, only for its members', async () => {
     const mine = await sessionOf(auth());
     expect(mine.accounts[shared]).toMatchObject({ name: 'support@wren.test', isPersonal: false, isReadOnly: false });
-    expect(mine.accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: true });
+    expect(mine.accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: true, unsubscribe: true });
     expect(Object.keys(mine.accounts[shared].accountCapabilities).sort()).toEqual([SNOOZE, 'https://github.com/genisis-lab/mail/jmap', 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission']);
     expect(mine.primaryAccounts['urn:ietf:params:jmap:mail']).toBe(account);
     expect((await sessionOf(bobAuth())).accounts[shared]).toBeUndefined();
@@ -914,7 +914,7 @@ describe('shared mailboxes', () => {
     ]);
     expect((await sessionOf(bobAuth())).accounts[shared]).toMatchObject({ isPersonal: false, isReadOnly: false });
     // Apps hide Reply and New Message there, rather than finding out when sending fails.
-    expect((await sessionOf(bobAuth())).accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: false });
+    expect((await sessionOf(bobAuth())).accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: false, unsubscribe: true });
     const identity = (await call('Identity/get', { accountId: shared, ids: null })).list[0].id;
     const res = await bobJmap([
       ['Email/query', { accountId: shared, filter: { inMailbox: 'inbox' } }, 'q'],
