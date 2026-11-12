@@ -33,6 +33,7 @@ import { finishLogin, loginOptions } from '../services/passkeys.js';
 import { noteSignIn } from '../services/signin-alerts.js';
 import { recordSignIn } from '../services/sign-ins.js';
 import { WebAuthnError } from '../lib/webauthn.js';
+import { answerApproval, pendingApprovals } from '../services/admin-unlock.js';
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -143,7 +144,7 @@ authRoutes.post('/mfa', async (c) => {
     throw unauthorized('That code is not valid');
   }
   clearRateLimit(`mfa:${user.id}`);
-  createSession(c, user.id);
+  createSession(c, user.id, false, false, true);
   run('DELETE FROM sessions WHERE id = ?', [session.id]);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { mfa: true }, clientIp(c));
@@ -193,7 +194,7 @@ authRoutes.post('/passkey', async (c) => {
     createSession(c, user.id, true, true);
     return c.json({ mfaRequired: true });
   }
-  createSession(c, user.id);
+  createSession(c, user.id, false, false, userVerified);
   run('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
   audit(user.id, 'auth.login', user.email, { passkey: passkeyName }, ip);
   recordSignIn(c, user.id, 'passkey');
@@ -218,6 +219,18 @@ authRoutes.post('/logout', async (c) => {
 authRoutes.post('/cancel', (c) => {
   clearPending(c);
   return c.json({ ok: true });
+});
+
+// ── Approving an admin unlock from a native app (services/admin-unlock.ts) ──
+
+/** Requests waiting for approval, for every account signed in on this browser. */
+authRoutes.get('/admin-unlocks', (c) => c.json({ requests: pendingApprovals(c) }));
+
+/** Type the number the app shows to approve (a wrong one denies), or send null to deny. */
+authRoutes.post('/admin-unlocks/:id', async (c) => {
+  const { number } = await body(c, z.object({ number: z.number().int().min(0).max(999).nullable() }));
+  rateLimit(`admin-approve:${clientIp(c)}`, 30, 15 * 60_000);
+  return c.json(answerApproval(c, c.req.param('id'), number));
 });
 
 // ── Password reset & account setup links ────────────────────────────────────

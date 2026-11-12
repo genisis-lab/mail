@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { SessionProvider, useMe, useTheme } from './lib/session';
 import { Spinner } from './components/ui';
 import { ComposeProvider } from './components/Compose';
-import { LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForcePasswordPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
+import { ApproveUnlockPage, LoginPage, RegisterPage, ResetPage, SetupPage, ForceTwoFactorPage, ForcePasswordPage, ForgotPage, VerifyRecoveryPage } from './pages/AuthPages';
 import { MailLayout } from './pages/MailLayout';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { PrivateMessagePage } from './pages/PrivateMessagePage';
@@ -93,6 +93,8 @@ export function App() {
           <Route path="/forgot" element={<ForgotPage instance={instance} />} />
           <Route path="/verify-recovery" element={<VerifyRecoveryPage instance={instance} signedIn />} />
           <Route path="/p/:token" element={<PrivateMessagePage instance={instance} />} />
+          {/* An app (Wren for Mac) asking to unlock the admin panel: type the number it shows. */}
+          <Route path="/approve" element={<ApproveUnlockPage instance={instance} />} />
           <Route path="/admin/*" element={canOpenAdmin ? <AdminLayout /> : <Navigate to="/inbox" replace />} />
           <Route path="/*" element={<MailLayout />} />
         </Routes>

@@ -24,6 +24,21 @@ your passphrase-protected key backup), unsubscribing from list mail (`canUnsubsc
 `unsubscribed` and `MailingList/unsubscribe`), and whether you can send from each account
 (`canSend`). Apps may now ask for `id` among the properties. See docs/jmap.md.
 
+**Settings from mail apps.** Apps can now change your name and each address's signature
+(`Identity/set`), and your default From address, default signature and whether replies get
+it (`Preferences` in Wren's extension). Forwarding, sign-in alerts and other settings that
+guard your account stay in the web app.
+
+**The admin panel in Wren for Mac.** Administrators and helpdesk staff can unlock the admin
+panel in the Mac app with their account password (never the app password) and one second
+step: an authenticator code, approval on the web by typing the number the app shows (from
+a browser signed in with two factors), or a code sent to their confirmed recovery email.
+The unlock lasts 15 minutes of use and an hour at most, works only with that app password,
+and reaches only people, invitations, the mail queue, the overview and the audit log. Role
+checks, helpdesk limits and the admin IP allowlist apply as on the web; actions are audited
+as coming from the app, and unlocks show in sign-in activity. Waiting requests show at the
+top of the web app for admins, and on the new `/approve` page. See docs/jmap.md.
+
 **Remote content stays blocked.** Several ways a message could still load a picture from
 the web with remote content off, or slip one past the image proxy, are closed: style sheets
 and links inside an SVG, SVG `fill`/`stroke`/`filter` references, unfinished `url(` and

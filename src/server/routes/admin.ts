@@ -8,7 +8,7 @@ import { encryptJson, hashPassword, randomToken, secretFingerprint, sha256, veri
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/http.js';
 import { domainOf, isEmail, normalizeEmail } from '../lib/addr.js';
 import { DEFAULT_SETTINGS, getSettings, setSettings, type Settings } from '../settings.js';
-import { audit } from '../services/audit.js';
+import { audit, withVia } from '../services/audit.js';
 import { cleanConfig, createProvider, MASK } from '../services/providers.js';
 import { noticeAddressChanged, sendInviteEmail, sendPasswordReset, sendSetupLink, welcomeUser } from '../services/account-links.js';
 import { exportFilename, exportStream, RestoreError, restoreExport, searchRebuildPending } from '../services/backup.js';
@@ -34,7 +34,7 @@ export const adminRoutes = new Hono<AppEnv>();
 export const runtimeInfo = { startedAt: 0 };
 
 function act(c: any, action: string, target: string, details?: unknown) {
-  audit(c.get('user').id, action, target, details, clientIp(c));
+  audit(c.get('user').id, action, target, withVia(c, details), clientIp(c));
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────

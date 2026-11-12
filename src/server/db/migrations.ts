@@ -896,6 +896,34 @@ export const migrations: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  // 33: unlocking the admin panel in a native app (Wren for Mac). The app holds a challenge after the
+  //     account password, then an admin token after a second step (an authenticator code, an
+  //     approval from a browser signed in with two factors, or a code sent to the recovery address).
+  //     Only hashes are stored. sessions.strong marks a browser sign-in that took two factors, the
+  //     only kind that may approve an unlock.
+  `
+  ALTER TABLE sessions ADD COLUMN strong INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE admin_unlocks (
+    id           TEXT PRIMARY KEY,
+    ref          TEXT NOT NULL UNIQUE,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    api_key_id   INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    number       INTEGER NOT NULL,
+    device       TEXT NOT NULL DEFAULT '',
+    ip           TEXT,
+    country      TEXT,
+    web_state    TEXT CHECK (web_state IN ('asked', 'approved', 'denied')),
+    email_code   TEXT,
+    email_tries  INTEGER NOT NULL DEFAULT 0,
+    token_hash   TEXT UNIQUE,
+    method       TEXT,
+    created_at   INTEGER NOT NULL,
+    granted_at   INTEGER,
+    last_used_at INTEGER,
+    expires_at   INTEGER NOT NULL
+  );
+  CREATE INDEX idx_admin_unlocks_user ON admin_unlocks(user_id);
+  `,
 ];
 
 /** SQL for one change-log entry: bump the mailbox's counter, then record the change at the new value. */

@@ -15,6 +15,7 @@ import { inboundRoutes } from './routes/inbound.js';
 import { avatarRoutes } from './routes/avatars.js';
 import { privateRoutes } from './routes/private.js';
 import { jmapRoutes } from './jmap/routes.js';
+import { adminCaller } from './services/admin-unlock.js';
 import { pushChanges } from './jmap/push.js';
 
 const log = logger('http');
@@ -139,11 +140,13 @@ export function createApp() {
   app.use('/api/account/*', requireAccountUser);
   app.route('/api/account', accountRoutes);
 
-  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar', '/api/contacts', '/api/filters', '/api/blocked', '/api/admin', '/api/me', '/api/avatars']) {
+  for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar', '/api/contacts', '/api/filters', '/api/blocked', '/api/me', '/api/avatars']) {
     app.use(`${prefix}/*`, requireUserReady);
     app.use(prefix, requireUserReady);
   }
-  app.use('/api/admin/*', requireAdmin, requireAdminIp);
+  // A browser session, or a native app with its app password and an admin unlock (services/admin-unlock.ts).
+  app.use('/api/admin/*', adminCaller, requireAdmin, requireAdminIp);
+  app.use('/api/admin', adminCaller, requireAdmin, requireAdminIp);
   for (const prefix of ['/api/mail', '/api/compose', '/api/attachments', '/api/labels', '/api/calendar']) {
     app.use(`${prefix}/*`, actAsMailbox);
     app.use(prefix, actAsMailbox);

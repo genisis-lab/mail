@@ -18,6 +18,8 @@ export interface SessionRow {
   created_at: number;
   last_seen_at: number;
   expires_at: number;
+  /** Signed in with two factors. */
+  strong: number;
 }
 
 export type AppEnv = {
@@ -29,6 +31,8 @@ export type AppEnv = {
     mailbox: { id: number; canSend: boolean } | null;
     session: SessionRow | null;
     apiKeyId: number | null;
+    /** "app": an admin request from a native app's unlock (services/admin-unlock.ts), noted in the audit log. */
+    via?: 'app';
   };
 };
 
@@ -165,9 +169,10 @@ function cookieFor(c: Context, userId: number): string {
 /**
  * Sign an account in on this browser, next to any already signed in. A sign-in
  * waiting for its 2-step code (mfaPending; `viaPasskey` marks a passkey
- * sign-in) waits in its own cookie and signs no one out.
+ * sign-in) waits in its own cookie and signs no one out. `strong`: it took two
+ * factors (password and code, or a passkey that checked a PIN or biometric).
  */
-export function createSession(c: Context, userId: number, mfaPending = false, viaPasskey = false): string {
+export function createSession(c: Context, userId: number, mfaPending = false, viaPasskey = false, strong = false): string {
   const token = randomToken(32);
   const ts = now();
   const days = getSettings()['security.sessionDays'];
@@ -175,8 +180,8 @@ export function createSession(c: Context, userId: number, mfaPending = false, vi
   const cookie = mfaPending ? PENDING_COOKIE : cookieFor(c, userId);
   if (mfaPending) clearPending(c);
   run(
-    `INSERT INTO sessions (id, user_id, mfa_pending, ip, user_agent, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sha256(token), userId, mfaPending ? (viaPasskey ? 2 : 1) : 0, clientIp(c), (c.req.header('user-agent') ?? '').slice(0, 300), ts, ts, expires],
+    `INSERT INTO sessions (id, user_id, mfa_pending, ip, user_agent, created_at, last_seen_at, expires_at, strong) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [sha256(token), userId, mfaPending ? (viaPasskey ? 2 : 1) : 0, clientIp(c), (c.req.header('user-agent') ?? '').slice(0, 300), ts, ts, expires, strong && !mfaPending ? 1 : 0],
   );
   if (!mfaPending) clearPending(c);
   setCookie(c, cookie, token, cookieOptions(expires));

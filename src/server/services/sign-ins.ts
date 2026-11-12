@@ -13,9 +13,13 @@ import { clientIp } from '../http/context.js';
 export const SIGN_IN_DAYS = 90;
 const DAY = 86_400_000;
 
-/** password+2fa / passkey+2fa: the 2-step code step; link: a password reset or setup link. */
-export type SignInMethod = 'password' | 'passkey' | 'password+2fa' | 'passkey+2fa' | 'link';
-export type SignInFailure = 'wrong_password' | 'wrong_code' | 'passkey_rejected' | 'suspended';
+/**
+ * password+2fa / passkey+2fa: the 2-step code step; link: a password reset or setup link;
+ * app-admin…: unlocking the admin panel in a native app (services/admin-unlock.ts), its password
+ * step alone (a failure) or with the second step it took.
+ */
+export type SignInMethod = 'password' | 'passkey' | 'password+2fa' | 'passkey+2fa' | 'link' | 'app-admin' | 'app-admin+2fa' | 'app-admin+web' | 'app-admin+email';
+export type SignInFailure = 'wrong_password' | 'wrong_code' | 'passkey_rejected' | 'suspended' | 'denied';
 
 /** The two-letter country Cloudflare says the request came from, if it says. */
 export function clientCountry(c: Context): string | null {
