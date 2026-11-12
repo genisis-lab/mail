@@ -125,14 +125,34 @@ export function isTrackingPixel(attr: (name: string) => string | null): boolean 
   return TRACKER_IMAGES.some((re) => re.test(url.hostname + url.pathname));
 }
 
-/** Decode CSS escapes before checking URLs (including escaped url() identifiers). */
+/**
+ * Decode CSS escapes before checking URLs (including escaped url() identifiers), then drop
+ * comments, so what's checked below is what the browser will read. A backslash that is
+ * left is a literal one: written back as an escape, so the browser can't take it as the
+ * start of a new escape ("ur\\6c(" would be url( to it). Comments go after decoding,
+ * since an escape can spell one out and hide a quote from the browser but not from us.
+ */
 function decodeCss(css: string): string {
-  return css.replace(/\\(?:\r\n|[\r\n\f])/g, '').replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/gi, (_m, hex: string | undefined, char: string) => {
-    if (!hex) return char;
-    const n = parseInt(hex, 16);
-    return n === 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff) ? '\ufffd' : String.fromCodePoint(n);
-  });
+  return css
+    .replace(/\\(?:\r\n|[\r\n\f])/g, '')
+    .replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/gi, (_m, hex: string | undefined, char: string) => {
+      if (!hex) return char;
+      const n = parseInt(hex, 16);
+      return n === 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff) ? '\ufffd' : String.fromCodePoint(n);
+    })
+    .replace(/\\/g, '\\5c ')
+    .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ' ');
 }
+
+/**
+ * Everything in CSS that names a file to load: url(…), closed or not (a browser closes an
+ * unfinished one where the style ends), and a string on its own, which image-set() and
+ * its kin take as an image. A string never runs past the end of its line.
+ */
+const CSS_REFERENCE = /url\(\s*(?:"([^"]*)(?:"|$)|'([^']*)(?:'|$)|([^)]*))\s*(?:\)|$)|"([^"\n\r\f]*)(?:"|$)|'([^'\n\r\f]*)(?:'|$)/gi;
+
+/** SVG's presentation attributes that can point at another file (Firefox loads those). */
+const SVG_REFERENCES = ['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker-start', 'marker-mid', 'marker-end', 'cursor'];
 
 /** HTML shown in the main document while composing must be safe even without a CSP. */
 export function sanitizeEditorHtml(html: string): string {
@@ -183,7 +203,7 @@ function keepDocumentStyles(html: string): string {
  * (SVG <image>/<feImage>, <picture><source srcset>, <video poster>, <audio>)
  * would get past image blocking, so they go, as in Gmail.
  */
-export const MAIL_FORBID_TAGS = ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base', 'image', 'feImage', 'source', 'video', 'audio'];
+export const MAIL_FORBID_TAGS = ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'base', 'image', 'feImage', 'mglyph', 'source', 'video', 'audio'];
 
 /**
  * Sanitize message HTML for display:
@@ -235,7 +255,14 @@ export function renderMailHtml(
   const fixCss = (css: string, element?: Element) => decodeCss(css)
     // Remote stylesheets can themselves fetch trackers, so never load them.
     .replace(/@import\b[^;]*(?:;|$)/gi, '')
-    .replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi, (_m, double: string | undefined, single: string | undefined, bare: string | undefined) => {
+    .replace(CSS_REFERENCE, (m, double: string | undefined, single: string | undefined, bare: string | undefined, text1: string | undefined, text2: string | undefined) => {
+      const text = text1 ?? text2;
+      if (text !== undefined) {
+        // A string that isn't a web address is just text (a font name, content: "…").
+        if (!isRemote(text)) return m;
+        const fixed = fixUrl(text, element);
+        return fixed === null ? 'none' : JSON.stringify(fixed);
+      }
       const fixed = fixUrl(double ?? single ?? bare ?? '', element);
       return fixed === null ? 'none' : `url(${JSON.stringify(fixed)})`;
     })
@@ -245,13 +272,15 @@ export function renderMailHtml(
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     const el = node as Element;
     el.removeAttribute('data-wren-shows'); // only ever set below
-    if (el.tagName === 'A') {
+    // By local name: a link or a style sheet inside an <svg> counts too (its tagName is lower case).
+    if (el.localName === 'a') {
       el.setAttribute('target', '_blank');
       el.setAttribute('rel', 'noopener noreferrer nofollow');
-      const real = cleanLink(el.getAttribute('href') ?? '');
+      const attr = el.hasAttribute('href') || !el.hasAttribute('xlink:href') ? 'href' : 'xlink:href';
+      const real = cleanLink(el.getAttribute(attr) ?? '');
       if (real) {
-        el.setAttribute('href', real);
-        el.setAttribute('title', real);
+        el.setAttribute(attr, real);
+        if (el.tagName === 'A') el.setAttribute('title', real);
         const claimed = linkMismatch(el.textContent ?? '', real);
         if (claimed) el.setAttribute('data-wren-shows', claimed);
       }
@@ -280,7 +309,11 @@ export function renderMailHtml(
     }
     const style = el.getAttribute('style');
     if (style) el.setAttribute('style', fixCss(style, el));
-    if (el.tagName === 'STYLE') el.textContent = fixCss(el.textContent ?? '');
+    for (const name of SVG_REFERENCES) {
+      const value = el.getAttribute(name);
+      if (value && /url\(|\\/i.test(value)) el.setAttribute(name, fixCss(value, el));
+    }
+    if (el.localName === 'style') el.textContent = fixCss(el.textContent ?? '');
   });
 
   try {

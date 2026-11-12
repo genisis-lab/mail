@@ -140,7 +140,8 @@ export async function storeMessage(input: StoreInput): Promise<number> {
     } else {
       run('UPDATE threads SET last_date = MAX(last_date, ?) WHERE id = ?', [input.date, threadId]);
     }
-    const snippet = makeSnippet(input.text, input.html);
+    // PGP/MIME (RFC 3156) has no text of its own to preview: say what it is, as for inline PGP.
+    const snippet = makeSnippet(input.text, input.html) || (input.attachments.some((a) => /^application\/pgp-encrypted\b/i.test(a.contentType)) ? 'Encrypted message' : '');
     const id = insert(
       `INSERT INTO messages (user_id, thread_id, folder, direction, message_id, in_reply_to, refs, from_addr, from_name,
         to_json, cc_json, bcc_json, reply_to, subject, snippet, text_body, html_body, body_blob, date, size, raw_blob, has_attachments,

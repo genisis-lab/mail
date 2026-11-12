@@ -41,6 +41,47 @@ describe('tracker handling in rendered HTML', () => {
     expect(blocked.html).not.toContain('images.example');
   });
 
+  it.each([
+    ['a style sheet inside an svg', '<svg><style>rect{fill:url(https://t.example/p.png)} @import url(https://t.example/a.css);</style><rect width="10" height="10"/></svg>'],
+    ['a url() left open at the end of a style attribute', '<div style="background:url(https://t.example/p.png">x</div>'],
+    ['a quoted url() left open', '<div style="background:url(&quot;https://t.example/p.png">x</div>'],
+    ['a url() left open at the end of a style sheet', '<style>p{background:url(https://t.example/p.png</style><p>x</p>'],
+    ['a bare string in image-set()', `<div style="background-image:image-set('https://t.example/p.png' 1x)">x</div>`],
+    ['a string left open in image-set()', '<div style="background-image:image-set(&quot;https://t.example/p.png">x</div>'],
+    ['an svg paint server in another file', '<svg><rect fill="url(https://t.example/p.svg#a)" width="10" height="10"/></svg>'],
+    ['an apostrophe in a comment before the url()', `<style>/* don't */ p{background:url(https://t.example/p.png)}</style><p>x</p>`],
+    ['a string cut short by the end of its line', `<style>p{font-family:'x\n}\ndiv{background:url(https://t.example/p.png)} q{font-family:'y'}</style><p>x</p>`],
+    ['a comment spelled with escapes that hides a quote', String.raw`<div style="background:\2f\2a &quot; */ url(https://t.example/p.png) &quot;">x</div>`],
+    ['an obsolete MathML picture', '<math><mglyph src="https://t.example/p.png"/></math>'],
+  ])('blocks remote content in %s', (_name, html) => {
+    const blocked = render(html, { attachments: [], allowRemote: false });
+    expect(blocked.html).not.toContain('t.example');
+  });
+
+  it('leaves no escape for the browser to decode into url(', () => {
+    // "ur\\6c(" is an escaped backslash to us, and must not be "ur" + "\6c" (an l) to the browser.
+    const { html } = render(String.raw`<div style="background:ur\\6c(https://t.example/p.png)">x</div>`, { attachments: [], allowRemote: false });
+    expect(html).not.toMatch(/ur\\6c\(/i);
+    expect(html).toContain(String.raw`ur\5c 6c(`);
+  });
+
+  it('keeps ordinary strings, local svg references and allowed pictures', () => {
+    const kept = render(`<style>p{font-family:"Helvetica Neue",Arial}</style><p style="font-family:'Segoe UI'">x</p><svg><rect fill="url(#g)"/></svg>`, { attachments: [], allowRemote: false });
+    expect(kept.blockedImages).toBe(0);
+    expect(kept.html).toContain('"Helvetica Neue"');
+    expect(kept.html).toContain(`'Segoe UI'`);
+    expect(kept.html).toContain('#g');
+    const url = 'https://images.example/banner.png';
+    const allowed = render(`<div style="background-image:image-set('${url}' 1x)">x</div><div style="background:url(${url}">y</div>`, { attachments: [], allowRemote: true, proxy: { [url]: 'signature' } });
+    expect(allowed.html.match(/\/api\/img\/signature/g)).toHaveLength(2);
+  });
+
+  it('cleans links inside an svg like any other', () => {
+    const { html } = render('<svg><a href="https://shop.example/?utm_source=mail&id=7"><text>Shop</text></a></svg>', { attachments: [], allowRemote: false });
+    expect(html).toContain('href="https://shop.example/?id=7"');
+    expect(html).toContain('rel="noopener noreferrer nofollow"');
+  });
+
   it('cannot create HTML markup by decoding CSS escapes after sanitization', () => {
     const result = render(String.raw`<style>.mail:after { content: "\3c /style>\3c img src=x onerror=alert(1)>" }</style><p>body</p>`, { attachments: [], allowRemote: true });
     const parsed = new dom.window.DOMParser().parseFromString(result.html, 'text/html');

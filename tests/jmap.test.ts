@@ -562,6 +562,64 @@ describe('contacts and Wren’s additions', () => {
     expect((await callWith('Invite/reply', { emailId: id, status: 'maybe' }))[1].type).toBe('invalidArguments');
   });
 
+  it('unsubscribes from a mailing list', async () => {
+    const { raw } = await buildMime({
+      from: { address: 'list@news.example', name: 'Weekly' },
+      to: [{ address: 'admin@wren.test' }],
+      subject: 'Weekly digest',
+      text: 'News',
+      headers: { 'List-Unsubscribe': '<https://news.example.com/unsub/abc>, <mailto:leave@news.example>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
+    });
+    await ingest(raw, { rcptTo: ['admin@wren.test'], source: 'test' });
+    const [id] = (await call('Email/query', { filter: { subject: 'Weekly digest' } })).ids;
+    const [plain] = (await call('Email/query', { filter: { subject: 'Invitation: Planning' } })).ids;
+    const [, got] = await callWith('Email/get', { ids: [id, plain], properties: ['canUnsubscribe', 'unsubscribed'] });
+    expect(got.list).toEqual([
+      { id, canUnsubscribe: true, unsubscribed: false },
+      { id: plain, canUnsubscribe: false, unsubscribed: false },
+    ]);
+
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      posts.push(url);
+      return new Response('', { status: 200 });
+    });
+    const [, done] = await callWith('MailingList/unsubscribe', { emailId: id });
+    expect(done).toEqual({ accountId: account, emailId: id, method: 'one-click', sender: 'list@news.example' });
+    expect(posts).toEqual(['https://news.example.com/unsub/abc']);
+    expect((await callWith('Email/get', { ids: [id], properties: ['unsubscribed'] }))[1].list[0].unsubscribed).toBe(true);
+    expect((await callWith('MailingList/unsubscribe', { emailId: plain }))[1].type).toBe('invalidArguments');
+  });
+
+  it('previews PGP/MIME mail as an encrypted message', async () => {
+    const raw = [
+      'From: Maya Chen <maya@northwind.example>',
+      'To: admin@wren.test',
+      'Subject: Sealed',
+      'Message-ID: <sealed@northwind.example>',
+      'Date: Wed, 11 Nov 2026 10:00:00 +0000',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="b1"',
+      '',
+      '--b1',
+      'Content-Type: application/pgp-encrypted',
+      '',
+      'Version: 1',
+      '--b1',
+      'Content-Type: application/octet-stream; name="encrypted.asc"',
+      '',
+      '-----BEGIN PGP MESSAGE-----',
+      '',
+      'wcBMA0000000000000AQgAn0',
+      '-----END PGP MESSAGE-----',
+      '--b1--',
+      '',
+    ].join('\r\n');
+    await ingest(Buffer.from(raw), { rcptTo: ['admin@wren.test'], source: 'test' });
+    const [id] = (await call('Email/query', { filter: { subject: 'Sealed' } })).ids;
+    expect((await call('Email/get', { ids: [id], properties: ['preview'] })).list[0].preview).toBe('Encrypted message');
+  });
+
   it('sends a message as a private link', async () => {
     const me = (await call('Identity/get', { ids: null })).list.find((i: any) => i.email === 'admin@wren.test');
     const draft = {
@@ -764,6 +822,7 @@ describe('shared mailboxes', () => {
   it('shows up as another account, only for its members', async () => {
     const mine = await sessionOf(auth());
     expect(mine.accounts[shared]).toMatchObject({ name: 'support@wren.test', isPersonal: false, isReadOnly: false });
+    expect(mine.accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: true, unsubscribe: true });
     expect(Object.keys(mine.accounts[shared].accountCapabilities).sort()).toEqual([SNOOZE, 'https://github.com/genisis-lab/mail/jmap', 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission']);
     expect(mine.primaryAccounts['urn:ietf:params:jmap:mail']).toBe(account);
     expect((await sessionOf(bobAuth())).accounts[shared]).toBeUndefined();
@@ -854,6 +913,8 @@ describe('shared mailboxes', () => {
       { userId: bob, canSend: false },
     ]);
     expect((await sessionOf(bobAuth())).accounts[shared]).toMatchObject({ isPersonal: false, isReadOnly: false });
+    // Apps hide Reply and New Message there, rather than finding out when sending fails.
+    expect((await sessionOf(bobAuth())).accounts[shared].accountCapabilities['https://github.com/genisis-lab/mail/jmap']).toEqual({ canSend: false, unsubscribe: true });
     const identity = (await call('Identity/get', { accountId: shared, ids: null })).list[0].id;
     const res = await bobJmap([
       ['Email/query', { accountId: shared, filter: { inMailbox: 'inbox' } }, 'q'],
