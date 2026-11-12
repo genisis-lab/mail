@@ -98,13 +98,20 @@ cards with a name, email, phone, company and notes. Edit contacts in the web app
 mailboxes have none of their own here.
 
 **Wren's extension.** The capability `https://github.com/genisis-lab/mail/jmap` (in every
-account, except where noted) adds what the web app has and JMAP doesn't:
+account, except where noted) adds what the web app has and JMAP doesn't. Its value in each
+account is `{ canSend }`: `false` in a shared mailbox you can read but not send from, so an
+app can hide Reply there instead of finding out when sending fails.
 
 - **Calendar invitations.** Email/get's `invite` property is the invitation in an email,
   or `null`: `method`, `summary`, `start` and `end` (UTCDate), `allDay`, `location`,
   `organizer`, `attendees`, `me` (your address and answer), `rsvp` (the answer sent from
   Wren) and `canReply`. `Invite/reply` with `{ emailId, status: "accepted" | "tentative" |
   "declined", comment? }` sends your answer to the organizer, as the web's invite card does.
+- **Unsubscribe.** Email/get's `canUnsubscribe` says whether list mail has an unsubscribe
+  link Wren can use, and `unsubscribed` whether you've already unsubscribed from its sender.
+  `MailingList/unsubscribe` with `{ emailId }` does what the web's Unsubscribe button does and
+  returns `{ method, sender }`: `"one-click"` (Wren asked the list), `"email"` (Wren sent the
+  list's unsubscribe email) or `"link"`, with a `url` for the app to open in a browser.
 - **Private links.** `privateLinkDays: 1 | 7 | 30` on an EmailSubmission you create sends
   the message as a private link that stops working after that many days, like the web's
   compose option.

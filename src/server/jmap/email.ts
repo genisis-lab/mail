@@ -14,7 +14,7 @@ import { ftsTerm } from '../mail/search.js';
 import { saveDraft } from '../mail/send.js';
 import { HOLD_MESSAGE, onLegalHold, purgeMessages } from '../mail/store.js';
 import { rememberSenders } from '../mail/sender-verdicts.js';
-import { cleanMessageId, formatAddr } from '../lib/addr.js';
+import { cleanMessageId, formatAddr, normalizeEmail } from '../lib/addr.js';
 import { inviteFor } from '../services/calendar.js';
 import { importRaw, QuotaExceeded } from '../services/mail-import.js';
 import { rawMessage, readBlob } from './blobs.js';
@@ -273,7 +273,7 @@ async function invite(userId: number, messageId: number) {
 
 method('Email/get', CAP.mail, async (args, ctx) => {
   const wanted = getIds(args, ctx, false)!;
-  const known = [...ALL_PROPS, ...(ctx.using.has(CAP.snooze) ? ['snoozed'] : []), ...(ctx.using.has(CAP.wren) ? ['invite'] : [])];
+  const known = [...ALL_PROPS, ...(ctx.using.has(CAP.snooze) ? ['snoozed'] : []), ...(ctx.using.has(CAP.wren) ? ['invite', 'canUnsubscribe', 'unsubscribed'] : [])];
   const props = getProperties(args, known, DEFAULT_PROPS);
   for (const p of props) if (p.startsWith('header:') && !parseHeaderProperty(p)) throw new MethodError('invalidArguments', `Bad header property ${p}`);
   const state = currentState(ctx.user.id);
@@ -287,6 +287,9 @@ method('Email/get', CAP.mail, async (args, ctx) => {
     else {
       const email = await toEmail(r, labels.get(r.id) ?? [], props, args);
       if (props.has('invite')) email.invite = await invite(ctx.user.id, r.id);
+      // Wren's list-mail properties (CAP.wren), as the web app's Unsubscribe button has them.
+      if (props.has('canUnsubscribe')) email.canUnsubscribe = r.direction === 'in' && /<(https:|mailto:)/i.test(r.list_unsubscribe ?? '');
+      if (props.has('unsubscribed')) email.unsubscribed = !!get('SELECT 1 FROM unsubscribes WHERE user_id = ? AND sender = ?', [ctx.user.id, normalizeEmail(r.from_addr ?? '')]);
       list.push(email);
     }
   }

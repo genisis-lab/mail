@@ -20,8 +20,18 @@ a warning when it's nearly full. Search results highlight the words you searched
 contacts and the people you've written to, for address suggestions. Wren's own extension
 adds calendar invitations (an `invite` property on emails and `Invite/reply`), sending as
 a private link (`privateLinkDays`), and PGP keys (`PgpKey/lookup`, and `PgpBackup/get` for
-your passphrase-protected key backup). Apps may now ask for `id` among the properties.
-See docs/jmap.md.
+your passphrase-protected key backup), unsubscribing from list mail (`canUnsubscribe`,
+`unsubscribed` and `MailingList/unsubscribe`), and whether you can send from each account
+(`canSend`). Apps may now ask for `id` among the properties. See docs/jmap.md.
+
+**Remote content stays blocked.** Several ways a message could still load a picture from
+the web with remote content off, or slip one past the image proxy, are closed: style sheets
+and links inside an SVG, SVG `fill`/`stroke`/`filter` references, unfinished `url(` and
+quoted addresses in styles, addresses given as bare strings to `image-set()`, and CSS
+escapes or comments used to hide any of these.
+
+**Encrypted mail in the list.** PGP/MIME messages show "Encrypted message" as their
+preview, as inline PGP already did, instead of a blank line.
 
 **Wren for Mac.** A native Mac app (SwiftUI, macOS 14 or later) in its own repository,
 [genisis-lab/wren-mac](https://github.com/genisis-lab/wren-mac), built around Mail's

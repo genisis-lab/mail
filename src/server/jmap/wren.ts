@@ -1,6 +1,7 @@
 /**
  * Wren's own JMAP additions (CAP.wren; docs/jmap.md): answering calendar invitations and
- * the PGP keys the web app keeps. The Email "invite" property is in email.ts, and
+ * unsubscribing from a mailing list, and the PGP keys the web app keeps. The Email "invite",
+ * "canUnsubscribe" and "unsubscribed" properties are in email.ts, and
  * EmailSubmission's "privateLinkDays" in submission.ts.
  */
 import { get } from '../db/index.js';
@@ -8,6 +9,7 @@ import { sha256 } from '../lib/crypto.js';
 import { HttpError } from '../lib/http.js';
 import { replyToInvite } from '../services/calendar.js';
 import { lookupKeys } from '../services/pgp.js';
+import { unsubscribe } from '../services/unsubscribe.js';
 import { loadRows } from './email.js';
 import { MethodError } from './errors.js';
 import { CAP, getIds, getProperties, method, pick, resolveId } from './request.js';
@@ -27,6 +29,21 @@ method('Invite/reply', CAP.wren, async (args, ctx) => {
   try {
     const r = await replyToInvite(ctx.user.id, row.id, status, comment, ctx.actor.id);
     return { accountId: ctx.accountId, emailId, status: args.status, to: r.to };
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw new MethodError('invalidArguments', (err as Error).message);
+  }
+});
+
+/** Unsubscribe from the list an email came from, as the web app's Unsubscribe button does. */
+method('MailingList/unsubscribe', CAP.wren, async (args, ctx) => {
+  // It may send mail (an unsubscribe request from the mailbox's address).
+  if (!ctx.canSend) throw new MethodError('forbidden', 'You can read this shared mailbox, but not send from it');
+  const emailId = String(resolveId(ctx, args.emailId));
+  const row = loadRows(ctx.user.id, [emailId]).get(emailId);
+  if (!row) throw new MethodError('invalidArguments', 'No such email');
+  try {
+    return { accountId: ctx.accountId, emailId, ...(await unsubscribe(ctx.user.id, row.id)) };
   } catch (err) {
     if (err instanceof HttpError) throw err;
     throw new MethodError('invalidArguments', (err as Error).message);
