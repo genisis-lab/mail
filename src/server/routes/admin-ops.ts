@@ -11,7 +11,7 @@ import { getBlob } from '../mail/blobs.js';
 import { processQueue, retryOutbox } from '../mail/outbound.js';
 import { platform } from '../platform.js';
 import { getSettings } from '../settings.js';
-import { audit } from '../services/audit.js';
+import { audit, withVia } from '../services/audit.js';
 import { checklist, startRoundtrip } from '../services/checklist.js';
 import { CloudflareApiError, cloudflareToken, listZones, saveCloudflareToken, setUpDomainOnCloudflare } from '../services/cloudflare-setup.js';
 import { openAlerts, recentAlerts, resolveAlert, runAlertChecks, type AlertKind } from '../services/alerts.js';
@@ -32,7 +32,7 @@ import { pauseSending, resumeSending } from '../services/send-guard.js';
 
 export const adminOpsRoutes = new Hono<AppEnv>();
 
-const act = (c: any, action: string, target: string, details?: unknown) => audit(c.get('user').id, action, target, details, clientIp(c));
+const act = (c: any, action: string, target: string, details?: unknown) => audit(c.get('user').id, action, target, withVia(c, details), clientIp(c));
 
 // ── Setup checklist ─────────────────────────────────────────────────────────
 

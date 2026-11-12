@@ -57,12 +57,17 @@ const SIGN_IN_METHOD: Record<string, string> = {
   'password+2fa': 'Password + 2-step',
   'passkey+2fa': 'Passkey + 2-step',
   link: 'Reset or setup link',
+  'app-admin': 'Admin unlock in an app',
+  'app-admin+2fa': 'Admin unlock in an app + 2-step',
+  'app-admin+web': 'Admin unlock in an app + approved on the web',
+  'app-admin+email': 'Admin unlock in an app + emailed code',
 };
 const SIGN_IN_FAILURE: Record<string, string> = {
   wrong_password: 'Wrong password',
   wrong_code: 'Wrong 2-step code',
   passkey_rejected: 'Passkey rejected',
   suspended: 'Refused: account suspended',
+  denied: 'Denied on the web',
 };
 
 /** "Chrome on macOS" from a user-agent string. */

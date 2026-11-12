@@ -50,7 +50,7 @@ app passwords, and app passwords can't be used with the send API.
 | Scheduled send | `EmailSubmission` held with `HOLDUNTIL` or `HOLDFOR` (FUTURERELEASE) |
 | Out-of-office reply | `VacationResponse` |
 | Storage used and allowed | `Quota` (RFC 9425) |
-| Your addresses and signatures | `Identity` (read only; manage them in Wren) |
+| Your addresses and signatures | `Identity`: change your name and each address's signature; addresses come from an admin |
 | Contacts | JMAP Contacts (RFC 9610), read only: a `contacts` address book (the ones you saved) and `recent` (people you've written to) |
 | Calendar invitations, private links, PGP keys | Wren's own extension (below) |
 
@@ -102,7 +102,9 @@ account, except where noted) adds what the web app has and JMAP doesn't. Its val
 account is `{ canSend, unsubscribe }`: `canSend` is `false` in a shared mailbox you can read
 but not send from, so an app can hide Reply there instead of finding out when sending fails,
 and `unsubscribe: true` says this server has the unsubscribe additions below (asking an older
-one for their properties is an error).
+one for their properties is an error). Your own account's value also has `preferences: true`
+(the Preferences object below) and `adminRole`: `"owner"`, `"admin"` or `"helpdesk"` when you
+may unlock the admin panel from the app (see below), else `null`.
 
 - **Calendar invitations.** Email/get's `invite` property is the invitation in an email,
   or `null`: `method`, `summary`, `start` and `end` (UTCDate), `allDay`, `location`,
@@ -122,6 +124,51 @@ one for their properties is an error).
   your private key backup (`singleton`: `fingerprint`, `armored`, `updatedAt`), still
   encrypted with the passphrase you chose in the browser; Wren never has the passphrase.
   Your own account only. The backup is still set up in the web app.
+- **Preferences.** `Preferences/get` and `Preferences/set` (`singleton`, your own account
+  only) are the web app's settings that apps can show: `defaultFrom` (one of your addresses,
+  or `""` for your mailbox), `signature` (the default, HTML), `signatures` (each address's own,
+  which wins over the default; patch one with `signatures/<address>`, and `null` or `""` goes
+  back to the default) and `signatureOnReplies`. Settings that guard the account (forwarding,
+  sign-in alerts, two-step sign-in, app passwords) aren't here on purpose: an app password
+  reads and sends mail, it doesn't get to send your mail elsewhere for good or hide new
+  sign-ins.
+
+**Identity changes.** `Identity/set` updates `name` (your mailbox's name, as Settings →
+Account does; aliases and groups are named by an admin) and `htmlSignature` or
+`textSignature` (that address's own signature, as in the Preferences above). Creating and
+destroying identities is refused: addresses come from an admin. Shared mailboxes' names and
+signatures are an admin's too.
+
+**The admin panel in an app.** An app password never reaches the admin panel. An app that
+wants it (Wren for Mac's Admin window) unlocks it first, with HTTPS calls next to JMAP, using
+the same app password:
+
+1. `POST /jmap/admin/unlock` with `{ password, device }`: the **account** password (the app
+   password is refused here). Same attempt limits as the sign-in page, and the admin IP
+   allowlist applies. Answers `{ challenge, role, steps, expiresAt }`; `steps` says which second
+   steps this person can use: `totp`, `web`, and `email` (a masked recovery address, or `null`).
+2. One second step, within 10 minutes:
+   - `totp`: `POST /jmap/admin/unlock/verify` with `{ challenge, step: "totp", code }` (a recovery
+     code works too).
+   - `web`: `POST /jmap/admin/unlock/web` with `{ challenge }` answers a two-digit `number` and the
+     `/approve` page. The person types the number there, in a browser signed in with two factors
+     (a 2-step code or a passkey that checked a PIN or biometric); a wrong number denies the
+     request. Meanwhile the app calls `verify` with `step: "web"` every few seconds: `202
+     { waiting: true }` until it's answered.
+   - `email`: `POST /jmap/admin/unlock/email` with `{ challenge }` sends a 6-digit code to the
+     **confirmed recovery address**, never the Wren mailbox (anyone with the app password can
+     read that); then `verify` with `step: "email"` and the code. Five wrong codes and it stops
+     working.
+3. `verify` answers `{ token, role, expiresAt, idleSeconds }`. The app sends `X-Wren-Admin:
+   <token>` with its usual `Authorization` to `/api/admin/*` (and `X-Wren: 1` on changes). The
+   token works only with the same app password, for 15 minutes after its last use and an hour
+   at most, and only for what the app's admin panel does (people, invitations, the outgoing
+   queue, the overview and the audit log); everything else answers `403 admin_web_only`. Role
+   checks, helpdesk limits and the IP allowlist apply as on the web, and admin actions are
+   audited with `via: "app"`. `POST /jmap/admin/lock` ends it; revoking the app password, turning
+   off the person's mail apps or taking away the role ends it too.
+
+Each unlock and failed attempt shows in the person's sign-in activity and the audit log.
 
 **Not yet:** inbox tabs are web-only. Mailboxes don't nest, and `queryChanges` isn't
 supported, so apps re-run their queries.

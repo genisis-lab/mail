@@ -7,12 +7,13 @@
  * same as the web app's: it shows in Scheduled there and can be cancelled from
  * either side, which turns it back into a draft.
  */
-import { all, get, IN_LIST, listParam, now, run } from '../db/index.js';
+import { all, get, IN_LIST, listParam, now, run, tx } from '../db/index.js';
 import { sha256 } from '../lib/crypto.js';
+import { textToHtml } from '../mail/compose.js';
 import { htmlToText } from '../mail/parse.js';
 import { setPrivate } from '../mail/private.js';
 import { cancelSend, sendDraft } from '../mail/send.js';
-import { getPrefs, identities } from '../services/users.js';
+import { getPrefs, identities, savePrefs } from '../services/users.js';
 import { emailSet, loadRows } from './email.js';
 import { MethodError, SetError, asSetError } from './errors.js';
 import { emailId, threadId } from './ids.js';
@@ -30,7 +31,8 @@ function identityList(userId: number) {
   return ids
     .filter((i) => rows.has(i.address.toLowerCase()))
     .map((i) => {
-      const html = prefs.signatures[i.address] ?? prefs.signature ?? '';
+      const own = prefs.signatures[i.address.toLowerCase()];
+      const html = own?.trim() ? own : prefs.signature ?? '';
       return {
         id: `I${rows.get(i.address.toLowerCase())}`,
         name: i.name,
@@ -40,6 +42,8 @@ function identityList(userId: number) {
         textSignature: html ? htmlToText(html) : '',
         htmlSignature: html,
         mayDelete: false,
+        /** Not a JMAP property: only the mailbox's own name can be changed here (aliases and groups are named by an admin). */
+        kind: i.kind,
       };
     });
 }
@@ -65,18 +69,76 @@ method('Identity/changes', CAP.submission, (args, ctx) => {
   return { accountId: ctx.accountId, oldState: state, newState: state, hasMoreChanges: false, created: [], updated: [], destroyed: [] };
 });
 
+/**
+ * A person may change their own name (on their mailbox address, as Settings → Account does on the
+ * web) and each address's signature (Settings → Signatures: an empty one falls back to the default
+ * signature). Addresses come and go only through an administrator, and a shared mailbox's names and
+ * signatures aren't its members' to change.
+ */
 method('Identity/set', CAP.submission, (args, ctx) => {
+  const userId = ctx.user.id;
+  const oldState = identityState(userId);
+  if (args.ifInState !== undefined && args.ifInState !== null && args.ifInState !== oldState) throw new MethodError('stateMismatch', 'The identities changed');
+  checkSetSize(args);
   const no = (what: string) => new SetError('forbidden', `${what} in Wren: Settings → Accounts`);
+  const updated: Record<string, null> = {};
+  const notUpdated: Record<string, SetError> = {};
+  const shared = ctx.user.id !== ctx.actor.id;
+  for (const [id, patch] of Object.entries<unknown>(isObject(args.update) ? args.update : {})) {
+    try {
+      if (shared) throw new SetError('forbidden', 'A shared mailbox’s name and signature are set by an administrator');
+      if (!isObject(patch)) throw new SetError('invalidPatch', 'Not an object');
+      const identity = identityList(userId).find((i) => i.id === id);
+      if (!identity) throw new SetError('notFound', 'No such identity');
+      const address = identity.email.toLowerCase();
+      const prefs = getPrefs(userId);
+      const signatures = { ...prefs.signatures };
+      let name: string | undefined;
+      const bad = (k: string, why: string) => new SetError('invalidProperties', why, { properties: [k] });
+      for (const [k, val] of Object.entries(patch)) {
+        if (k === 'name') {
+          if (typeof val !== 'string' || !val.trim() || val.trim().length > 100) throw bad(k, 'A name is 1 to 100 characters');
+          if (val.trim() === identity.name) continue;
+          if (identity.kind !== 'mailbox') throw new SetError('forbidden', 'An administrator names this address', { properties: [k] });
+          name = val.trim();
+        } else if (k === 'htmlSignature' || k === 'textSignature') {
+          if (val !== null && typeof val !== 'string') throw bad(k, 'A signature is text');
+          if ((val ?? '').length > 20_000) throw bad(k, 'A signature is up to 20,000 characters');
+          // HTML wins when both are given.
+          if (k === 'textSignature' && typeof patch.htmlSignature === 'string') continue;
+          const html = !val?.trim() ? '' : k === 'htmlSignature' ? val : textToHtml(val);
+          if (html) signatures[address] = html;
+          else delete signatures[address];
+        } else if ((k === 'replyTo' || k === 'bcc') && val === null) {
+          continue;
+        } else if (k === 'email' && typeof val === 'string' && val.toLowerCase() === address) {
+          continue;
+        } else {
+          throw bad(k, k === 'replyTo' || k === 'bcc' ? `Wren doesn’t keep a ${k} for an identity` : `Can’t set ${k}`);
+        }
+      }
+      tx(() => {
+        if (name !== undefined) {
+          run('UPDATE users SET name = ? WHERE id = ?', [name, userId]);
+          run(`UPDATE addresses SET name = ? WHERE user_id = ? AND kind = 'mailbox'`, [name, userId]);
+        }
+        savePrefs(userId, { ...getPrefs(userId), signatures });
+      });
+      updated[id] = null;
+    } catch (err) {
+      notUpdated[id] = asSetError(err);
+    }
+  }
   return {
     accountId: ctx.accountId,
-    oldState: identityState(ctx.user.id),
-    newState: identityState(ctx.user.id),
+    oldState,
+    newState: identityState(userId),
     created: {},
-    updated: {},
+    updated,
     destroyed: [],
-    notCreated: Object.fromEntries(Object.keys(args.create ?? {}).map((k) => [k, no('Add addresses')])),
-    notUpdated: Object.fromEntries(Object.keys(args.update ?? {}).map((k) => [k, no('Change names and signatures')])),
-    notDestroyed: Object.fromEntries(((args.destroy ?? []) as string[]).map((k) => [k, no('Remove addresses')])),
+    notCreated: Object.fromEntries(Object.keys(isObject(args.create) ? args.create : {}).map((k) => [k, no('Add addresses')])),
+    notUpdated,
+    notDestroyed: Object.fromEntries((Array.isArray(args.destroy) ? (args.destroy as string[]) : []).map((k) => [k, no('Remove addresses')])),
   };
 });
 

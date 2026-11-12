@@ -53,6 +53,7 @@ import { useCompose } from '../components/Compose';
 import { LogoMark } from '../components/Logo';
 import { useToast } from '../components/toast';
 import { Button, Checkbox, cx, Field, IconButton, Input, Kbd, Menu, Modal, Select, useDialogFocus } from '../components/ui';
+import { AdminUnlockBar } from '../components/AdminUnlock';
 import { ThreadList } from './mail/ThreadList';
 import { ThreadView } from './mail/ThreadView';
 import { AllInboxes } from './mail/AllInboxes';
@@ -120,7 +121,8 @@ function MailShell() {
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, prefs, instance } = useSession();
+  const { user, prefs, instance, isAdmin, isHelpdesk } = useSession();
+  const canOpenAdmin = isAdmin || isHelpdesk;
   const mailbox = useMailbox();
   const counters = useCounters();
   const accounts = useAccounts().data?.accounts;
@@ -189,6 +191,7 @@ function MailShell() {
       <TopBar onMenu={() => (window.innerWidth < 768 ? setMobileOpen((o) => !o) : setCollapsed((c) => !c))} onHelp={() => setShortcutsOpen(true)} />
       <OfflineBar />
       <SendPausedBar />
+      {canOpenAdmin && <AdminUnlockBar />}
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
         <main className="min-w-0 flex-1 pr-4 pb-4 max-md:px-2 max-md:pb-2">

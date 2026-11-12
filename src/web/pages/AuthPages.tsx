@@ -11,6 +11,7 @@ import { lastAccount, useMe, type Instance } from '../lib/session';
 import { Avatar } from '../components/Avatar';
 import { Logo } from '../components/Logo';
 import { TwoFactorSetup } from '../components/TwoFactorSetup';
+import { UnlockApprovals } from '../components/AdminUnlock';
 import { Button, Field, Input, Select, Spinner } from '../components/ui';
 
 function AuthShell({ instance, children, wide }: { instance: Instance; children: ReactNode; wide?: boolean }) {
@@ -820,6 +821,15 @@ export function VerifyRecoveryPage({ instance, signedIn }: { instance: Instance;
       <Link to={signedIn ? '/settings/security' : '/login'} className="mt-6 inline-flex text-sm font-medium text-accent-ink hover:underline">
         {signedIn ? 'Go to Security settings' : 'Go to sign in'}
       </Link>
+    </AuthShell>
+  );
+}
+
+/** Approve an app's request to unlock the admin panel (/approve), by typing the number it shows. */
+export function ApproveUnlockPage({ instance }: { instance: Instance }) {
+  return (
+    <AuthShell instance={instance}>
+      <UnlockApprovals />
     </AuthShell>
   );
 }

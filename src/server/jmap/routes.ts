@@ -12,9 +12,12 @@ import { Hono, type Context } from 'hono';
 import { config } from '../config.js';
 import { get, now, run } from '../db/index.js';
 import { sha256 } from '../lib/crypto.js';
-import { clientIp, findApiKey } from '../http/context.js';
+import { z } from 'zod';
+import { body, clientIp } from '../http/context.js';
+import { authenticateAppPassword } from '../http/app-password.js';
 import { getSettings } from '../settings.js';
-import { mustChangePassword, mustSetup2fa, userAddresses, type UserRow } from '../services/users.js';
+import { mustChangePassword, mustSetup2fa, type UserRow } from '../services/users.js';
+import { adminRole, askWeb, finishUnlock, lockAdmin, sendEmailCode, startUnlock } from '../services/admin-unlock.js';
 import { readBlob, storeUploadBlob } from './blobs.js';
 import { problem } from './errors.js';
 import { accountId } from './ids.js';
@@ -53,31 +56,6 @@ function unauthorized() {
   const res = problem('about:blank', 'Sign in with your email address and an app password from Wren’s Settings', 401);
   res.headers.set('WWW-Authenticate', 'Basic realm="Wren", charset="UTF-8"');
   return res;
-}
-
-function decodeBasic(value: string): { username: string; password: string } | null {
-  try {
-    const text = new TextDecoder().decode(Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0)));
-    const i = text.indexOf(':');
-    return i < 0 ? null : { username: text.slice(0, i).trim().toLowerCase(), password: text.slice(i + 1) };
-  } catch {
-    return null;
-  }
-}
-
-/** Who is calling, from "Authorization: Basic …" or "Authorization: Bearer …". */
-function authenticate(header: string | undefined): { user: UserRow; keyId: number } | null {
-  if (!header) return null;
-  const [scheme, value = ''] = header.trim().split(/\s+/, 2);
-  if (/^bearer$/i.test(scheme)) return value ? findApiKey(value, 'mail') : null;
-  if (!/^basic$/i.test(scheme)) return null;
-  const creds = decodeBasic(value);
-  if (!creds?.password) return null;
-  const found = findApiKey(creds.password, 'mail');
-  if (!found) return null;
-  // The username is the person's sign-in address or any of their own addresses.
-  const names = new Set([found.user.email.toLowerCase(), ...userAddresses(found.user.id)]);
-  return names.has(creds.username) ? found : null;
 }
 
 /** Requests in flight per person (maxConcurrentRequests and maxConcurrentUpload). */
@@ -146,7 +124,8 @@ function session(user: UserRow) {
           [CAP.vacation]: {},
           [CAP.snooze]: {},
           [CAP.contacts]: { mayCreateAddressBook: false },
-          [CAP.wren]: { canSend: true, unsubscribe: true },
+          // adminRole: who may unlock the admin panel in a native app (/jmap/admin/unlock), else null.
+          [CAP.wren]: { canSend: true, unsubscribe: true, preferences: true, adminRole: adminRole(user) },
         },
       },
       // Each shared mailbox they belong to is another account. Members who can't send still read and write drafts, so none is read-only.
@@ -196,7 +175,7 @@ jmapRoutes.use('/jmap/*', async (c, next) => {
     res.headers.set('Retry-After', String(FAILURE_WINDOW_MS / 1000));
     return res;
   }
-  const found = authenticate(c.req.header('authorization'));
+  const found = authenticateAppPassword(c.req.header('authorization'));
   if (!found) {
     if (c.req.header('authorization')) noteFailure(ip);
     return unauthorized();
@@ -272,3 +251,31 @@ jmapRoutes.post('/jmap/upload/:accountId/', async (c) => {
 });
 
 jmapRoutes.get('/jmap/eventsource', (c) => eventSource(c.get('user').id, { types: c.req.query('types'), closeafter: c.req.query('closeafter'), ping: c.req.query('ping') }));
+
+// ── Unlocking the admin panel in this app (services/admin-unlock.ts) ────────
+// Not JMAP methods: what they hand out is used on /api/admin, and none of it is mail.
+
+const challenge = z.string().max(200);
+
+jmapRoutes.post('/jmap/admin/unlock', async (c) => {
+  const input = await body(c, z.object({ password: z.string().max(256), device: z.string().max(200).optional() }));
+  return c.json(await startUnlock(c, c.get('user'), c.get('keyId'), input.password, input.device));
+});
+
+jmapRoutes.post('/jmap/admin/unlock/web', async (c) => {
+  const input = await body(c, z.object({ challenge }));
+  return c.json(askWeb(c.get('user'), c.get('keyId'), input.challenge));
+});
+
+jmapRoutes.post('/jmap/admin/unlock/email', async (c) => {
+  const input = await body(c, z.object({ challenge }));
+  return c.json(await sendEmailCode(c, c.get('user'), c.get('keyId'), input.challenge));
+});
+
+jmapRoutes.post('/jmap/admin/unlock/verify', async (c) => {
+  const input = await body(c, z.object({ challenge, step: z.enum(['totp', 'web', 'email']), code: z.string().max(64).optional() }));
+  const r = finishUnlock(c, c.get('user'), c.get('keyId'), input.challenge, input.step, input.code);
+  return c.json(r, 'waiting' in r ? 202 : 200);
+});
+
+jmapRoutes.post('/jmap/admin/lock', (c) => c.json(lockAdmin(c.get('user'), c.get('keyId'))));

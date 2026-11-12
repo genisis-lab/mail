@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'reac
 import { Activity, ArrowLeft, Globe, Inbox, LayoutDashboard, Mail, Menu as MenuIcon, PlugZap, ScrollText, Server, Settings2, ShieldCheck, Ticket, Users, AtSign } from 'lucide-react';
 import { useSession } from '../../lib/session';
 import { LogoMark } from '../../components/Logo';
+import { AdminUnlockBar } from '../../components/AdminUnlock';
 import { ApiError } from '../../lib/api';
 import { Card, cx, Empty, IconButton, useDialogFocus } from '../../components/ui';
 import { Overview } from './Overview';
@@ -101,6 +102,7 @@ export function AdminLayout() {
           <span className="sr-only sm:hidden">Open mail</span>
         </button>
       </header>
+      <AdminUnlockBar />
       <div className="flex min-h-0 flex-1">
         <nav aria-label="Admin" className="w-60 shrink-0 overflow-y-auto pr-3 pb-6 max-lg:w-16 max-md:hidden">
           <AdminNav wide={false} alerts={open} />
