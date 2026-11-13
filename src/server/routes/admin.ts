@@ -1031,7 +1031,7 @@ adminRoutes.post('/backups/:id/restore', async (c) => {
   const me = c.get('user');
   try {
     const r = await restoreExport(backupStream(b), { allowKeyMismatch: c.req.query('allowKeyMismatch') === '1' });
-    audit(null, 'admin.backup_restored', `backup from ${new Date(b.created_at).toISOString()}`, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }, clientIp(c));
+    audit(null, 'admin.backup_restored', `backup from ${new Date(b.created_at).toISOString()}`, withVia(c, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }), clientIp(c));
     return c.json({ ok: true, exportedAt: r.header.exportedAt, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch });
   } catch (err) {
     if (err instanceof RestoreError) {
@@ -1061,7 +1061,7 @@ adminRoutes.post('/restore', async (c) => {
   if (!c.req.raw.body) throw badRequest('Upload an export file');
   try {
     const r = await restoreExport(c.req.raw.body, { allowKeyMismatch: c.req.query('allowKeyMismatch') === '1' });
-    audit(null, 'admin.backup_restored', `export from ${new Date(r.header.exportedAt).toISOString()}`, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }, clientIp(c));
+    audit(null, 'admin.backup_restored', `export from ${new Date(r.header.exportedAt).toISOString()}`, withVia(c, { by: me.email, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch }), clientIp(c));
     return c.json({ ok: true, exportedAt: r.header.exportedAt, rows: r.rows, skipped: r.skipped, keyMismatch: r.keyMismatch });
   } catch (err) {
     if (err instanceof RestoreError) {
