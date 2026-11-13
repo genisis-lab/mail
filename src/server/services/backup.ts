@@ -18,10 +18,10 @@ import { indexMessage } from '../mail/store.js';
 
 export const EXPORT_FORMAT = 'wren-export';
 
-/** Never exported: sessions (everyone signs in again), rate-limit counters and internal state. */
+/** Never exported: sessions and apps' admin unlocks (everyone signs in again), rate-limit counters and internal state. */
 // JMAP's change log and push subscriptions describe this database's history and devices, not its contents.
 // Integrity records belong to the retained blob store, not to a particular mail snapshot.
-const SKIP = new Set(['sessions', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'blob_integrity', 'webauthn_challenges', 'known_devices', 'backups', 'jmap_modseq', 'jmap_changes', 'jmap_push']);
+const SKIP = new Set(['sessions', 'admin_unlocks', 'login_attempts', '_meta', '_blobs', 'blob_tombstones', 'blob_integrity', 'webauthn_challenges', 'known_devices', 'backups', 'jmap_modseq', 'jmap_changes', 'jmap_push']);
 
 export interface ExportHeader {
   format: typeof EXPORT_FORMAT;
@@ -145,6 +145,7 @@ export async function restoreExport(body: ReadableStream<Uint8Array>, opts: { al
   const wipe = () => {
     run(`INSERT INTO messages_fts (messages_fts) VALUES ('delete-all')`);
     run('DELETE FROM sessions');
+    run('DELETE FROM admin_unlocks');
     run('DELETE FROM login_attempts');
     for (const t of [...tables].reverse()) run(`DELETE FROM "${t}"`);
   };
@@ -155,6 +156,8 @@ export async function restoreExport(body: ReadableStream<Uint8Array>, opts: { al
     } catch {
       throw new RestoreError('The export file is damaged (invalid line).');
     }
+    // Left out of exports now (older ones may still hold them): never brought back, and not a failure.
+    if (SKIP.has(rec.t)) return;
     const cols = known.get(rec.t);
     if (!cols) {
       skipped++;

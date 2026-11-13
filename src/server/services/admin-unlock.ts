@@ -10,9 +10,9 @@
  *  - email: a 6-digit code sent to the confirmed recovery address. Never the Wren mailbox, which
  *    whoever holds the app password can read.
  * That gives the app an admin token: 15 minutes of use and an hour at most, good only together with
- * the same app password, and only for what the app's admin panel does (NATIVE_ADMIN_ROUTES). Each
- * request still goes through the usual admin checks (role, helpdesk limits, admin IP allowlist)
- * and lands in the audit log marked as coming from the app.
+ * the same app password. It reaches the whole admin panel, as a browser session does. Each request
+ * still goes through the usual admin checks (role, helpdesk limits, admin IP allowlist, the owner's
+ * password for the encryption key) and lands in the audit log marked as coming from the app.
  */
 import type { Context, MiddlewareHandler } from 'hono';
 import type { Role } from '../../shared/types.js';
@@ -278,27 +278,6 @@ export function answerApproval(c: Context, ref: string, number: number | null) {
 
 // ── Using an unlock ─────────────────────────────────────────────────────────
 
-/**
- * What the app's admin panel does, and so all an unlock reaches: people and invitations, the
- * outgoing queue, the overview and the audit log. The rest (domains, providers, settings, backups,
- * the encryption key, exports) stays in the web panel.
- */
-const NATIVE_ADMIN_ROUTES: { method: string; path: RegExp }[] = [
-  { method: 'GET', path: /^\/(?:overview|audit|outbox|invites|users)$/ },
-  { method: 'GET', path: /^\/users\/\d+(?:\/detail)?$/ },
-  { method: 'POST', path: /^\/users$/ },
-  { method: 'PUT', path: /^\/users\/\d+(?:\/legal-hold)?$/ },
-  { method: 'POST', path: /^\/users\/\d+\/(?:unlock|signout|reset-2fa|reset-link|setup-link|pause-sending|resume-sending)$/ },
-  { method: 'DELETE', path: /^\/users\/\d+(?:\/passkeys|\/sessions\/[a-f0-9]{16})?$/ },
-  { method: 'POST', path: /^\/invites(?:\/\d+\/resend)?$/ },
-  { method: 'DELETE', path: /^\/invites\/\d+$/ },
-  { method: 'POST', path: /^\/outbox\/\d+\/(?:retry|cancel)$/ },
-];
-
-export function nativeRouteAllowed(method: string, path: string): boolean {
-  return NATIVE_ADMIN_ROUTES.some((r) => r.method === method && r.path.test(path));
-}
-
 /** The admin token's row, if it's still good for this app password. */
 function grantRow(user: UserRow, keyId: number, token: string): UnlockRow | null {
   if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) return null;
@@ -324,8 +303,6 @@ export const adminCaller: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!found || appPasswordRefusal(found.user)) throw locked();
   const row = grantRow(found.user, found.keyId, token);
   if (!row) throw locked();
-  const path = c.req.path.replace(/^\/api\/admin/, '');
-  if (!nativeRouteAllowed(c.req.method, path)) throw new HttpError(403, 'Use the admin panel on the web for this', 'admin_web_only');
   run('UPDATE admin_unlocks SET last_used_at = ? WHERE id = ?', [now(), row.id]);
   c.set('user', found.user);
   c.set('session', null);

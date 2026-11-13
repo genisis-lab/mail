@@ -238,23 +238,51 @@ describe('using an unlock', () => {
     expect(noKey.status).toBe(401);
   });
 
-  it('reaches only what the app’s admin panel does', async () => {
+  it('reaches the whole admin panel, as a browser session does', async () => {
     const token = await unlock(keys.admin);
-    for (const [method, path] of [
-      ['GET', '/api/admin/settings'],
-      ['PUT', '/api/admin/settings'],
-      ['GET', '/api/admin/export'],
-      ['POST', '/api/admin/encryption-key'],
-      ['GET', '/api/admin/providers'],
-      ['POST', `/api/admin/users/${ids.sam}/password`],
-      ['POST', `/api/admin/users/${ids.sam}/export`],
+    for (const path of [
+      '/api/admin/overview',
+      '/api/admin/settings',
+      '/api/admin/domains',
+      '/api/admin/addresses',
+      '/api/admin/shared-mailboxes',
+      '/api/admin/providers',
+      '/api/admin/provider-types',
+      '/api/admin/delivery-log',
+      '/api/admin/inbound-log',
+      '/api/admin/suppressions',
+      '/api/admin/dmarc',
+      '/api/admin/alerts',
+      '/api/admin/checklist',
+      '/api/admin/system',
+      '/api/admin/backups',
+      '/api/admin/blocklist',
     ]) {
-      const r = await app(method, path, keys.admin, method === 'GET' ? undefined : {}, token);
-      expect([method, path, r.status, r.body.code]).toEqual([method, path, 403, 'admin_web_only']);
-    }
-    for (const path of ['/api/admin/overview', '/api/admin/outbox', '/api/admin/invites', '/api/admin/audit', `/api/admin/users/${ids.sam}/detail`]) {
       expect([path, (await app('GET', path, keys.admin, undefined, token)).status]).toEqual([path, 200]);
     }
+    // Changes, with the usual validation.
+    const domain = await app('POST', '/api/admin/domains', keys.admin, { name: 'app-made.test' }, token);
+    expect(domain.status).toBe(200);
+    expect((await app('PUT', '/api/admin/settings', keys.admin, { 'instance.accent': 'red' }, token)).status).toBe(400);
+    expect((await app('PUT', '/api/admin/settings', keys.admin, { 'retention.trashDays': 45 }, token)).status).toBe(200);
+    expect((await app('DELETE', `/api/admin/domains/${domain.body.id}`, keys.admin, undefined, token)).status).toBe(200);
+    // Downloads stream as on the web.
+    const res = await h.app.request('/api/admin/export', { headers: { ...bearer(keys.admin), 'X-Wren-Admin': token } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/x-ndjson');
+    expect((await res.text()).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the owner’s own steps', async () => {
+    run('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?', [encrypt(SECRET), ids.dora]);
+    const dora = await unlock(keys.dora);
+    // An admin who isn't the owner: no encryption key, no restores.
+    expect((await app('POST', '/api/admin/encryption-key', keys.dora, { password: PW, code: totp() }, dora)).status).toBe(403);
+    expect((await app('POST', '/api/admin/restore-point', keys.dora, { at: Date.now() - 60_000 }, dora)).status).toBe(403);
+    expect((await h.app.request('/api/admin/restore', { method: 'POST', headers: { ...bearer(keys.dora), 'X-Wren': '1', 'X-Wren-Admin': dora }, body: '{}' })).status).toBe(403);
+    // The owner still enters their password (and 2-step code) again to see the key.
+    const token = await unlock(keys.admin);
+    expect((await app('POST', '/api/admin/encryption-key', keys.admin, { password: 'wrong password' }, token)).status).toBe(401);
   });
 
   it('marks what it does in the audit log', async () => {
@@ -320,5 +348,25 @@ describe('using an unlock', () => {
     // (Helen signed Sam out above.)
     await h.login('sam@wren.test', PW, 'sam');
     expect((await h.call('GET', '/api/admin/users')).status).toBe(403);
+  });
+});
+
+describe('restoring from the app', () => {
+  // Last: a restore signs every browser out.
+  it('takes the export file as the request body, and audits it as coming from the app', async () => {
+    const token = await unlock(keys.admin);
+    const auth = { ...bearer(keys.admin), 'X-Wren-Admin': token };
+    const file = await (await h.app.request('/api/admin/export', { headers: auth })).text();
+    const res = await h.app.request('/api/admin/restore', { method: 'POST', headers: { ...auth, 'X-Wren': '1', 'Content-Type': 'application/x-ndjson' }, body: file });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).ok).toBe(true);
+    const entry = get<{ details: string }>(`SELECT details FROM audit_log WHERE action = 'admin.backup_restored' ORDER BY id DESC LIMIT 1`)!;
+    expect(JSON.parse(entry.details)).toMatchObject({ by: 'admin@wren.test', via: 'app' });
+    // Exports leave unlocks out, and a restore ends them, as it signs browsers out.
+    expect(file).not.toContain('"t":"admin_unlocks"');
+    expect(get('SELECT COUNT(*) AS n FROM admin_unlocks')).toEqual({ n: 0 });
+    const after = await h.app.request('/api/admin/overview', { headers: auth });
+    expect(after.status).toBe(401);
+    expect(((await after.json()) as any).code).toBe('admin_locked');
   });
 });

@@ -162,10 +162,11 @@ the same app password:
 3. `verify` answers `{ token, role, expiresAt, idleSeconds }`. The app sends `X-Wren-Admin:
    <token>` with its usual `Authorization` to `/api/admin/*` (and `X-Wren: 1` on changes). The
    token works only with the same app password, for 15 minutes after its last use and an hour
-   at most, and only for what the app's admin panel does (people, invitations, the outgoing
-   queue, the overview and the audit log); everything else answers `403 admin_web_only`. Role
-   checks, helpdesk limits and the IP allowlist apply as on the web, and admin actions are
-   audited with `via: "app"`. `POST /jmap/admin/lock` ends it; revoking the app password, turning
+   at most. It reaches the whole admin API, as a signed-in browser does: role checks, helpdesk
+   limits, the IP allowlist and the owner-only steps (the encryption key takes the owner's
+   password and 2-step code again; restores are the owner's) apply as on the web, and admin
+   actions are audited with `via: "app"`. Downloads (exports, backups) stream as on the web, and
+   `POST /api/admin/restore` takes the export file as the raw request body. `POST /jmap/admin/lock` ends it; revoking the app password, turning
    off the person's mail apps or taking away the role ends it too.
 
 Each unlock and failed attempt shows in the person's sign-in activity and the audit log.

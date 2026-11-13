@@ -34,9 +34,11 @@ panel in the Mac app with their account password (never the app password) and on
 step: an authenticator code, approval on the web by typing the number the app shows (from
 a browser signed in with two factors), or a code sent to their confirmed recovery email.
 The unlock lasts 15 minutes of use and an hour at most, works only with that app password,
-and reaches only people, invitations, the mail queue, the overview and the audit log. Role
-checks, helpdesk limits and the admin IP allowlist apply as on the web; actions are audited
-as coming from the app, and unlocks show in sign-in activity. Waiting requests show at the
+and reaches the whole admin panel, as on the web: people, domains, providers, settings,
+logs, backups and the rest. Role checks, helpdesk limits, the admin IP allowlist and the
+owner's own steps (the encryption key, restores) apply as on the web; actions are audited
+as coming from the app, and unlocks show in sign-in activity. Exports leave unlocks out, and
+a restore ends them, as it signs every browser out. Waiting requests show at the
 top of the web app for admins, and on the new `/approve` page. See docs/jmap.md.
 
 **Remote content stays blocked.** Several ways a message could still load a picture from
