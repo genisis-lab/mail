@@ -226,21 +226,19 @@ function ComposeWindow({ win, onClose, onPatch, onReopen }: { win: Window_; onCl
   const [subject, setSubject] = useState(win.subject ?? '');
   const title = subject.trim() || 'New message';
 
-  if (win.minimized) {
-    return (
-      <div className="pointer-events-auto w-72 overflow-hidden rounded-t-xl bg-panel shadow-float">
-        <div className="flex h-10 cursor-pointer items-center gap-2 bg-[#3c4043] px-3 text-sm text-white dark:bg-panel3" onClick={() => onPatch({ minimized: false })}>
-          <span className="flex-1 truncate font-medium">{title}</span>
-          <button className="rounded p-1 hover:bg-white/10" aria-label="Expand" onClick={(e) => (e.stopPropagation(), onPatch({ minimized: false }))}>
-            <Maximize2 className="size-3.5" />
-          </button>
-          <button className="rounded p-1 hover:bg-white/10" aria-label="Close" onClick={(e) => (e.stopPropagation(), onClose())}>
-            <X className="size-4" />
-          </button>
-        </div>
+  const minimizedBar = win.minimized && (
+    <div className="pointer-events-auto w-72 overflow-hidden rounded-t-xl bg-panel shadow-float">
+      <div className="flex h-10 cursor-pointer items-center gap-2 bg-[#3c4043] px-3 text-sm text-white dark:bg-panel3" onClick={() => onPatch({ minimized: false })}>
+        <span className="flex-1 truncate font-medium">{title}</span>
+        <button className="rounded p-1 hover:bg-white/10" aria-label="Expand" onClick={(e) => (e.stopPropagation(), onPatch({ minimized: false }))}>
+          <Maximize2 className="size-3.5" />
+        </button>
+        <button className="rounded p-1 hover:bg-white/10" aria-label="Close" onClick={(e) => (e.stopPropagation(), onClose())}>
+          <X className="size-4" />
+        </button>
       </div>
-    );
-  }
+    </div>
+  );
 
   const frame = win.maximized
     ? 'fixed inset-x-[6vw] top-[5vh] bottom-[5vh] w-auto rounded-xl'
@@ -250,7 +248,8 @@ function ComposeWindow({ win, onClose, onPatch, onReopen }: { win: Window_; onCl
   return (
     <>
       {win.maximized && <div className="pointer-events-auto fixed inset-0 bg-black/40" onClick={() => onPatch({ maximized: false })} />}
-      <div className={cx('animate-slide-up pointer-events-auto flex flex-col overflow-hidden bg-panel shadow-float', frame)}>
+      {minimizedBar}
+      <div className={cx('animate-slide-up pointer-events-auto flex-col overflow-hidden bg-panel shadow-float', win.minimized ? 'hidden' : 'flex', !win.minimized && frame)}>
         <div className="flex h-10 shrink-0 items-center gap-1 bg-panel2 pr-1.5 pl-4 text-sm">
           <span className="flex-1 truncate font-medium">{title}</span>
           <IconButton size="sm" label="Minimize" onClick={() => onPatch({ minimized: true, maximized: false })}>
@@ -297,7 +296,7 @@ export function ComposeForm({
   const identities = useMemo(() => (mailboxId ? (box ? [{ address: box.address, name: box.name, kind: 'mailbox' as const }] : []) : user.identities), [mailboxId, box, user.identities]);
   const readOnly = !!box && !box.canSend;
 
-  const [draftId, setDraftId] = useState<number | null>(init.draftId ?? null);
+  const draftId = useRef(init.draftId ?? null);
   // In a shared mailbox the server sends from the mailbox's own address.
   const [from, setFrom] = useState(mailboxId ? '' : init.from || user.prefs.defaultFrom || identities[0]?.address || user.email);
   const [to, setTo] = useState<Addr[]>(init.to ?? []);
@@ -309,6 +308,7 @@ export function ComposeForm({
   const [attachments, setAttachments] = useState<AttachmentInfo[]>(init.attachments ?? []);
   const [uploading, setUploading] = useState(0);
   const [sending, setSending] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [toolbar, setToolbar] = useState(true);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -316,6 +316,8 @@ export function ComposeForm({
   const editor = useRef<RichEditorHandle>(null);
   const html = useRef(init.html ?? '');
   const dirty = useRef(false);
+  const editVersion = useRef(0);
+  const [revision, setRevision] = useState(0);
   const saving = useRef<Promise<number | null> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -360,22 +362,29 @@ export function ComposeForm({
   }, [payload, encrypt, locked, user.id]);
 
   const save = useCallback(async (): Promise<number | null> => {
-    if (saving.current) await saving.current;
+    if (saving.current) {
+      await saving.current;
+      if (dirty.current && !closed.current) return saveRef.current();
+      return draftId.current;
+    }
+    if (!dirty.current || closed.current) return draftId.current;
+    const version = editVersion.current;
     setSaveState('saving');
     const run = (async () => {
       try {
         const p = await draftPayload();
-        const r = draftId
-          ? await api.put<{ id: number; attachments: AttachmentInfo[] }>(`/api/compose/drafts/${draftId}`, p)
+        const r = draftId.current
+          ? await api.put<{ id: number; attachments: AttachmentInfo[] }>(`/api/compose/drafts/${draftId.current}`, p)
           : await api.post<{ id: number; attachments: AttachmentInfo[] }>('/api/compose/drafts', p);
-        setDraftId(r.id);
+        draftId.current = r.id;
         // Attachments copied from a forwarded message get new ids.
         if (r.attachments.length !== attachments.length || r.attachments.some((a, i) => a.id !== attachments[i]?.id)) {
           html.current = cidToUrl(urlToCid(html.current, attachments), r.attachments);
-          setAttachments(r.attachments);
+          const replacements = new Map(attachments.map((a, i) => [a.id, r.attachments[i]]));
+          setAttachments((current) => current === attachments ? r.attachments : current.map((a) => replacements.get(a.id) ?? a));
         }
-        dirty.current = false;
-        setSaveState('saved');
+        dirty.current = version !== editVersion.current;
+        setSaveState(dirty.current ? 'idle' : 'saved');
         qc.invalidateQueries({ queryKey: ['counters'] });
         return r.id;
       } catch (err) {
@@ -389,7 +398,7 @@ export function ComposeForm({
     })();
     saving.current = run;
     return run;
-  }, [draftPayload, draftId, attachments, qc, toast]);
+  }, [draftPayload, attachments, qc, toast, api]);
   // Closing saves with what's on screen then, not what it was when the form opened.
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -397,15 +406,22 @@ export function ComposeForm({
   // Autosave after a pause in typing.
   const markDirty = () => {
     dirty.current = true;
+    setRevision(++editVersion.current);
     setSaveState('idle');
   };
   useEffect(() => {
     if (!dirty.current) return;
     const t = setTimeout(() => {
-      if (dirty.current && !closed.current && !changingEncryption.current) void save();
+      if (dirty.current && !closed.current && !changingEncryption.current) void saveRef.current();
     }, 1500);
     return () => clearTimeout(t);
-  });
+  }, [revision]);
+
+  useEffect(() => {
+    const retry = () => { if (dirty.current && !closed.current && !changingEncryption.current) void saveRef.current(); };
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, []);
 
   useEffect(() => onSubjectChange?.(subject), [subject, onSubjectChange]);
 
@@ -445,6 +461,7 @@ export function ComposeForm({
   };
 
   const send = async (sendAt: number | null = null) => {
+    if (closed.current) return;
     if (readOnly) {
       toast({ message: `You can read ${box!.address}, but not send from it`, tone: 'error' });
       return;
@@ -478,7 +495,7 @@ export function ComposeForm({
     if (!message) return setSending(false);
     // Offline: keep it on this device and send it when the connection is back.
     const queueIt = () => {
-      queueSend({ userId: user.id, mailbox: mailboxId, subject, payload: { ...message, draftId, sendAt } });
+      queueSend({ userId: user.id, mailbox: mailboxId, subject, payload: { ...message, draftId: draftId.current, sendAt } });
       closed.current = true;
       onClose();
       toast('You’re offline. It’ll be sent as soon as you’re back online.');
@@ -489,7 +506,7 @@ export function ComposeForm({
     }
     try {
       if (saving.current) await saving.current.catch(() => {});
-      const r = await api.post<{ id: number; sendAt: number; undoUntil: number | null }>('/api/compose/send', { ...message, draftId, sendAt });
+      const r = await api.post<{ id: number; sendAt: number; undoUntil: number | null }>('/api/compose/send', { ...message, draftId: draftId.current, sendAt });
       closed.current = true;
       onClose();
       qc.invalidateQueries({ queryKey: ['threads'] });
@@ -673,10 +690,20 @@ export function ComposeForm({
   };
 
   const discard = async () => {
+    if (closed.current || sending) return;
+    setDiscarding(true);
     closed.current = true;
     if (saving.current) await saving.current;
-    if (draftId) {
-      await api.del(`/api/compose/drafts/${draftId}`).catch(() => {});
+    if (draftId.current) {
+      try {
+        await api.del(`/api/compose/drafts/${draftId.current}`);
+      } catch (err) {
+        closed.current = false;
+        setDiscarding(false);
+        if (dirty.current) void saveRef.current();
+        toast({ message: `Couldn’t discard draft: ${(err as Error).message}`, tone: 'error' });
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['threads'] });
       qc.invalidateQueries({ queryKey: ['counters'] });
     }
@@ -710,6 +737,7 @@ export function ComposeForm({
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
+      inert={discarding}
       onKeyDown={(e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
           e.preventDefault();
@@ -734,11 +762,11 @@ export function ComposeForm({
         )}
         {!mailboxId && identities.length > 1 && (
           <div className="flex h-10 items-center gap-2 border-b border-line px-1">
-            <label htmlFor={`from-${draftId ?? 'new'}`} className="text-sm text-muted">
+            <label htmlFor={`from-${draftId.current ?? 'new'}`} className="text-sm text-muted">
               From
             </label>
             <select
-              id={`from-${draftId ?? 'new'}`}
+              id={`from-${draftId.current ?? 'new'}`}
               value={from}
               onChange={(e) => changeFrom(e.target.value)}
               className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"

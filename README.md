@@ -334,6 +334,11 @@ npm test            # vitest: MIME, SMTP client, every provider, mail flow, pass
 npm run typecheck
 ```
 
+To smoke-test setup, sign-in, the inbox, and draft persistence in Chromium, run
+`npx playwright install chromium` once and then `npm run test:browser`.
+To use an installed Chromium, set `CHROMIUM_PATH` to its executable instead.
+The test starts a local Worker on port 8791 with a disposable mailbox.
+
 In `npm run dev`, Cloudflare Email Service sends are simulated (written to `.wrangler/tmp`),
 and you can deliver a test message to the `email()` handler:
 
