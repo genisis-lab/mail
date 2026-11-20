@@ -350,15 +350,31 @@ export function Menu({
   const viaKeyboard = useRef(false);
 
   useLayoutEffect(() => {
-    if (!open || !anchor.current) return;
-    const r = anchor.current.getBoundingClientRect();
-    const pw = panel.current?.offsetWidth ?? 224;
-    const ph = panel.current?.offsetHeight ?? 200;
-    let left = align === 'right' ? r.right - pw : r.left;
-    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
-    let top = r.bottom + 4;
-    if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 4);
-    setPos({ top, left });
+    const trigger = anchor.current;
+    const menu = panel.current;
+    if (!open || !trigger || !menu) return;
+    const viewport = window.visualViewport;
+    const place = () => {
+      const x = viewport?.offsetLeft ?? 0;
+      const y = viewport?.offsetTop ?? 0;
+      const width = viewport?.width ?? window.innerWidth;
+      const height = viewport?.height ?? window.innerHeight;
+      menu.style.maxHeight = `min(70vh, ${Math.max(0, height - 16)}px)`;
+      const r = trigger.getBoundingClientRect();
+      const preferredLeft = align === 'right' ? r.right - menu.offsetWidth : r.left;
+      const left = Math.max(x + 8, Math.min(preferredLeft, x + width - menu.offsetWidth - 8));
+      const top = r.bottom + 4 + menu.offsetHeight <= y + height - 8
+        ? r.bottom + 4
+        : Math.max(y + 8, r.top - menu.offsetHeight - 4);
+      setPos({ top, left });
+    };
+    place();
+    viewport?.addEventListener('resize', place);
+    viewport?.addEventListener('scroll', place);
+    return () => {
+      viewport?.removeEventListener('resize', place);
+      viewport?.removeEventListener('scroll', place);
+    };
   }, [open, align]);
 
   useEffect(() => {

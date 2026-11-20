@@ -14,3 +14,6 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export const PHONE = '(max-width: 639px)';
+
+// Phones in portrait or touch devices with a short landscape viewport.
+export const PHONE_COMPOSE = PHONE + ', (pointer: coarse) and (max-height: 540px)';

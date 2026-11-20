@@ -170,6 +170,45 @@ button:disabled {
 }
 }
 
+/* iOS zooms the page when a small text control gains focus, including contenteditable. */
+@media (max-width: 639px), (pointer: coarse) {
+  .compose-form :is(input:not([type="file"]), select, textarea, [contenteditable="true"]),
+  .compose-schedule-date {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* The software keyboard can shrink the visual viewport without changing 100dvh. */
+.compose-phone {
+  position: fixed;
+  inset-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  top: calc(var(--compose-top, 0px) + env(safe-area-inset-top));
+  height: calc(var(--compose-height, 100dvh) - env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.compose-phone .compose-fields {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.compose-phone .compose-fields > * {
+  flex-shrink: 0;
+}
+.compose-phone .compose-body {
+  flex-basis: auto;
+  min-height: min-content;
+}
+.compose-phone .compose-actions {
+  flex-wrap: wrap;
+  background: var(--panel);
+}
+.compose-phone .compose-actions button {
+  min-height: 44px;
+}
+
 /* Rich text editor */
 .wren-editor {
   outline: none;

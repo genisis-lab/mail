@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
+import { checkMobileCompose } from './mobile-compose';
 
 test('set up a mailbox, sign in, and reopen an autosaved draft', async ({ page, browser }) => {
   const password = randomUUID();
@@ -16,6 +17,8 @@ test('set up a mailbox, sign in, and reopen an autosaved draft', async ({ page, 
   await page.getByLabel(/^Password/).fill(password);
   await page.getByRole('button', { name: 'Finish setup' }).click();
   await expect(page.getByRole('button', { name: 'Compose', exact: true })).toBeVisible();
+
+  await test.step('Compose and send above a mobile keyboard', () => checkMobileCompose(browser, page.context()));
 
   const login = await browser.newPage();
   try {

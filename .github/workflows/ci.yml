@@ -15,5 +15,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
+      - run: npm run test:browser -- --browser webkit

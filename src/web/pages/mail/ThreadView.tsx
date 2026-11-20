@@ -54,6 +54,7 @@ import { ParcelCard } from './ParcelCard';
 import { PrivateLinkCard } from './PrivateLinkCard';
 import { AttachmentViewer, previewKind } from '../../components/AttachmentViewer';
 import { Avatar } from '../../components/Avatar';
+import { PHONE_COMPOSE } from '../../lib/media';
 import { ComposeForm, ScheduleModal, useCompose, type ComposeInit } from '../../components/Compose';
 import { BlockedImagesBanner, MessageBody } from '../../components/MessageBody';
 import { useToast } from '../../components/toast';
@@ -138,7 +139,12 @@ export function ThreadView() {
       const t = await compose.openTemplate(m.id, mode);
       // Answering encrypted mail: the reply starts encrypted too, quoting what the message said.
       const encrypt = !!pgpKind(m)?.startsWith('encrypted') && !!storedKey(user.id);
-      setReply({ ...t, ...(encrypt && { encrypt, html: withDecryptedQuote(t.html ?? '', m.id) }), key: Date.now(), mode });
+      const template = { ...t, ...(encrypt && { encrypt, html: withDecryptedQuote(t.html ?? '', m.id) }) };
+      if (window.matchMedia(PHONE_COMPOSE).matches) {
+        compose.open(template);
+        return;
+      }
+      setReply({ ...template, key: Date.now(), mode });
       setTimeout(() => document.getElementById('wren-reply')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
     } catch (err) {
       toast({ message: (err as Error).message, tone: 'error' });

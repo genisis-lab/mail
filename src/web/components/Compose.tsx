@@ -10,6 +10,7 @@ import { mentionsAttachment, ownText } from '../lib/attachment-check';
 import { isNetworkError, queueSend } from '../lib/outbox';
 import { fileSize } from '../lib/format';
 import { sanitizeEditorHtml } from '../lib/sanitize';
+import { PHONE_COMPOSE, useMediaQuery } from '../lib/media';
 import { useMailboxes } from '../lib/mailbox';
 import { useSession } from '../lib/session';
 import { cleartextOf, decryptText, encryptFile, encryptText, isPgpMessage, plainText, plainToHtml, publicKeyOf, resealFile, signText, storedKey, unsealFile, usableKeys } from '../lib/pgp';
@@ -225,6 +226,28 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
 function ComposeWindow({ win, onClose, onPatch, onReopen }: { win: Window_; onClose: () => void; onPatch: (p: Partial<Window_>) => void; onReopen: (init: ComposeInit) => void }) {
   const [subject, setSubject] = useState(win.subject ?? '');
   const title = subject.trim() || 'New message';
+  const phone = useMediaQuery(PHONE_COMPOSE);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const frame = panel.current;
+    if (!phone || win.minimized || !viewport || !frame) return;
+    const resize = () => {
+      // Avoid reflowing the editor around the user's own pinch zoom.
+      if (viewport.scale !== 1) return;
+      frame.style.setProperty('--compose-top', viewport.offsetTop + 'px');
+      frame.style.setProperty('--compose-height', viewport.height + 'px');
+    };
+    resize();
+    viewport.addEventListener('resize', resize);
+    viewport.addEventListener('scroll', resize);
+    return () => {
+      viewport.removeEventListener('resize', resize);
+      viewport.removeEventListener('scroll', resize);
+      frame.style.removeProperty('--compose-top');
+      frame.style.removeProperty('--compose-height');
+    };
+  }, [phone, win.minimized]);
 
   const minimizedBar = win.minimized && (
     <div className="pointer-events-auto w-72 overflow-hidden rounded-t-xl bg-panel shadow-float">
@@ -242,22 +265,21 @@ function ComposeWindow({ win, onClose, onPatch, onReopen }: { win: Window_; onCl
 
   const frame = win.maximized
     ? 'fixed inset-x-[6vw] top-[5vh] bottom-[5vh] w-auto rounded-xl'
-    : // On phones: full width, below the status bar, with the Send row above the home indicator.
-      'h-[min(600px,calc(100vh-80px))] w-[540px] max-sm:w-full max-sm:h-[calc(100dvh-env(safe-area-inset-top)-0.5rem)] max-sm:pb-[env(safe-area-inset-bottom)] rounded-t-xl max-sm:rounded-t-2xl';
+    : 'h-[min(600px,calc(100vh-80px))] w-[540px] rounded-t-xl';
 
   return (
     <>
-      {win.maximized && <div className="pointer-events-auto fixed inset-0 bg-black/40" onClick={() => onPatch({ maximized: false })} />}
+      {!phone && win.maximized && <div className="pointer-events-auto fixed inset-0 bg-black/40" onClick={() => onPatch({ maximized: false })} />}
       {minimizedBar}
-      <div className={cx('animate-slide-up pointer-events-auto flex-col overflow-hidden bg-panel shadow-float', win.minimized ? 'hidden' : 'flex', !win.minimized && frame)}>
+      <div ref={panel} className={cx('animate-slide-up pointer-events-auto flex-col overflow-hidden bg-panel shadow-float', win.minimized ? 'hidden' : 'flex', !win.minimized && (phone ? 'compose-phone' : frame))}>
         <div className="flex h-10 shrink-0 items-center gap-1 bg-panel2 pr-1.5 pl-4 text-sm">
           <span className="flex-1 truncate font-medium">{title}</span>
           <IconButton size="sm" label="Minimize" onClick={() => onPatch({ minimized: true, maximized: false })}>
             <Minus className="size-4" />
           </IconButton>
-          <IconButton size="sm" label={win.maximized ? 'Exit full screen' : 'Full screen'} onClick={() => onPatch({ maximized: !win.maximized })}>
+          {!phone && <IconButton size="sm" label={win.maximized ? 'Exit full screen' : 'Full screen'} onClick={() => onPatch({ maximized: !win.maximized })}>
             {win.maximized ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-          </IconButton>
+          </IconButton>}
           <IconButton size="sm" label="Save & close" onClick={onClose}>
             <X className="size-4" />
           </IconButton>
@@ -736,7 +758,7 @@ export function ComposeForm({
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col"
+      className="compose-form flex min-h-0 flex-1 flex-col"
       inert={discarding}
       onKeyDown={(e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -750,193 +772,195 @@ export function ComposeForm({
         handleFiles([...e.dataTransfer.files]);
       }}
     >
-      <div className={cx('shrink-0', variant === 'window' ? 'px-3' : 'px-0')}>
-        {box && (
-          <div className="flex h-10 items-center gap-2 border-b border-line px-1 text-sm">
-            <span className="text-muted">From</span>
-            <span className="min-w-0 flex-1 truncate">
-              {box.name} &lt;{box.address}&gt;
-            </span>
-            {readOnly && <span className="shrink-0 text-xs text-warn">read only</span>}
-          </div>
-        )}
-        {!mailboxId && identities.length > 1 && (
-          <div className="flex h-10 items-center gap-2 border-b border-line px-1">
-            <label htmlFor={`from-${draftId.current ?? 'new'}`} className="text-sm text-muted">
-              From
-            </label>
-            <select
-              id={`from-${draftId.current ?? 'new'}`}
-              value={from}
-              onChange={(e) => changeFrom(e.target.value)}
-              className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
-            >
-              {identities.map((i) => (
-                <option key={i.address} value={i.address}>
-                  {i.name ? `${i.name} <${i.address}>` : i.address}
-                  {i.kind !== 'mailbox' ? ` (${i.kind})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        <RecipientInput
-          label="To"
-          value={to}
-          onChange={(v) => {
-            setTo(v);
-            markDirty();
-          }}
-          autoFocus={variant === 'window' && !to.length}
-          trailing={
-            <span className="flex shrink-0 gap-2 pt-1.5 text-sm text-muted">
-              {!showCc && (
-                <button type="button" className="hover:text-fg hover:underline" onClick={() => setShowCc(true)}>
-                  Cc
-                </button>
-              )}
-              {!showBcc && (
-                <button type="button" className="hover:text-fg hover:underline" onClick={() => setShowBcc(true)}>
-                  Bcc
-                </button>
-              )}
-            </span>
-          }
-        />
-        {showCc && (
-          <RecipientInput
-            label="Cc"
-            value={cc}
-            onChange={(v) => {
-              setCc(v);
-              markDirty();
-            }}
-          />
-        )}
-        {showBcc && (
-          <RecipientInput
-            label="Bcc"
-            value={bcc}
-            onChange={(v) => {
-              setBcc(v);
-              markDirty();
-            }}
-          />
-        )}
-        {variant === 'window' && (
-          <input
-            value={subject}
-            onChange={(e) => {
-              setSubject(e.target.value);
-              markDirty();
-            }}
-            aria-label="Subject"
-            placeholder="Subject"
-            className="h-10 w-full border-b border-line bg-transparent px-1 text-sm outline-none placeholder:text-muted"
-          />
-        )}
-      </div>
-
-      <div className={cx('flex min-h-0 flex-1 flex-col', variant === 'window' ? 'px-3' : '')}>
-        {locked && (
-          <div className="my-3 flex flex-wrap items-center gap-3 rounded-xl bg-accent-softer px-4 py-3 text-[13px]">
-            <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
-            <span className="min-w-0 flex-1">This draft is encrypted.</span>
-            <Button size="sm" variant="primary" onClick={() => void openLocked()}>
-              Decrypt to edit
-            </Button>
-          </div>
-        )}
-        <RichEditor
-          ref={editor}
-          initialHtml={init.html ?? ''}
-          autoFocus={autoFocusBody || (variant === 'window' && to.length > 0)}
-          placeholder={variant === 'inline' ? 'Write your reply…' : ''}
-          showToolbar={toolbar}
-          onPasteFiles={handleFiles}
-          onChange={(h) => {
-            html.current = h;
-            markDirty();
-          }}
-          className={cx('flex-1', locked && 'hidden')}
-        />
-        {(encrypt || sign) && (
-          <p className="flex items-start gap-2 py-1.5 text-xs text-muted">
-            {encrypt ? <Lock className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden /> : <Signature className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden />}
-            <span>
-              {encrypt ? 'Encrypted with PGP for your recipients and you. ' : 'Signed with your PGP key. '}
-              It’s sent as plain text, so formatting and pictures in the text are left out.
-              {encrypt && ' The subject isn’t encrypted.'}
-              {encrypt && missing.length > 0 && <b className="text-danger"> No PGP key for {missing.join(', ')}: remove them or turn off encryption.</b>}
-            </span>
-          </p>
-        )}
-        {(attachments.filter((a) => !a.inline).length > 0 || uploading > 0) && (
-          <div className="flex flex-wrap gap-2 py-2">
-            {attachments
-              .filter((a) => !a.inline)
-              .map((a) => (
-                <span key={a.id} className="inline-flex max-w-60 items-center gap-2 rounded-lg border border-line bg-panel2 py-1 pr-1 pl-2.5 text-[13px]">
-                  <Paperclip className="size-3.5 shrink-0 text-muted" />
-                  <span className="truncate font-medium">{a.filename}</span>
-                  <span className="shrink-0 text-xs text-muted">{fileSize(a.size)}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${a.filename}`}
-                    className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
-                    onClick={() => {
-                      setAttachments((list) => list.filter((x) => x.id !== a.id));
-                      markDirty();
-                    }}
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </span>
-              ))}
-            {uploading > 0 && (
-              <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-line-strong px-2.5 py-1 text-[13px] text-muted">
-                <Loader2 className="size-3.5 animate-spin" /> Uploading {uploading}…
+      <div className="compose-fields contents">
+        <div className={cx('shrink-0', variant === 'window' ? 'px-3' : 'px-0')}>
+          {box && (
+            <div className="flex h-10 items-center gap-2 border-b border-line px-1 text-sm">
+              <span className="text-muted">From</span>
+              <span className="min-w-0 flex-1 truncate">
+                {box.name} &lt;{box.address}&gt;
               </span>
-            )}
+              {readOnly && <span className="shrink-0 text-xs text-warn">read only</span>}
+            </div>
+          )}
+          {!mailboxId && identities.length > 1 && (
+            <div className="flex h-10 items-center gap-2 border-b border-line px-1">
+              <label htmlFor={`from-${draftId.current ?? 'new'}`} className="text-sm text-muted">
+                From
+              </label>
+              <select
+                id={`from-${draftId.current ?? 'new'}`}
+                value={from}
+                onChange={(e) => changeFrom(e.target.value)}
+                className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              >
+                {identities.map((i) => (
+                  <option key={i.address} value={i.address}>
+                    {i.name ? `${i.name} <${i.address}>` : i.address}
+                    {i.kind !== 'mailbox' ? ` (${i.kind})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <RecipientInput
+            label="To"
+            value={to}
+            onChange={(v) => {
+              setTo(v);
+              markDirty();
+            }}
+            autoFocus={variant === 'window' && !to.length}
+            trailing={
+              <span className="flex shrink-0 gap-2 pt-1.5 text-sm text-muted">
+                {!showCc && (
+                  <button type="button" className="hover:text-fg hover:underline" onClick={() => setShowCc(true)}>
+                    Cc
+                  </button>
+                )}
+                {!showBcc && (
+                  <button type="button" className="hover:text-fg hover:underline" onClick={() => setShowBcc(true)}>
+                    Bcc
+                  </button>
+                )}
+              </span>
+            }
+          />
+          {showCc && (
+            <RecipientInput
+              label="Cc"
+              value={cc}
+              onChange={(v) => {
+                setCc(v);
+                markDirty();
+              }}
+            />
+          )}
+          {showBcc && (
+            <RecipientInput
+              label="Bcc"
+              value={bcc}
+              onChange={(v) => {
+                setBcc(v);
+                markDirty();
+              }}
+            />
+          )}
+          {variant === 'window' && (
+            <input
+              value={subject}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                markDirty();
+              }}
+              aria-label="Subject"
+              placeholder="Subject"
+              className="h-10 w-full border-b border-line bg-transparent px-1 text-sm outline-none placeholder:text-muted"
+            />
+          )}
+        </div>
+
+        <div className={cx('compose-body flex min-h-0 flex-1 flex-col', variant === 'window' ? 'px-3' : '')}>
+          {locked && (
+            <div className="my-3 flex flex-wrap items-center gap-3 rounded-xl bg-accent-softer px-4 py-3 text-[13px]">
+              <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
+              <span className="min-w-0 flex-1">This draft is encrypted.</span>
+              <Button size="sm" variant="primary" onClick={() => void openLocked()}>
+                Decrypt to edit
+              </Button>
+            </div>
+          )}
+          <RichEditor
+            ref={editor}
+            initialHtml={init.html ?? ''}
+            autoFocus={autoFocusBody || (variant === 'window' && to.length > 0)}
+            placeholder={variant === 'inline' ? 'Write your reply…' : ''}
+            showToolbar={toolbar}
+            onPasteFiles={handleFiles}
+            onChange={(h) => {
+              html.current = h;
+              markDirty();
+            }}
+            className={cx('flex-1', locked && 'hidden')}
+          />
+          {(encrypt || sign) && (
+            <p className="flex items-start gap-2 py-1.5 text-xs text-muted">
+              {encrypt ? <Lock className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden /> : <Signature className="mt-px size-3.5 shrink-0 text-accent-ink" aria-hidden />}
+              <span>
+                {encrypt ? 'Encrypted with PGP for your recipients and you. ' : 'Signed with your PGP key. '}
+                It’s sent as plain text, so formatting and pictures in the text are left out.
+                {encrypt && ' The subject isn’t encrypted.'}
+                {encrypt && missing.length > 0 && <b className="text-danger"> No PGP key for {missing.join(', ')}: remove them or turn off encryption.</b>}
+              </span>
+            </p>
+          )}
+          {(attachments.filter((a) => !a.inline).length > 0 || uploading > 0) && (
+            <div className="flex flex-wrap gap-2 py-2">
+              {attachments
+                .filter((a) => !a.inline)
+                .map((a) => (
+                  <span key={a.id} className="inline-flex max-w-60 items-center gap-2 rounded-lg border border-line bg-panel2 py-1 pr-1 pl-2.5 text-[13px]">
+                    <Paperclip className="size-3.5 shrink-0 text-muted" />
+                    <span className="truncate font-medium">{a.filename}</span>
+                    <span className="shrink-0 text-xs text-muted">{fileSize(a.size)}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.filename}`}
+                      className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
+                      onClick={() => {
+                        setAttachments((list) => list.filter((x) => x.id !== a.id));
+                        markDirty();
+                      }}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </span>
+                ))}
+              {uploading > 0 && (
+                <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-line-strong px-2.5 py-1 text-[13px] text-muted">
+                  <Loader2 className="size-3.5 animate-spin" /> Uploading {uploading}…
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {privateDays !== null && (
+          <div className={cx('shrink-0', variant === 'window' ? 'px-3' : '')}>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent-softer px-3 py-1.5 text-[13px]">
+              <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
+              <span className="min-w-0 flex-1">Recipients get a link instead of the message. It stops working after</span>
+              <select
+                aria-label="The link stops working after"
+                value={privateDays}
+                onChange={(e) => {
+                  setPrivateDays(Number(e.target.value));
+                  markDirty();
+                }}
+                className="h-7 rounded-md border border-line bg-panel px-1.5 text-[13px] outline-none"
+              >
+                <option value={1}>1 day</option>
+                <option value={7}>1 week</option>
+                <option value={30}>1 month</option>
+              </select>
+              <button
+                type="button"
+                aria-label="Send as a normal message"
+                title="Send as a normal message"
+                className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
+                onClick={() => {
+                  setPrivateDays(null);
+                  markDirty();
+                }}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
 
-      {privateDays !== null && (
-        <div className={cx('shrink-0', variant === 'window' ? 'px-3' : '')}>
-          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent-softer px-3 py-1.5 text-[13px]">
-            <Lock className="size-4 shrink-0 text-accent-ink" aria-hidden />
-            <span className="min-w-0 flex-1">Recipients get a link instead of the message. It stops working after</span>
-            <select
-              aria-label="The link stops working after"
-              value={privateDays}
-              onChange={(e) => {
-                setPrivateDays(Number(e.target.value));
-                markDirty();
-              }}
-              className="h-7 rounded-md border border-line bg-panel px-1.5 text-[13px] outline-none"
-            >
-              <option value={1}>1 day</option>
-              <option value={7}>1 week</option>
-              <option value={30}>1 month</option>
-            </select>
-            <button
-              type="button"
-              aria-label="Send as a normal message"
-              title="Send as a normal message"
-              className="rounded p-0.5 text-muted hover:bg-hover hover:text-fg"
-              onClick={() => {
-                setPrivateDays(null);
-                markDirty();
-              }}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className={cx('flex shrink-0 items-center gap-1 py-2.5', variant === 'window' ? 'px-3' : '')}>
+      <div className={cx('compose-actions flex shrink-0 items-center gap-1 py-2.5', variant === 'window' ? 'px-3' : '')}>
         <div className="flex overflow-hidden rounded-full bg-accent text-accent-fg shadow-sm">
           <button
             type="button"
@@ -1046,7 +1070,7 @@ export function ScheduleModal({ open, onClose, onPick, title = 'Schedule send' }
       <div className="mt-3 border-t border-line pt-4">
         <label className="mb-1.5 block text-[13px] font-medium">Pick date & time</label>
         <div className="flex gap-2">
-          <Input type="datetime-local" value={custom} onChange={(e) => setCustom(e.target.value)} />
+          <Input className="compose-schedule-date" type="datetime-local" value={custom} onChange={(e) => setCustom(e.target.value)} />
           <Button
             variant="primary"
             disabled={!custom || new Date(custom).getTime() < Date.now() + 60_000}
