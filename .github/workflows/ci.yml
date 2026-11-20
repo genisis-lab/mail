@@ -17,4 +17,4 @@ jobs:
       - run: npx vite build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
-      - run: npm run test:browser -- --browser webkit
+      - run: npm run test:browser -- --browser webkit --reporter=list,github
