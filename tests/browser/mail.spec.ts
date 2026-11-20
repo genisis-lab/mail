@@ -20,7 +20,8 @@ test('set up a mailbox, sign in, and reopen an autosaved draft', async ({ page, 
 
   await test.step('Compose and send above a mobile keyboard', () => checkMobileCompose(browser, page.context()));
 
-  const login = await browser.newPage();
+  // This session injects HTTP failures. Route requests directly through Playwright.
+  const login = await browser.newPage({ serviceWorkers: 'block' });
   try {
     await login.goto('/');
     await login.getByLabel(/^Email address/).fill('smoke@example.test');
@@ -57,9 +58,14 @@ test('set up a mailbox, sign in, and reopen an autosaved draft', async ({ page, 
     await expect(body).toHaveText('Saved across a reload.');
 
     const discard = login.getByRole('button', { name: 'Discard draft' });
-    await login.route('**/api/compose/drafts/*', (route) =>
-      route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } }), { times: 1 });
+    const drafts = '**/api/compose/drafts/*';
+    await login.route(drafts, (route) => route.request().method() === 'DELETE'
+      ? route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } })
+      : route.continue());
+    const failedDelete = login.waitForResponse((r) => r.request().method() === 'DELETE' && r.url().includes('/api/compose/drafts/'));
     await discard.click();
+    expect((await failedDelete).status()).toBe(503);
+    await login.unroute(drafts);
     await expect(login.getByText(/Couldn’t discard draft/)).toBeVisible();
     await expect(body).toHaveText('Saved across a reload.');
     await discard.click();
