@@ -97,18 +97,19 @@ export const BLOB_GRACE_MS = 30 * 86_400_000;
  */
 export async function collectGarbage(): Promise<{ removed: number; bytes: number }> {
   const referenced = new Set<string>();
-  for (const r of all<{ h: string }>(
+  // Durable Object SQLite limits the number of terms in a compound SELECT.
+  for (const query of [
     `SELECT raw_blob AS h FROM messages WHERE raw_blob IS NOT NULL
      UNION SELECT body_blob FROM messages WHERE body_blob IS NOT NULL
      UNION SELECT blob FROM attachments
      UNION SELECT raw_blob FROM outbox
-     UNION SELECT body_blob FROM private_links WHERE body_blob IS NOT NULL
-     UNION SELECT json_extract(j.value, '$.blob') FROM private_links p, json_each(p.attachments) j
+     UNION SELECT body_blob FROM private_links WHERE body_blob IS NOT NULL`,
+    `SELECT json_extract(j.value, '$.blob') AS h FROM private_links p, json_each(p.attachments) j
      UNION SELECT avatar_blob FROM users WHERE avatar_blob IS NOT NULL
      UNION SELECT blob FROM avatar_cache WHERE blob IS NOT NULL
      UNION SELECT j.value FROM backups b, json_each(b.parts) j`,
-  )) {
-    referenced.add(r.h);
+  ]) {
+    for (const r of all<{ h: string }>(query)) referenced.add(r.h);
   }
   const marked = new Map(all<{ key: string; seen_at: number }>('SELECT key, seen_at FROM blob_tombstones').map((r) => [r.key, r.seen_at]));
   const ts = Date.now();
