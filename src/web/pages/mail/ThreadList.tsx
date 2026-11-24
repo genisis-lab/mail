@@ -767,7 +767,7 @@ function InboxTabs({ current, onPick }: { current: Category; onPick: (c: Categor
             <span className={cx('max-sm:hidden', active && 'text-accent-ink')}>{t.icon}</span>
             <span className="truncate">{t.label}</span>
             {t.id !== 'primary' && n > 0 && (
-              <span className="shrink-0 rounded-full bg-accent px-1.5 text-[11px] leading-[18px] font-medium text-white" aria-label={`${n} unread`}>
+              <span className="shrink-0 rounded-full bg-accent px-1.5 text-[11px] leading-[18px] font-medium text-accent-fg" aria-label={`${n} unread`}>
                 {n > 99 ? '99+' : n}
                 <span className="max-sm:hidden"> new</span>
               </span>
