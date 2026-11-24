@@ -87,7 +87,7 @@ export function useTheme(theme: UserPrefs['theme'] | undefined, accent: string |
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
   useEffect(() => {
-    if (accent && /^#[0-9a-f]{6}$/i.test(accent)) document.documentElement.style.setProperty('--accent', accent);
+    if (accent && /^#[0-9a-f]{6}$/i.test(accent)) document.documentElement.style.setProperty('--brand', accent);
   }, [accent]);
 }
 

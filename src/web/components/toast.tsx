@@ -50,7 +50,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={t.id}
             role={t.tone === 'error' ? 'alert' : 'status'}
             className={`animate-slide-up pointer-events-auto flex max-w-[480px] items-center gap-1 rounded-lg py-2 pr-2 pl-4 text-sm shadow-float sm:min-w-72 ${
-              t.tone === 'error' ? 'bg-[#b3261e] text-white' : 'bg-[#2b2f36] text-white dark:bg-[#e6e8ec] dark:text-[#1d2129]'
+              t.tone === 'error' ? 'bg-[#b3261e] text-white' : 'bg-[#303133] text-white dark:bg-[#e3e3e3] dark:text-[#1f1f1f]'
             }`}
           >
             <span className="flex-1 py-1 pr-1 sm:pr-2">{t.message}</span>

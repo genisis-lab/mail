@@ -94,7 +94,7 @@ export function InviteCard({ messageId, canAnswer = true }: { messageId: number;
       <div className="flex gap-4 p-4">
         {start && (
           <div className="flex w-14 shrink-0 flex-col items-center overflow-hidden rounded-xl border border-line text-center" aria-hidden>
-            <span className="w-full bg-accent py-0.5 text-[11px] font-semibold tracking-wide text-white uppercase">{start.toLocaleDateString(undefined, { month: 'short', timeZone: tileTz })}</span>
+            <span className="w-full bg-accent py-0.5 text-[11px] font-semibold tracking-wide text-accent-fg uppercase">{start.toLocaleDateString(undefined, { month: 'short', timeZone: tileTz })}</span>
             <span className="py-1 text-xl leading-tight font-semibold">{start.toLocaleDateString(undefined, { day: 'numeric', timeZone: tileTz })}</span>
             <span className="pb-1 text-[11px] text-muted">{start.toLocaleDateString(undefined, { weekday: 'short', timeZone: tileTz })}</span>
           </div>

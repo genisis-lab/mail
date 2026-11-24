@@ -6,7 +6,7 @@ import { renderMailHtml, textToSafeHtml } from '../lib/sanitize';
 import { Button, cx, Modal } from './ui';
 
 /** Body colours on the dark background (match the app's dark theme). */
-const DARK = { text: '#e6e8ec', muted: '#a1a7b3', link: '#8ab4f8' };
+const DARK = { text: '#e3e3e3', muted: '#b0b2b5', link: '#a6c4f2' };
 
 const QUOTE_SELECTORS = ['.gmail_quote', 'blockquote[type="cite"]', '.wren-quote', '#divRplyFwdMsg', '.yahoo_quoted', '#appendonsend', '.moz-cite-prefix'];
 

@@ -25,7 +25,7 @@ const variants: Record<Variant, string> = {
   primary: 'bg-accent text-accent-fg hover:brightness-110 shadow-sm',
   secondary: 'bg-panel text-fg border border-line-strong hover:bg-hover',
   ghost: 'text-fg hover:bg-hover',
-  danger: 'bg-danger text-white hover:brightness-110',
+  danger: 'bg-danger text-white hover:brightness-110 dark:text-[#131314]',
   soft: 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:brightness-95',
 };
 
@@ -136,7 +136,7 @@ export function Switch({
         onClick={() => onChange(!checked)}
         className={cx('relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors', checked ? 'bg-accent' : 'bg-line-strong')}
       >
-        <span className={cx('absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform', checked && 'translate-x-4')} />
+        <span className={cx('absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform', checked && 'translate-x-4 dark:bg-accent-fg')} />
       </button>
       {(label || description) && (
         <span className="min-w-0">
