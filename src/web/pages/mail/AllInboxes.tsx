@@ -54,11 +54,13 @@ function Row({ t, account, here }: { t: ThreadSummary; account: BrowserAccount; 
   const from = t.participants.filter((p) => !p.me).map((p) => p.name || p.address);
   const className = cx(
     'flex h-11 items-center gap-3 border-b border-line px-4 text-sm transition-colors hover:bg-hover',
-    t.unread ? 'bg-unread-row font-bold' : 'bg-read-row',
+    t.unread ? 'bg-unread-row font-bold' : 'bg-read-row dark:text-muted',
   );
   const content = (
     <>
-      <span className="w-44 shrink-0 truncate max-md:w-28">{from.slice(-2).join(', ') || '(unknown)'}</span>
+      <span className="w-44 shrink-0 truncate max-md:w-28">
+        <span className={cx('mr-2 mb-px hidden size-2 rounded-full bg-accent align-middle dark:inline-block', !t.unread && 'invisible')} aria-hidden />
+        {from.slice(-2).join(', ') || '(unknown)'}</span>
       <span className="max-w-40 shrink-0 truncate rounded bg-panel3 px-1.5 text-[11px] leading-[18px] font-normal text-muted max-sm:hidden">{account.email}</span>
       <span className="min-w-0 flex-1 truncate">
         {t.subject || '(no subject)'}

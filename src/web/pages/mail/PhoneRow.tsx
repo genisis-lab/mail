@@ -121,7 +121,7 @@ export function PhoneRow({
         role="link"
         tabIndex={0}
         aria-label={`${t.unread ? 'Unread, ' : ''}${names}, ${t.subject || 'no subject'}, ${shortDate(t.date)}`}
-        className={cx('relative flex gap-3 px-3 py-2.5 outline-none select-none [-webkit-touch-callout:none] focus-visible:bg-hover', selected ? 'bg-sel' : t.unread ? 'bg-unread-row' : 'bg-read-row')}
+        className={cx('relative flex gap-3 px-3 py-2.5 outline-none select-none [-webkit-touch-callout:none] focus-visible:bg-hover', selected ? 'bg-sel' : t.unread ? 'bg-unread-row' : 'bg-read-row dark:text-muted')}
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dragging ? 'none' : 'transform 0.2s ease-out' }}
         onClick={() => {
           if (suppressClick.current) return;
@@ -188,7 +188,8 @@ export function PhoneRow({
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <span className={cx('min-w-0 flex-1 truncate text-[15px]', t.unread ? 'font-bold' : 'text-fg')}>
+            <span className={cx('min-w-0 flex-1 truncate text-[15px]', t.unread ? 'font-bold' : 'text-fg dark:text-muted')}>
+              {t.unread && <span className="mr-2 mb-px hidden size-2 rounded-full bg-accent align-middle dark:inline-block" aria-hidden />}
               {recipientsView && <span className="font-normal text-muted">To: </span>}
               {names}
               {t.count > 1 && <span className="ml-1 text-xs font-normal text-muted">{t.count}</span>}

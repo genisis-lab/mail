@@ -56,8 +56,9 @@
   --danger: #f2a49c;
   --warn: #f5c661;
   --ok: #8fd19e;
-  --unread-row: #1e1f20;
-  --read-row: #18191a;
+  /* Unread rows sit lighter than read rows so they read as raised bands. */
+  --unread-row: #2a2c2e;
+  --read-row: #161718;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
   --series-1: #a3a7ad;
