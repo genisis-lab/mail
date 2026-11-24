@@ -632,6 +632,7 @@ function ThreadRow({
       onClick={onOpen}
       className={cx(
         'thread-row group relative flex cursor-pointer items-center gap-1 border-b border-line pr-3 pl-1 text-sm transition-colors',
+        !t.unread && !selected && 'dark:text-muted',
         compact ? 'h-9' : 'h-11',
         selected ? 'bg-sel' : t.unread ? 'bg-unread-row' : 'bg-read-row',
         'hover:z-[1] hover:shadow-[inset_1px_0_0_var(--line-strong),inset_-1px_0_0_var(--line-strong),0_1px_3px_rgba(0,0,0,.12)]',
@@ -662,7 +663,8 @@ function ThreadRow({
         <Flag className={cx('size-[15px]', t.important ? 'fill-[#f4b400] text-[#f4b400]' : 'opacity-0 group-hover:opacity-100')} />
       </button>
 
-      <div className={cx('w-52 shrink-0 truncate pr-3 max-md:w-32', t.unread ? 'font-bold' : 'text-fg')}>
+      <div className={cx('w-52 shrink-0 truncate pr-3 max-md:w-32', t.unread ? 'font-bold' : 'text-fg dark:text-muted')}>
+        <span className={cx('mr-2 mb-px hidden size-2 rounded-full bg-accent align-middle dark:inline-block', !t.unread && 'invisible')} aria-hidden />
         {recipientsView && <span className="font-normal text-muted">To: </span>}
         {typeof names === 'string'
           ? names
